@@ -1,10 +1,52 @@
 "use client";
 
-import { User } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { User, Clock, ChevronRight, X } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { Field, Inp, Sel, SCard } from "./atoms";
 import { PP, GENDER_OPTIONS, BLOOD_GROUPS } from "@/lib/constants";
+import {
+  fetchPreviousPatientInfo,
+  selectPreviousPatientInfo,
+  selectPreviousPatientInfoLoading,
+} from "@/store/slices/bookingSlice";
 
 export function StepPatient({ form, set, errors }) {
+  const dispatch = useDispatch();
+  const prevInfo = useSelector(selectPreviousPatientInfo);
+  const prevLoading = useSelector(selectPreviousPatientInfoLoading);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    dispatch(fetchPreviousPatientInfo());
+  }, [dispatch]);
+
+  // Reset dismiss when booking type changes (new booking flow)
+  useEffect(() => {
+    setBannerDismissed(false);
+  }, [form.bookingType]);
+
+  const prefillFromPrev = () => {
+    if (!prevInfo?.patientInfo) return;
+    const p = prevInfo.patientInfo;
+    set("patientName", p.name || "");
+    set("patientAge", p.age || "");
+    set("patientGender", p.gender || "");
+    set("patientPhone", p.phone || "");
+    set("patientBloodGroup", p.bloodGroup || "");
+    set("patientWeight", p.weight || "");
+    set("patientIsSelf", p.isSelf ?? true);
+    setBannerDismissed(true);
+  };
+
+  const showBanner =
+    !bannerDismissed &&
+    !prevLoading &&
+    prevInfo?.patientInfo &&
+    // Only show if form is empty (no name yet)
+    !form.patientName;
+
   return (
     <div className="space-y-3">
       <div>
@@ -16,6 +58,56 @@ export function StepPatient({ form, set, errors }) {
           later.
         </p>
       </div>
+
+      {/* ── Previous patient banner ─────────────────────────────────────── */}
+      <AnimatePresence>
+        {showBanner && (
+          <motion.div
+            key="prev-patient-banner"
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.18 }}
+            className="flex items-center gap-2 p-2.5 rounded-xl border-2 border-primary/25 bg-primary/5"
+          >
+            <Clock size={13} className="text-primary flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] font-black text-primary leading-tight" style={PP}>
+                Use previous patient?
+              </p>
+              <p className="text-[10px] text-primary/60 font-semibold truncate" style={PP}>
+                {prevInfo.patientInfo.name}
+                {prevInfo.patientInfo.age ? `, ${prevInfo.patientInfo.age} yrs` : ""}
+                {prevInfo.patientInfo.gender ? ` · ${prevInfo.patientInfo.gender}` : ""}
+                {prevInfo.patientInfo.phone ? ` · ${prevInfo.patientInfo.phone}` : ""}
+              </p>
+              {prevInfo.fromBooking && (
+                <p className="text-[9px] text-primary/40 font-semibold mt-0.5" style={PP}>
+                  From booking #{prevInfo.fromBooking}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={prefillFromPrev}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-primary text-primary-content font-black text-[10px] flex-shrink-0 hover:opacity-90 transition-opacity"
+              style={PP}
+            >
+              Use
+              <ChevronRight size={10} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setBannerDismissed(true)}
+              className="p-1 rounded-lg text-primary/50 hover:text-primary transition-colors flex-shrink-0"
+              aria-label="Dismiss"
+            >
+              <X size={12} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="flex gap-2">
         {[
           { v: true, l: "For myself" },
@@ -35,6 +127,7 @@ export function StepPatient({ form, set, errors }) {
           );
         })}
       </div>
+
       <SCard title="Patient Details" icon={User} accent="var(--primary)">
         <div className="space-y-3">
           <Field

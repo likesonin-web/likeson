@@ -16,6 +16,7 @@ import {
   selectError,
 } from '@/store/slices/soloDriverSlice';
 import { uploadSingleFile } from '@/store/slices/uploadSlice';
+import BackButton from '../../../../components/BackButton';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 24 },
@@ -171,7 +172,7 @@ export default function BankDetails() {
   return (
     <div className="min-h-screen" style={{ background: 'var(--base-100)' }}>
       <div className="max-w-2xl mx-auto px-4 py-8">
-
+      <BackButton className=' my-2 rounded-md px-3' />
         {/* Header */}
         <motion.div variants={fadeUp} initial="hidden" animate="show" className="mb-8">
           <div className="flex items-center gap-3 mb-2">

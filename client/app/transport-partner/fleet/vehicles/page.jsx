@@ -5,6 +5,7 @@
  * Transport Partner Fleet Management
  * Font: Poppins (via next/font or global CSS import)
  * All bugs fixed. Aligned to transportPartnerSlice.js.
+ * v2: Fixed assignedDriver object vs string ID bug.
  */
 
 import React, {
@@ -106,6 +107,10 @@ const isSoon    = (d) => !!d && !isExpired(d) && new Date(d) < new Date(Date.now
 const vtOf  = (type) => VEHICLE_TYPES.find((v) => v.value === type);
 const cfgOf = (status) => STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
 
+// FIX: assignedDriver is an object {_id, legalName, driverCode, ...} from API.
+// Use this helper everywhere instead of direct comparison.
+const assignedDriverId = (vehicle) => vehicle.assignedDriver?._id ?? vehicle.assignedDriver ?? null;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MICRO COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -165,7 +170,6 @@ const Toggle = ({ label, note, value, onChange, Icon: Ico, color = '#3b82f6' }) 
         {note && <p className="text-[10px] text-slate-400 mt-0.5">💡 {note}</p>}
       </div>
     </div>
-    {/* Fixed toggle: thumb position uses left, not x-transform which broke alignment */}
     <button
       type="button"
       onClick={() => onChange(!value)}
@@ -204,7 +208,6 @@ const DateInput = ({ value, onChange, className = '' }) => {
 
 const UploadOrLink = ({ label, note, value, onChange, folder, accept = '*/*' }) => {
   const dispatch   = useDispatch();
-  // Safe fallback — if uploadSlice doesn't exist in store, won't crash
   const uploading  = useSelector((s) => s.upload?.isUploading ?? false);
   const [mode, setMode] = useState('link');
   const fileRef    = useRef(null);
@@ -225,7 +228,6 @@ const UploadOrLink = ({ label, note, value, onChange, folder, accept = '*/*' }) 
 
   return (
     <Field label={label} note={note}>
-      {/* Mode switcher */}
       <div className="flex gap-1 mb-1.5">
         {['link', 'upload'].map((m) => (
           <button
@@ -419,7 +421,6 @@ const VehicleForm = ({ vehicle, onSave, onClose, loading, openTab }) => {
         className="bg-white rounded-2xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl border border-slate-200"
         style={{ fontFamily: 'Poppins, sans-serif' }}
       >
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 flex-shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center">
@@ -441,7 +442,6 @@ const VehicleForm = ({ vehicle, onSave, onClose, loading, openTab }) => {
           </button>
         </div>
 
-        {/* Section tabs */}
         <div className="flex items-center gap-0.5 px-5 py-3 border-b border-slate-100 bg-slate-50/50 flex-shrink-0">
           {FORM_SECTIONS.map(({ id, label, Icon }) => (
             <button
@@ -454,10 +454,8 @@ const VehicleForm = ({ vehicle, onSave, onClose, loading, openTab }) => {
           ))}
         </div>
 
-        {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
 
-          {/* ── BASICS ── */}
           {section === 'basics' && (
             <motion.div key="basics" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
 
@@ -523,7 +521,6 @@ const VehicleForm = ({ vehicle, onSave, onClose, loading, openTab }) => {
             </motion.div>
           )}
 
-          {/* ── FEATURES ── */}
           {section === 'features' && (
             <motion.div key="features" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} className="space-y-3">
               <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Amenities & Equipment</p>
@@ -573,7 +570,6 @@ const VehicleForm = ({ vehicle, onSave, onClose, loading, openTab }) => {
             </motion.div>
           )}
 
-          {/* ── DOCUMENTS ── */}
           {section === 'docs' && (
             <motion.div key="docs" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} className="space-y-5">
 
@@ -614,7 +610,6 @@ const VehicleForm = ({ vehicle, onSave, onClose, loading, openTab }) => {
             </motion.div>
           )}
 
-          {/* ── PHOTOS ── */}
           {section === 'photos' && (
             <motion.div key="photos" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }}>
               <PhotoStrip
@@ -626,7 +621,6 @@ const VehicleForm = ({ vehicle, onSave, onClose, loading, openTab }) => {
           )}
         </div>
 
-        {/* Footer */}
         <div className="flex items-center justify-between px-5 py-4 border-t border-slate-100 bg-slate-50/50 flex-shrink-0">
           {!isValid && (
             <p className="text-[10px] text-red-400 font-semibold">Reg. No., Make and Model are required.</p>
@@ -661,6 +655,9 @@ const VehicleForm = ({ vehicle, onSave, onClose, loading, openTab }) => {
 const AssignDriverModal = ({ vehicle, drivers, onAssign, onUnassign, onClose, loading }) => {
   const [search, setSearch] = useState('');
 
+  // FIX: assignedDriver is object — extract _id for comparison
+  const currentDriverId = assignedDriverId(vehicle);
+
   const filtered = useMemo(() => drivers.filter((d) =>
     d.legalName?.toLowerCase().includes(search.toLowerCase()) ||
     d.driverCode?.toLowerCase().includes(search.toLowerCase())
@@ -693,11 +690,18 @@ const AssignDriverModal = ({ vehicle, drivers, onAssign, onUnassign, onClose, lo
           </button>
         </div>
 
-        {vehicle.assignedDriver && (
+        {/* FIX: check currentDriverId (not raw object) for banner */}
+        {currentDriverId && (
           <div className="mx-5 mt-4 p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <UserCheck size={13} className="text-amber-600" />
-              <p className="text-xs font-semibold text-amber-700">Driver currently assigned</p>
+              <div>
+                <p className="text-xs font-semibold text-amber-700">Driver currently assigned</p>
+                {/* Show name from object if available */}
+                {vehicle.assignedDriver?.legalName && (
+                  <p className="text-[10px] text-amber-500">{vehicle.assignedDriver.legalName}</p>
+                )}
+              </div>
             </div>
             <button onClick={onUnassign} disabled={loading}
               className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 transition-colors flex items-center gap-1 disabled:opacity-50">
@@ -728,8 +732,9 @@ const AssignDriverModal = ({ vehicle, drivers, onAssign, onUnassign, onClose, lo
                 key={driver._id}
                 whileHover={{ x: 2 }}
                 onClick={() => !loading && onAssign(driver._id)}
+                // FIX: compare driver._id against extracted currentDriverId (string), not raw object
                 className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all border
-                  ${vehicle.assignedDriver === driver._id
+                  ${currentDriverId === driver._id
                     ? 'bg-blue-50 border-blue-200'
                     : 'bg-slate-50 border-slate-200 hover:bg-blue-50 hover:border-blue-200'}`}
                 role="button"
@@ -751,7 +756,8 @@ const AssignDriverModal = ({ vehicle, drivers, onAssign, onUnassign, onClose, lo
                     </span>
                   </div>
                 </div>
-                {vehicle.assignedDriver === driver._id && (
+                {/* FIX: use currentDriverId for checkmark */}
+                {currentDriverId === driver._id && (
                   <CheckCircle2 size={15} className="text-blue-500 flex-shrink-0" />
                 )}
               </motion.div>
@@ -782,6 +788,10 @@ const VehicleCard = ({
     vehicle.insuranceExpiry, vehicle.pollutionCertExpiry,
     vehicle.fitnessCertExpiry, vehicle.permitExpiry,
   ].some(isSoon);
+
+  // FIX: assignedDriver is object — truthy check works but show name from object
+  const driverName = vehicle.assignedDriver?.legalName ?? null;
+  const hasDriver  = !!assignedDriverId(vehicle);
 
   return (
     <motion.article
@@ -833,7 +843,6 @@ const VehicleCard = ({
           </div>
         </div>
 
-        {/* Chips */}
         <div className="flex flex-wrap gap-1.5 mb-3">
           <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">
             {vt?.icon} {vehicle.vehicleType}
@@ -863,11 +872,13 @@ const VehicleCard = ({
           )}
         </div>
 
-        {/* Driver slot */}
-        {vehicle.assignedDriver ? (
+        {/* FIX: show driver name from object */}
+        {hasDriver ? (
           <div className="flex items-center gap-2 p-2 rounded-lg bg-blue-50 border border-blue-100 mb-3">
             <UserCheck size={11} className="text-blue-500 flex-shrink-0" />
-            <p className="text-[10px] font-semibold text-blue-600">Driver Assigned</p>
+            <p className="text-[10px] font-semibold text-blue-600 truncate">
+              {driverName ?? 'Driver Assigned'}
+            </p>
           </div>
         ) : (
           <div className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 border border-dashed border-slate-200 mb-3">
@@ -876,7 +887,6 @@ const VehicleCard = ({
           </div>
         )}
 
-        {/* Hover actions */}
         <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button onClick={(e) => { e.stopPropagation(); onEdit('basics'); }}
             className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 text-[10px] font-bold transition-colors">
@@ -906,8 +916,15 @@ const VehicleCard = ({
 
 const VehicleDetail = ({ vehicle, drivers, onClose, onEdit }) => {
   const vt             = vtOf(vehicle.vehicleType);
-  const assignedDriver = useMemo(() =>
-    drivers.find((d) => d._id === vehicle.assignedDriver), [drivers, vehicle.assignedDriver]);
+
+  // FIX: assignedDriver is object — use _id to find from drivers list,
+  // or fall back to the object itself if already populated
+  const assignedDriver = useMemo(() => {
+    const drvId = assignedDriverId(vehicle);
+    if (!drvId) return null;
+    // prefer full driver record from drivers list
+    return drivers.find((d) => d._id === drvId) ?? vehicle.assignedDriver ?? null;
+  }, [drivers, vehicle]);
 
   const DOC_ROWS = [
     { label: 'RC Book',       url: vehicle.rcBookUrl,          expiry: null                    },
@@ -949,7 +966,6 @@ const VehicleDetail = ({ vehicle, drivers, onClose, onEdit }) => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-5">
-        {/* Status row */}
         <div className="flex items-center gap-2 flex-wrap">
           <StatusBadge status={vehicle.verificationStatus} />
           <span className={`text-[10px] font-bold px-2 py-1 rounded-full
@@ -961,7 +977,6 @@ const VehicleDetail = ({ vehicle, drivers, onClose, onEdit }) => {
           )}
         </div>
 
-        {/* Photos */}
         {vehicle.photos?.length > 0 && (
           <div>
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">
@@ -979,7 +994,6 @@ const VehicleDetail = ({ vehicle, drivers, onClose, onEdit }) => {
           </div>
         )}
 
-        {/* Specs */}
         <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4">
           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-3">Specifications</p>
           {[
@@ -996,7 +1010,6 @@ const VehicleDetail = ({ vehicle, drivers, onClose, onEdit }) => {
           ))}
         </div>
 
-        {/* Features */}
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Features</p>
           <div className="grid grid-cols-2 gap-1.5">
@@ -1020,7 +1033,7 @@ const VehicleDetail = ({ vehicle, drivers, onClose, onEdit }) => {
           </div>
         </div>
 
-        {/* Assigned driver */}
+        {/* FIX: assignedDriver now resolved from object or drivers list */}
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Assigned Driver</p>
           {assignedDriver ? (
@@ -1045,7 +1058,6 @@ const VehicleDetail = ({ vehicle, drivers, onClose, onEdit }) => {
           )}
         </div>
 
-        {/* Documents */}
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Documents</p>
           <div className="space-y-2">
@@ -1134,7 +1146,6 @@ export default function VehiclesManagement() {
 
   const { vehicles = [], drivers = [], loading } = useSelector((s) => s.transportPartner);
 
-  // UI state
   const [showForm,       setShowForm]       = useState(false);
   const [editingVehicle, setEditingVehicle] = useState(null);
   const [editOpenTab,    setEditOpenTab]    = useState('basics');
@@ -1147,13 +1158,11 @@ export default function VehiclesManagement() {
   const [filterType,     setFilterType]     = useState('all');
   const [viewMode,       setViewMode]       = useState('grid');
 
-  // Initial load
   useEffect(() => {
     dispatch(fetchTPVehicles());
     dispatch(fetchTPDrivers());
   }, [dispatch]);
 
-  // Auto-open form if URL ends in /new
   useEffect(() => {
     if (pathname?.endsWith('/new')) {
       setEditingVehicle(null);
@@ -1162,10 +1171,8 @@ export default function VehiclesManagement() {
     }
   }, [pathname]);
 
-  // Unique vehicle types for filter dropdown
   const uniqueTypes = useMemo(() => [...new Set(vehicles.map((v) => v.vehicleType))], [vehicles]);
 
-  // Filtered list — memoised to avoid recomputing on every render
   const filtered = useMemo(() => vehicles.filter((v) => {
     const q = search.toLowerCase();
     const matchSearch = !search ||
@@ -1177,8 +1184,6 @@ export default function VehiclesManagement() {
     const matchType   = filterType   === 'all' || v.vehicleType === filterType;
     return matchSearch && matchStatus && matchType;
   }), [vehicles, search, filterStatus, filterType]);
-
-  // ── Handlers ──────────────────────────────────────────────────────────────
 
   const openAdd = useCallback(() => {
     setEditingVehicle(null);
@@ -1248,12 +1253,9 @@ export default function VehiclesManagement() {
     setSelected(new Set());
   }, [dispatch, selected]);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-
   return (
     <div className="min-h-screen bg-slate-50" style={{ fontFamily: 'Poppins, sans-serif' }}>
 
-      {/* ── Page header ── */}
       <header className="bg-white border-b border-slate-100 shadow-sm px-4 sm:px-6 pt-6 pb-4">
         <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
           <div>
@@ -1286,9 +1288,7 @@ export default function VehiclesManagement() {
         <StatsBar vehicles={vehicles} />
       </header>
 
-      {/* ── Toolbar ── */}
       <div className="px-4 sm:px-6 py-4 flex items-center gap-3 flex-wrap border-b border-slate-100 bg-white">
-        {/* Search */}
         <div className="relative flex-1 min-w-[200px]">
           <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" aria-hidden="true" />
           <Input
@@ -1307,7 +1307,6 @@ export default function VehiclesManagement() {
           )}
         </div>
 
-        {/* Status filter pills */}
         <div className="flex items-center gap-0.5 bg-slate-100 p-1 rounded-xl" role="group" aria-label="Filter by status">
           {[['all', 'All'], ['pending', 'Pending'], ['verified', 'Verified'], ['rejected', 'Rejected']].map(([val, label]) => (
             <button key={val} onClick={() => setFilterStatus(val)}
@@ -1319,7 +1318,6 @@ export default function VehiclesManagement() {
           ))}
         </div>
 
-        {/* Type filter */}
         {uniqueTypes.length > 1 && (
           <select
             value={filterType}
@@ -1333,7 +1331,6 @@ export default function VehiclesManagement() {
           </select>
         )}
 
-        {/* Grid / List toggle */}
         <div className="flex items-center gap-0.5 bg-slate-100 p-1 rounded-xl" role="group" aria-label="View mode">
           {([['grid', Grid3X3, 'Grid view'], ['list', List, 'List view']] ).map(([mode, Icon, label]) => (
             <button key={mode} onClick={() => setViewMode(mode)} aria-label={label} aria-pressed={viewMode === mode}
@@ -1345,7 +1342,6 @@ export default function VehiclesManagement() {
         </div>
       </div>
 
-      {/* ── Bulk actions bar ── */}
       <AnimatePresence>
         {selected.size > 0 && (
           <motion.div
@@ -1369,10 +1365,8 @@ export default function VehiclesManagement() {
         )}
       </AnimatePresence>
 
-      {/* ── Content area ── */}
       <main className={`px-4 sm:px-6 py-6 transition-all duration-300 ${detailVehicle ? 'pr-[416px]' : ''}`}>
 
-        {/* Select-all row */}
         {filtered.length > 0 && (
           <div className="flex items-center justify-between mb-4">
             <button onClick={toggleSelectAll}
@@ -1388,7 +1382,6 @@ export default function VehiclesManagement() {
           </div>
         )}
 
-        {/* Loading skeletons */}
         {loading && vehicles.length === 0 && (
           <div className={`grid gap-4 ${viewMode === 'grid' ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}
             aria-busy="true" aria-label="Loading vehicles">
@@ -1398,7 +1391,6 @@ export default function VehiclesManagement() {
           </div>
         )}
 
-        {/* Empty state */}
         {!loading && filtered.length === 0 && (
           <div className="text-center py-20" role="status">
             <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-4" aria-hidden="true">
@@ -1424,7 +1416,6 @@ export default function VehiclesManagement() {
           </div>
         )}
 
-        {/* Grid view */}
         {viewMode === 'grid' && filtered.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-4">
             <AnimatePresence>
@@ -1445,7 +1436,6 @@ export default function VehiclesManagement() {
           </div>
         )}
 
-        {/* List view */}
         {viewMode === 'list' && filtered.length > 0 && (
           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
             <table className="w-full" role="table">
@@ -1471,6 +1461,9 @@ export default function VehiclesManagement() {
                   {filtered.map((vehicle) => {
                     const vt     = vtOf(vehicle.vehicleType);
                     const hasDoc = [vehicle.insuranceExpiry, vehicle.pollutionCertExpiry].some(isExpired);
+                    // FIX: use helper for driver check in list view
+                    const hasDriver = !!assignedDriverId(vehicle);
+                    const driverName = vehicle.assignedDriver?.legalName ?? null;
                     return (
                       <motion.tr
                         key={vehicle._id}
@@ -1497,8 +1490,11 @@ export default function VehiclesManagement() {
                           <StatusBadge status={vehicle.verificationStatus} />
                         </td>
                         <td className="px-4 py-3">
-                          {vehicle.assignedDriver
-                            ? <span className="text-xs font-semibold text-blue-600 flex items-center gap-1"><UserCheck size={11} />Assigned</span>
+                          {/* FIX: show driver name from object */}
+                          {hasDriver
+                            ? <span className="text-xs font-semibold text-blue-600 flex items-center gap-1">
+                                <UserCheck size={11} />{driverName ?? 'Assigned'}
+                              </span>
                             : <span className="text-xs text-slate-400">—</span>}
                         </td>
                         <td className="px-4 py-3">
@@ -1532,7 +1528,6 @@ export default function VehiclesManagement() {
         )}
       </main>
 
-      {/* ── Detail panel ── */}
       <AnimatePresence>
         {detailVehicle && (
           <VehicleDetail
@@ -1544,7 +1539,6 @@ export default function VehiclesManagement() {
         )}
       </AnimatePresence>
 
-      {/* ── Form modal ── */}
       <AnimatePresence>
         {showForm && (
           <VehicleForm
@@ -1557,7 +1551,6 @@ export default function VehiclesManagement() {
         )}
       </AnimatePresence>
 
-      {/* ── Assign driver modal ── */}
       <AnimatePresence>
         {assignVehicle && (
           <AssignDriverModal
@@ -1571,7 +1564,6 @@ export default function VehiclesManagement() {
         )}
       </AnimatePresence>
 
-      {/* ── Delete confirm ── */}
       <AnimatePresence>
         {deleteConfirm && (
           <motion.div

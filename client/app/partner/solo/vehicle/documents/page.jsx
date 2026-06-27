@@ -324,6 +324,7 @@ export default function VehicleDocuments() {
 
   return (
     <div className="min-h-screen bg-base-100 text-base-content font-[family-name:var(--font-family-poppins)]">
+      
       {/* Background decoration */}
       <div
         className="fixed inset-0 pointer-events-none"

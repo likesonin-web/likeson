@@ -7,10 +7,32 @@ const { Schema } = mongoose;
 //
 // Write-heavy GPS time-series + milestone events for a single ride.
 // ONE RideTracking document per Ride (1:1, enforced by unique index).
+//
+// CHANGE SUMMARY (architecture redesign pass):
+//   - FIXED: the original schema declared `careAssistant`,
+//     `careAssistantJoinedAt`, `careAssistantStatus`,
+//     `careAssistantLiveLocation`, `careAssistantBreadcrumbs`,
+//     `careAssistantBreadcrumbCount` TWICE as separate field blocks in the
+//     same schema object literal. In a JS object literal the second
+//     declaration silently wins — the first block was dead, unreachable
+//     code. This was a live bug, not a style issue.
+//   - REMOVED all `careAssistant*` top-level fields entirely. Replaced by a
+//     generic `participants[]` array, one entry per active RideParticipant
+//     (role-tagged: CARE_ASSISTANT, NURSE, ESCORT, FAMILY, etc.) — new roles
+//     slot in with zero schema change, per the extensibility requirement.
+//   - REMOVED `activeTarget` enum — same "enum-based navigation" problem
+//     that was fixed on Ride.activeNavigationTarget. Replaced with
+//     `currentStopId`, denormalized from Ride for fast tracking-doc-only
+//     reads without an extra join.
+//   - REMOVED embedded `sosEvents[]` + `triggerSos`/`resolveSos` statics.
+//     SOS is now a standalone, immutable `SosEvent` collection — emergency
+//     data must never share a retention/archival policy with routine GPS
+//     breadcrumbs, and embedding meant it would. `hasActiveSos` stays here
+//     as a synced read cache only (see `syncSosFlag` static).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const MAX_BREADCRUMBS = 2000;
-const MAX_ETA_UPDATES = 100; // FIX #14: enforced in $push $slice, not just pre-save
+const MAX_ETA_UPDATES = 100;
 
 // ── Milestone Names ───────────────────────────────────────────────────────────
 
@@ -111,25 +133,6 @@ const etaUpdateSchema = new Schema(
   { _id: false },
 );
 
-const sosEventSchema = new Schema(
-  {
-    triggeredBy: {
-      type: String,
-      enum: ["driver", "customer", "care_assistant", "system"],
-    },
-    triggeredByUserId: { type: Schema.Types.ObjectId, ref: "User" },
-    sosType: { type: String, enum: ["medical", "safety", "accident", "other"] },
-    coordinates: { type: [Number] },
-    description: { type: String },
-    resolvedAt: { type: Date },
-    resolvedBy: { type: Schema.Types.ObjectId, ref: "User" },
-    resolutionNotes: { type: String },
-    triggeredAt: { type: Date, default: Date.now },
-    isResolved: { type: Boolean, default: false },
-  },
-  { _id: true },
-);
-
 const routeDeviationSchema = new Schema(
   {
     detectedAt: { type: Date, default: Date.now },
@@ -140,6 +143,36 @@ const routeDeviationSchema = new Schema(
     driverReason: { type: String },
   },
   { _id: true },
+);
+
+// CHANGE: generic participant tracking sub-document. One of these per active
+// RideParticipant (CA, nurse, escort, family, equipment handler, doctor —
+// any future role). Replaces every hardcoded `careAssistant*` field that
+// used to live at the top level of this schema (in duplicate, no less).
+const participantTrackingSchema = new Schema(
+  {
+    participantId: {
+      type: Schema.Types.ObjectId,
+      ref: "RideParticipant",
+      required: true,
+    },
+    role: { type: String, required: true }, // validated against PARTICIPANT_ROLES at the RideParticipant level, not re-enforced here
+    status: { type: String, default: "not_joined" },
+    joinedAt: { type: Date, default: null },
+    isActive: { type: Boolean, default: true }, // false once this participant is replaced
+
+    liveLocation: {
+      type: { type: String, enum: ["Point"], default: "Point" },
+      coordinates: { type: [Number], default: [80.648, 16.506] },
+      heading: { type: Number, min: 0, max: 360 },
+      speedKmh: { type: Number, min: 0 },
+      updatedAt: { type: Date, default: Date.now },
+    },
+
+    breadcrumbs: { type: [breadcrumbSchema], default: [] }, // same ring-buffer pattern as driver breadcrumbs, capped at MAX_BREADCRUMBS
+    breadcrumbCount: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false },
 );
 
 // ── Main Schema ───────────────────────────────────────────────────────────────
@@ -168,43 +201,6 @@ const rideTrackingSchema = new Schema(
       index: true,
     },
 
-    careAssistant: {
-      type: Schema.Types.ObjectId,
-      ref: "CareAssistantProfile",
-      default: null,
-      index: true,
-    },
-    careAssistantJoinedAt: { type: Date, default: null },
-    careAssistantBreadcrumbCount: { type: Number, default: 0, min: 0 },
-    careAssistantStatus: {
-      type: String,
-      enum: [
-        "not_joined",
-        "en_route_to_pickup",
-        "at_pickup",
-        "in_ride",
-        "departed",
-      ],
-      default: "not_joined",
-    },
-    careAssistantLiveLocation: {
-      type: new Schema(
-        {
-          type: { type: String, enum: ["Point"], default: "Point" },
-          coordinates: { type: [Number], default: [80.648, 16.506] },
-          heading: { type: Number, min: 0, max: 360 },
-          speedKmh: { type: Number, min: 0 },
-          updatedAt: { type: Date, default: Date.now },
-        },
-        { _id: false },
-      ),
-      default: null,
-    },
-    careAssistantBreadcrumbs: {
-      type: [breadcrumbSchema],
-      default: [],
-    },
-
     hospital: {
       type: Schema.Types.ObjectId,
       ref: "Hospital",
@@ -212,16 +208,15 @@ const rideTrackingSchema = new Schema(
       index: true,
     },
 
-    activeTarget: {
-      type: String,
-      enum: [
-        "pickup_care_assistant",
-        "pickup_patient",
-        "dropoff_hospital",
-        "dropoff_destination",
-        "return_pickup",
-      ],
-      default: "pickup_patient",
+    // CHANGE: replaces `activeTarget` enum (same enum-explosion issue fixed
+    // on Ride.activeNavigationTarget). Denormalized copy of Ride.currentStopId
+    // so live-tracking reads don't need an extra join to the Ride document.
+    // Kept in sync by the service layer whenever Ride.currentStopId changes.
+    currentStopId: {
+      type: Schema.Types.ObjectId,
+      ref: "RideStop",
+      default: null,
+      index: true,
     },
 
     liveRouteContext: {
@@ -239,7 +234,7 @@ const rideTrackingSchema = new Schema(
       patientPickedUpAt: { type: Date },
     },
 
-    // ── GPS Breadcrumbs ───────────────────────────────────────────────────────
+    // ── GPS Breadcrumbs (driver) ──────────────────────────────────────────────
     breadcrumbs: {
       type: [breadcrumbSchema],
       default: [],
@@ -261,64 +256,29 @@ const rideTrackingSchema = new Schema(
     currentEtaMinutes: { type: Number, default: null },
     currentEtaTarget: { type: String, default: null },
 
-    // FIX #14: etaUpdates cap enforced at DB level via $slice in addEtaUpdate static.
-    // pre-save cap remains as safety net but $push $slice is the primary guard.
     etaUpdates: {
       type: [etaUpdateSchema],
       default: [],
     },
 
-    // ── Care Assistant Participant ─────────────────────────────────────────────
-    careAssistant: {
-      type: Schema.Types.ObjectId,
-      ref: "CareAssistantProfile",
-      default: null,
-      index: true,
-    },
-
-    careAssistantJoinedAt: { type: Date, default: null },
-
-    careAssistantStatus: {
-      type: String,
-      enum: [
-        "not_joined",
-        "en_route_to_pickup",
-        "at_pickup",
-        "in_ride",
-        "departed",
-      ],
-      default: "not_joined",
-    },
-
-    careAssistantLiveLocation: {
-      type: new Schema(
-        {
-          type: { type: String, enum: ["Point"], default: "Point" },
-          coordinates: { type: [Number], default: [80.648, 16.506] },
-          heading: { type: Number, min: 0, max: 360 },
-          speedKmh: { type: Number, min: 0 },
-          updatedAt: { type: Date, default: Date.now },
-        },
-        { _id: false },
-      ),
-      default: null,
-    },
-
-    // Ring-buffered CA breadcrumbs (separate from driver breadcrumbs)
-    careAssistantBreadcrumbs: {
-      type: [breadcrumbSchema], // reuse existing breadcrumbSchema
+    // CHANGE: generic participant tracking — replaces every duplicated
+    // `careAssistant*` top-level field (see static methods below for the
+    // participant-keyed read/write API that replaces attachCareAssistant /
+    // updateCareAssistantLocation / updateCareAssistantStatus).
+    participants: {
+      type: [participantTrackingSchema],
       default: [],
     },
-
-    careAssistantBreadcrumbCount: { type: Number, default: 0, min: 0 },
 
     // ── Route Summary ─────────────────────────────────────────────────────────
     totalDistanceKm: { type: Number, default: 0, min: 0 },
     expectedRoutePolyline: { type: String, default: null },
     actualRoutePolyline: { type: String, default: null },
 
-    // ── SOS ───────────────────────────────────────────────────────────────────
-    sosEvents: { type: [sosEventSchema], default: [] },
+    // CHANGE: SOS is now tracked in the standalone SosEvent collection.
+    // hasActiveSos stays here as a synced read cache only — updated via
+    // `syncSosFlag` (called from the SosEvent post-save/resolve hooks), never
+    // computed from a local array anymore.
     hasActiveSos: { type: Boolean, default: false, index: true },
 
     // ── Route Deviations ──────────────────────────────────────────────────────
@@ -328,7 +288,7 @@ const rideTrackingSchema = new Schema(
     // ── Summary (populated at ride completion) ────────────────────────────────
     summary: {
       totalDistanceKm: { type: Number },
-      totalDurationMin: { type: Number }, // FIX #12: now computed in computeSummary
+      totalDurationMin: { type: Number },
       avgSpeedKmh: { type: Number },
       maxSpeedKmh: { type: Number },
       pickupWaitMin: { type: Number },
@@ -364,23 +324,20 @@ rideTrackingSchema.virtual("milestoneCount").get(function () {
   return this.milestones?.length ?? 0;
 });
 
-rideTrackingSchema.virtual("hasSosEvents").get(function () {
-  return this.sosEvents?.length > 0;
+rideTrackingSchema.virtual("activeParticipants").get(function () {
+  return (this.participants ?? []).filter((p) => p.isActive);
 });
 
-// ── Static Methods ────────────────────────────────────────────────────────────
+// ── Static Methods — GPS / Milestones / ETA (driver) ─────────────────────────
 
 /**
- * addBreadcrumb — push GPS ping, maintain ring buffer cap.
+ * addBreadcrumb — push driver GPS ping, maintain ring buffer cap.
  *
- * FIX #13: Single DB op — no separate findOne. We use $push $slice $inc together.
- * Incremental distance calculated from last breadcrumb pulled in the same update
- * is not feasible in one op without transactions. Accepted trade-off: distance
- * accumulation done via separate lean fetch only when needed, otherwise rely on
- * computeSummary at ride end using full breadcrumb array.
- *
- * For production scale: pipe breadcrumbs to InfluxDB/TimescaleDB and store only
- * last 200 here for live map display.
+ * Single atomic op — $push with $slice keeps ring buffer, $inc bumps counter.
+ * For production scale: pipe raw pings to a durable, TTL'd RideGpsLog
+ * collection (or external time-series store) for full trip replay/audit;
+ * this ring buffer is for live map display only and may drop data under
+ * pressure without correctness impact.
  *
  * @param {ObjectId|string} rideId  - Ride._id (NOT booking ID)
  * @param {{ coordinates, heading?, speedKmh?, accuracyM?, source? }} pingData
@@ -401,9 +358,6 @@ rideTrackingSchema.statics.addBreadcrumb = async function (rideId, pingData) {
     timestamp: new Date(),
   };
 
-  // FIX #13: single atomic op — $push with $slice keeps ring buffer,
-  // $inc bumps counter. No separate findOne round trip.
-  // Distance accumulation deferred to computeSummary (acceptable for our scale).
   return this.findOneAndUpdate(
     { ride: rideId },
     {
@@ -421,10 +375,6 @@ rideTrackingSchema.statics.addBreadcrumb = async function (rideId, pingData) {
 
 /**
  * addMilestone — record a named lifecycle event.
- *
- * @param {ObjectId|string} rideId
- * @param {string} name — must be in MILESTONE_NAMES
- * @param {{ coordinates?, stopSequence?, meta?, recordedBy?, recordedByUserId? }} opts
  */
 rideTrackingSchema.statics.addMilestone = async function (
   rideId,
@@ -460,12 +410,7 @@ rideTrackingSchema.statics.addMilestone = async function (
 
 /**
  * addEtaUpdate — push ETA recalculation, capped at MAX_ETA_UPDATES.
- *
- * FIX #14: $slice in $push enforces cap at DB level — bypasses pre-save,
- * works correctly even when called via findOneAndUpdate directly.
- *
- * @param {ObjectId|string} rideId
- * @param {{ toWaypoint, etaMinutes, distanceRemainingKm, source? }} etaData
+ * $slice in $push enforces cap at DB level.
  */
 rideTrackingSchema.statics.addEtaUpdate = async function (rideId, etaData) {
   const { toWaypoint, etaMinutes, distanceRemainingKm, source } = etaData;
@@ -484,7 +429,7 @@ rideTrackingSchema.statics.addEtaUpdate = async function (rideId, etaData) {
       $push: {
         etaUpdates: {
           $each: [entry],
-          $slice: -MAX_ETA_UPDATES, // FIX #14: DB-level cap, not pre-save only
+          $slice: -MAX_ETA_UPDATES,
         },
       },
       $set: {
@@ -496,40 +441,66 @@ rideTrackingSchema.statics.addEtaUpdate = async function (rideId, etaData) {
   ).select("currentEtaMinutes currentEtaTarget");
 };
 
+// ── Static Methods — Generic Participant Tracking ────────────────────────────
+// Replaces: attachCareAssistant, updateCareAssistantLocation,
+// updateCareAssistantStatus. Works for CA, nurse, escort, family, equipment
+// handler, doctor — any role — with zero schema change per new role.
+
 /**
- * attachCareAssistant — link CA to tracking doc when CA assigned to booking.
- * Called when admin assigns CA or CA accepts booking.
+ * attachParticipant — add a tracking entry for a newly assigned
+ * RideParticipant (admin assigns CA, or any future role joins the ride).
  */
-rideTrackingSchema.statics.attachCareAssistant = async function (
+rideTrackingSchema.statics.attachParticipant = async function (
   rideId,
-  careAssistantProfileId,
+  { participantId, role },
 ) {
   return this.findOneAndUpdate(
     { ride: rideId },
     {
-      $set: {
-        careAssistant: careAssistantProfileId,
-        careAssistantStatus: "en_route_to_pickup",
-        careAssistantJoinedAt: new Date(),
+      $push: {
+        participants: {
+          participantId,
+          role,
+          status: "en_route_to_pickup",
+          joinedAt: new Date(),
+          isActive: true,
+        },
       },
     },
     { new: true },
-  ).select("careAssistant careAssistantStatus careAssistantJoinedAt");
+  ).select("participants");
 };
 
 /**
- * updateCareAssistantLocation — push CA GPS ping + update live location.
- * Returns lightweight select for socket broadcast.
+ * deactivateParticipant — mark a participant's tracking entry inactive
+ * (called when that participant is replaced — the RideParticipant doc itself
+ * is never deleted, this just stops live-tracking it).
  */
-rideTrackingSchema.statics.updateCareAssistantLocation = async function (
+rideTrackingSchema.statics.deactivateParticipant = async function (
   rideId,
+  participantId,
+) {
+  return this.findOneAndUpdate(
+    { ride: rideId, "participants.participantId": participantId },
+    { $set: { "participants.$.isActive": false } },
+    { new: true },
+  ).select("participants");
+};
+
+/**
+ * updateParticipantLocation — push GPS ping for a specific participant +
+ * update their live location. Returns a lightweight select for socket
+ * broadcast.
+ */
+rideTrackingSchema.statics.updateParticipantLocation = async function (
+  rideId,
+  participantId,
   pingData,
 ) {
   const { coordinates, heading, speedKmh, accuracyM, source } = pingData;
-  if (!coordinates || coordinates.length !== 2)
-    throw new Error(
-      "updateCareAssistantLocation: coordinates [lng, lat] required",
-    );
+  if (!coordinates || coordinates.length !== 2) {
+    throw new Error("updateParticipantLocation: coordinates [lng, lat] required");
+  }
 
   const breadcrumb = {
     coordinates,
@@ -541,10 +512,10 @@ rideTrackingSchema.statics.updateCareAssistantLocation = async function (
   };
 
   return this.findOneAndUpdate(
-    { ride: rideId },
+    { ride: rideId, "participants.participantId": participantId },
     {
       $set: {
-        careAssistantLiveLocation: {
+        "participants.$.liveLocation": {
           type: "Point",
           coordinates,
           heading: heading ?? 0,
@@ -553,88 +524,53 @@ rideTrackingSchema.statics.updateCareAssistantLocation = async function (
         },
       },
       $push: {
-        careAssistantBreadcrumbs: {
+        "participants.$.breadcrumbs": {
           $each: [breadcrumb],
-          $slice: -MAX_BREADCRUMBS, // reuse same constant
+          $slice: -MAX_BREADCRUMBS,
         },
       },
-      $inc: { careAssistantBreadcrumbCount: 1 },
+      $inc: { "participants.$.breadcrumbCount": 1 },
     },
     { new: true },
-  ).select(
-    "careAssistantLiveLocation careAssistantBreadcrumbCount careAssistantStatus",
-  );
+  ).select("participants");
 };
 
 /**
- * updateCareAssistantStatus — transition CA status in ride.
+ * updateParticipantStatus — transition a participant's status
+ * (en_route_to_pickup → at_pickup → in_ride → departed, etc).
  */
-rideTrackingSchema.statics.updateCareAssistantStatus = async function (
+rideTrackingSchema.statics.updateParticipantStatus = async function (
   rideId,
+  participantId,
   status,
 ) {
-  const valid = [
-    "not_joined",
-    "en_route_to_pickup",
-    "at_pickup",
-    "in_ride",
-    "departed",
-  ];
-  if (!valid.includes(status)) throw new Error(`Invalid CA status: ${status}`);
+  return this.findOneAndUpdate(
+    { ride: rideId, "participants.participantId": participantId },
+    { $set: { "participants.$.status": status } },
+    { new: true },
+  ).select("participants");
+};
+
+// ── Static Methods — SOS sync (data lives in standalone SosEvent now) ────────
+
+/**
+ * syncSosFlag — called by SosEvent's post-save / resolution hooks to keep
+ * this synced read cache accurate. This model no longer owns SOS data.
+ */
+rideTrackingSchema.statics.syncSosFlag = async function (rideId, hasActiveSos) {
   return this.findOneAndUpdate(
     { ride: rideId },
-    { $set: { careAssistantStatus: status } },
+    { $set: { hasActiveSos } },
     { new: true },
-  ).select("careAssistantStatus");
+  ).select("hasActiveSos");
 };
 
-/**
- * triggerSos — record SOS event, set hasActiveSos = true.
- */
-rideTrackingSchema.statics.triggerSos = async function (rideId, sosData) {
-  const sosEvent = { ...sosData, triggeredAt: new Date(), isResolved: false };
-
-  return this.findOneAndUpdate(
-    { ride: rideId },
-    {
-      $push: { sosEvents: sosEvent },
-      $set: { hasActiveSos: true },
-    },
-    { new: true },
-  ).select("sosEvents hasActiveSos");
-};
+// ── Static Methods — Summary ──────────────────────────────────────────────────
 
 /**
- * resolveSos — mark SOS resolved.
- */
-rideTrackingSchema.statics.resolveSos = async function (
-  rideId,
-  sosEventId,
-  resolvedBy,
-  resolutionNotes,
-) {
-  return this.findOneAndUpdate(
-    { ride: rideId, "sosEvents._id": sosEventId },
-    {
-      $set: {
-        "sosEvents.$.isResolved": true,
-        "sosEvents.$.resolvedAt": new Date(),
-        "sosEvents.$.resolvedBy": resolvedBy,
-        "sosEvents.$.resolutionNotes": resolutionNotes,
-        hasActiveSos: false,
-      },
-    },
-    { new: true },
-  );
-};
-
-/**
- * computeSummary — called when ride completes.
- *
- * FIX #12: totalDurationMin now computed from Ride.rideStartedAt / rideCompletedAt
- * fetched directly inside this static — no longer null.
- *
- * @param {ObjectId|string} rideId  - Ride._id
+ * computeSummary — called when ride completes. totalDurationMin computed
+ * from Ride.rideStartedAt / rideCompletedAt fetched directly inside this
+ * static.
  */
 rideTrackingSchema.statics.computeSummary = async function (rideId) {
   const [tracking, ride] = await Promise.all([
@@ -658,7 +594,6 @@ rideTrackingSchema.statics.computeSummary = async function (rideId) {
     : 0;
   const maxSpeed = speeds.length ? Math.max(...speeds) : 0;
 
-  // FIX #12: compute totalDurationMin from Ride timestamps
   let totalDurationMin = null;
   if (ride?.rideStartedAt && ride?.rideCompletedAt) {
     totalDurationMin = Math.round(
@@ -666,7 +601,6 @@ rideTrackingSchema.statics.computeSummary = async function (rideId) {
     );
   }
 
-  // Pickup wait = driver_arrived → otp_verified
   const arrivedMs = tracking.milestones?.find(
     (m) => m.name === "driver_arrived",
   )?.occurredAt;
@@ -678,7 +612,6 @@ rideTrackingSchema.statics.computeSummary = async function (rideId) {
       ? Math.round((new Date(otpMs) - new Date(arrivedMs)) / 60000)
       : 0;
 
-  // Total stop wait
   const stopArrived =
     tracking.milestones?.filter((m) => m.name === "stop_reached") ?? [];
   const stopDeparted =
@@ -692,7 +625,6 @@ rideTrackingSchema.statics.computeSummary = async function (rideId) {
     );
   }
 
-  // Recompute totalDistanceKm from breadcrumbs using haversine
   let totalDistanceKm = 0;
   for (let i = 1; i < crumbs.length; i++) {
     totalDistanceKm += haversineKm(
@@ -704,7 +636,7 @@ rideTrackingSchema.statics.computeSummary = async function (rideId) {
 
   const summary = {
     totalDistanceKm,
-    totalDurationMin, // FIX #12: no longer null
+    totalDurationMin,
     avgSpeedKmh: avgSpeed,
     maxSpeedKmh: maxSpeed,
     pickupWaitMin,
@@ -732,26 +664,27 @@ rideTrackingSchema.pre("save", function () {
     this.etaUpdates = this.etaUpdates.slice(-MAX_ETA_UPDATES);
   }
 
-  // Sync hasActiveSos
-  if (this.isModified("sosEvents")) {
-    this.hasActiveSos = this.sosEvents.some((e) => !e.isResolved);
-  }
-
   // Sync hasUnacknowledgedDeviation
   if (this.isModified("routeDeviations")) {
     this.hasUnacknowledgedDeviation = this.routeDeviations.some(
       (d) => !d.wasAcknowledged,
     );
   }
+
+  // NOTE: hasActiveSos is no longer synced from a local array — see
+  // syncSosFlag static, called externally by SosEvent hooks.
 });
 
 // ── Indexes ───────────────────────────────────────────────────────────────────
 
+rideTrackingSchema.index({ ride: 1 }, { unique: true });
 rideTrackingSchema.index({ booking: 1 });
 rideTrackingSchema.index({ driver: 1, createdAt: -1 });
+rideTrackingSchema.index({ currentStopId: 1 });
 rideTrackingSchema.index({ hasActiveSos: 1 });
 rideTrackingSchema.index({ hasUnacknowledgedDeviation: 1 });
 rideTrackingSchema.index({ isArchived: 1, createdAt: -1 });
+rideTrackingSchema.index({ "participants.participantId": 1 });
 rideTrackingSchema.index({ createdAt: -1 });
 
 // ── Utility — Haversine distance ──────────────────────────────────────────────
@@ -770,7 +703,5 @@ function toRad(deg) {
   return deg * (Math.PI / 180);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-rideTrackingSchema.index({ ride: 1 }, { unique: true });
 const RideTracking = mongoose.model("RideTracking", rideTrackingSchema);
 export default RideTracking;

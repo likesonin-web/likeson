@@ -1,191 +1,126 @@
 'use client';
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { X, Search, Users, MessageSquare, Check, Plus } from 'lucide-react';
-import { useChat } from '@/hooks/useChat';
 
-export default function NewConversationModal({ onClose }) {
-  const { startDM, startGroup, conversations } = useChat();
-  const [mode, setMode] = useState('dm');  // 'dm' | 'group'
+import { useState, useMemo } from 'react';
+import { Search, Users, User, Check } from 'lucide-react';
+import Modal from './Modal';
+import Avatar from './Avatar';
+
+/**
+ * `users` = people the current user is allowed to message (see
+ * ChatManagement's `directoryUsers` prop doc for where this should come from).
+ */
+export default function NewConversationModal({ open, onClose, users = [], onStartDirect, onStartGroup }) {
+  const [tab, setTab] = useState('direct');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState([]);
   const [groupName, setGroupName] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  // In real app: search users via API. Here we derive from existing conversation participants.
-  const knownUsers = [];
-  const seen = new Set();
-  for (const c of conversations) {
-    for (const p of c.participants || []) {
-      const uid = p.user?._id || p.user;
-      if (uid && !seen.has(uid.toString())) {
-        seen.add(uid.toString());
-        knownUsers.push({ _id: uid, name: p.user?.name || 'User', avatar: p.user?.avatar });
-      }
-    }
-  }
-
-  const filtered = knownUsers.filter((u) =>
-    u.name.toLowerCase().includes(query.toLowerCase())
+  const filtered = useMemo(
+    () => users.filter((u) => u.name?.toLowerCase().includes(query.trim().toLowerCase())),
+    [users, query],
   );
 
-  const toggleUser = (u) => {
-    setSelected((prev) =>
-      prev.find((x) => x._id === u._id)
-        ? prev.filter((x) => x._id !== u._id)
-        : [...prev, u]
-    );
+  const reset = () => {
+    setSelected([]);
+    setGroupName('');
+    setQuery('');
+    setTab('direct');
   };
 
-  const handleStart = async () => {
-    if (!selected.length) return;
-    setLoading(true);
+  const toggleSelect = (userId) =>
+    setSelected((prev) => (prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]));
+
+  const handleDirect = async (userId) => {
+    setSubmitting(true);
     try {
-      if (mode === 'dm') {
-        await startDM(selected[0]._id);
-      } else {
-        if (!groupName.trim()) return;
-        await startGroup({
-          name: groupName,
-          memberIds: selected.map((u) => u._id),
-        });
-      }
+      await onStartDirect(userId);
+      reset();
       onClose();
     } finally {
-      setLoading(false);
+      setSubmitting(false);
+    }
+  };
+
+  const handleGroup = async () => {
+    if (!groupName.trim() || selected.length === 0) return;
+    setSubmitting(true);
+    try {
+      await onStartGroup({ name: groupName.trim(), memberIds: selected });
+      reset();
+      onClose();
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="modal-overlay"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ scale: 0.92, y: 20 }}
-        animate={{ scale: 1, y: 0 }}
-        exit={{ scale: 0.92, y: 20 }}
-        transition={{ type: 'spring', stiffness: 300, damping: 28 }}
-        className="modal-card"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="modal-header">
-          <h3 className="modal-title">New conversation</h3>
-          <button onClick={onClose} className="modal-close-btn">
-            <X size={18} />
-          </button>
-        </div>
+    <Modal open={open} onClose={() => { reset(); onClose(); }} title="New conversation" maxWidth="max-w-lg">
+      <div className="flex gap-2 mb-4">
+        <TabButton active={tab === 'direct'} icon={User} label="Direct message" onClick={() => setTab('direct')} />
+        <TabButton active={tab === 'group'} icon={Users} label="New group" onClick={() => setTab('group')} />
+      </div>
 
-        {/* Mode tabs */}
-        <div className="modal-tabs">
-          <button
-            className={`modal-tab ${mode === 'dm' ? 'modal-tab-active' : ''}`}
-            onClick={() => { setMode('dm'); setSelected([]); }}
-          >
-            <MessageSquare size={15} /> Direct
-          </button>
-          <button
-            className={`modal-tab ${mode === 'group' ? 'modal-tab-active' : ''}`}
-            onClick={() => { setMode('group'); setSelected([]); }}
-          >
-            <Users size={15} /> Group
-          </button>
-        </div>
+      {tab === 'group' && (
+        <input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="Group name" className="input-field mb-3" />
+      )}
 
-        {/* Group name (group mode) */}
-        <AnimatePresence>
-          {mode === 'group' && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="modal-group-name-wrap"
+      <div className="relative mb-3">
+        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search people" className="input-field pl-9" />
+      </div>
+
+      <div className="space-y-1 max-h-72 overflow-y-auto scrollbar-thin">
+        {filtered.length === 0 && <p className="text-center text-sm text-base-content/50 py-6">No matching people found.</p>}
+        {filtered.map((u) => {
+          const isSelected = selected.includes(u._id);
+          return (
+            <button
+              key={u._id}
+              type="button"
+              disabled={submitting}
+              onClick={() => (tab === 'direct' ? handleDirect(u._id) : toggleSelect(u._id))}
+              className="w-full flex items-center gap-3 px-2 py-2 rounded-field hover:bg-base-200 transition-colors text-left disabled:opacity-50"
             >
-              <input
-                className="modal-input"
-                placeholder="Group name..."
-                value={groupName}
-                onChange={(e) => setGroupName(e.target.value)}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Selected chips */}
-        {selected.length > 0 && (
-          <div className="modal-selected-chips">
-            {selected.map((u) => (
-              <div key={u._id} className="modal-chip">
-                <span>{u.name}</span>
-                <button onClick={() => toggleUser(u)}><X size={11} /></button>
+              <Avatar src={u.avatar} name={u.name} size="sm" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold truncate">{u.name}</p>
+                <p className="text-xs text-base-content/50 capitalize truncate">{u.role}</p>
               </div>
-            ))}
-          </div>
-        )}
+              {tab === 'group' && (
+                <span className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isSelected ? 'bg-primary border-primary' : 'border-base-300'}`}>
+                  {isSelected && <Check className="w-3 h-3 text-primary-content" />}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
 
-        {/* Search */}
-        <div className="modal-search-wrap">
-          <Search size={14} className="modal-search-icon" />
-          <input
-            className="modal-search-input"
-            placeholder="Search people..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
+      {tab === 'group' && (
+        <button
+          type="button"
+          onClick={handleGroup}
+          disabled={!groupName.trim() || selected.length === 0 || submitting}
+          className="btn btn-primary w-full mt-4"
+        >
+          Create group ({selected.length} selected)
+        </button>
+      )}
+    </Modal>
+  );
+}
 
-        {/* User list */}
-        <div className="modal-user-list">
-          {filtered.length === 0 && (
-            <p className="modal-no-users">No users found</p>
-          )}
-          {filtered.map((u) => {
-            const isSelected = selected.some((x) => x._id === u._id);
-            return (
-              <button
-                key={u._id}
-                className={`modal-user-item ${isSelected ? 'modal-user-item-active' : ''}`}
-                onClick={() => {
-                  if (mode === 'dm') setSelected([u]);
-                  else toggleUser(u);
-                }}
-              >
-                <div className="modal-user-avatar">
-                  {u.avatar
-                    ? <img src={u.avatar} alt={u.name} className="w-full h-full object-cover rounded-full" />
-                    : <span>{u.name[0]?.toUpperCase()}</span>
-                  }
-                </div>
-                <span className="modal-user-name">{u.name}</span>
-                {isSelected && <Check size={15} className="modal-user-check" />}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Footer */}
-        <div className="modal-footer">
-          <button onClick={onClose} className="btn btn-ghost btn-sm">Cancel</button>
-          <button
-            onClick={handleStart}
-            disabled={!selected.length || (mode === 'group' && !groupName.trim()) || loading}
-            className="btn btn-primary btn-sm"
-          >
-            {loading ? (
-              <span className="loading loading-xs loading-spinner" />
-            ) : (
-              <>
-                <Plus size={15} />
-                {mode === 'dm' ? 'Open chat' : 'Create group'}
-              </>
-            )}
-          </button>
-        </div>
-      </motion.div>
-    </motion.div>
+function TabButton({ active, icon: Icon, label, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-field text-sm font-semibold transition-colors ${
+        active ? 'bg-primary text-primary-content' : 'bg-base-200 text-base-content/60'
+      }`}
+    >
+      <Icon className="w-4 h-4" /> {label}
+    </button>
   );
 }

@@ -8,6 +8,18 @@ import asyncHandler     from '../utils/asyncHandler.js';
 
 const detector = new DeviceDetector();
 
+
+export const requireCookieConsent = (category) => asyncHandler(async (req, res, next) => {
+  const consent = await CookieConsent.findOne({ user: req.user._id }).lean();
+  if (!consent?.preferences?.[category]) {
+    return res.status(403).json({
+      message: `${category} cookies not accepted. Update preferences to use this feature.`,
+      code: 'COOKIE_CONSENT_REQUIRED',
+    });
+  }
+  next();
+});
+
 // ── getDeviceInfo middleware ──────────────────────────────────────────────────
 export const getDeviceInfo = (req, _res, next) => {
   const ua     = req.headers['user-agent'] ?? '';

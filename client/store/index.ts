@@ -1,8 +1,7 @@
 import { configureStore } from "@reduxjs/toolkit";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SLICE IMPORTS (Alphabetical Order)
-// ─────────────────────────────────────────────────────────────────────────────
+ 
+
 import accountingReducer from "./slices/accountingSlice";
 import adminAnalysticsReducer from "./slices/adminAnalyticsSlice";
 import adminUserReducer from "./slices/adminUserSlice";
@@ -12,10 +11,10 @@ import bannersReducer from "./slices/bannerSlice";
 import bloodbankReducer from "./slices/bloodbankSlice";
 import bookingReducer from "./slices/bookingSlice";
 import careAssistantReducer from "./slices/careAssistantSlice";
-import chatReducer from "./slices/chatSlice";
+
 import clinicalReducer from "./slices/clinicalSlice";
 import consulationReducer from "./slices/consultationSlice";
-import cookieConsentReducer from "./slices/cookieConsentSlice";
+ 
 import customerProfileReducer from "./slices/customerProfileSlice";
 import driverReducer from "./slices/driverSlice";
 import faqReducer from "./slices/faqSlice";
@@ -48,7 +47,8 @@ import uploadReducer from "./slices/uploadSlice";
 import userManagementReducer from "./slices/userManagementSlice";
 import userReducer from "./slices/userSlice";
 import walletReducer from "./slices/walletSlice";
-
+import chatReducer from './slices/chatSlice'
+import supportReducer from './slices/supportSlice'
 // ─────────────────────────────────────────────────────────────────────────────
 // STORE CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,10 +63,10 @@ export const store = configureStore({
     bloodBank: bloodbankReducer,
     booking: bookingReducer,
     careAssistant: careAssistantReducer,
-    chat: chatReducer,
+    chat:chatReducer,
     clinical: clinicalReducer,
     consultation: consulationReducer,
-    cookieConsent: cookieConsentReducer,
+    support: supportReducer,
     customerProfile: customerProfileReducer,
     driver: driverReducer,
     faq: faqReducer,
@@ -100,12 +100,11 @@ export const store = configureStore({
     userManagement: userManagementReducer,
     wallet: walletReducer,
   },
+ 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPORTED TYPES
 // ─────────────────────────────────────────────────────────────────────────────
-// This exports the 'RootState' type that your page.tsx is looking for
 export type RootState = ReturnType<typeof store.getState>;
-// This exports the 'AppDispatch' type for use with useDispatch
 export type AppDispatch = typeof store.dispatch;

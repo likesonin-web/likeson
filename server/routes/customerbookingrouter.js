@@ -48,7 +48,6 @@ import {
   SubscriptionPlan,
   sendBookingConfirmationEmail,
   parseFrontendDateTime,
-  markCaStandardTierUsed
 } from "./bookingRouterShared.js";
 
 import PlatformPricingConfig from "../models/PlatformPricingConfig.js";
@@ -78,25 +77,6 @@ const processHomeCollectionUsage = async (booking) => {
     if (match?.[1]) {
       await markHomeCollectionUsed(match[1]).catch((e) =>
         console.error("[processHomeCollectionUsage] failed:", e.message),
-      );
-    }
-  }
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPER: processCaStandardTierUsage
-// ─────────────────────────────────────────────────────────────────────────────
-const processCaStandardTierUsage = async (booking) => {
-  if (
-    ["care_assistant", "full_care_ride"].includes(booking.bookingType) &&
-    booking.internalNotes
-  ) {
-    const match = String(booking.internalNotes).match(
-      /caStandardTierFreeSubId:([a-f0-9]{24})/i,
-    );
-    if (match?.[1]) {
-      await markCaStandardTierUsed(match[1]).catch((e) =>
-        console.error("[processCaStandardTierUsage] failed:", e.message),
       );
     }
   }
@@ -726,20 +706,20 @@ router.get("/doctors", protect, async (req, res) => {
       page = "1",
       limit = "20",
     } = req.query;
-    
+
     const filter = {
       partnershipStatus: "Active",
       isActive: true,
       isVerified: true,
     };
-    
+
     if (specialization) filter.specialization = specialization;
     if (isOnline === "true") filter.isOnline = true;
     if (consultationType === "video") filter["consultationTypes.video"] = true;
 
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const total = await DoctorProfile.countDocuments(filter);
-    
+
     const doctors = await DoctorProfile.find(filter)
       .populate("user", "name email phone")
       .populate(
@@ -754,7 +734,7 @@ router.get("/doctors", protect, async (req, res) => {
       .sort({ "rating.averageRating": -1, isOnline: -1 })
       .lean();
 
-const doctorsWithPricing = doctors.map((d) => {
+    const doctorsWithPricing = doctors.map((d) => {
       // Pricing always comes from the doctor's own `fees` — hospitals never
       // set consultation pricing, even when managementModel is "hospital-manager".
       const effectiveFees = d.fees || {};
@@ -776,7 +756,7 @@ const doctorsWithPricing = doctors.map((d) => {
             .includes(city.toLowerCase()),
         )
       : doctorsWithPricing;
-      
+
     res.json({
       success: true,
       total,
@@ -981,18 +961,80 @@ router.get(
 
 router.get("/follow-up/check", protect, async (req, res) => {
   try {
-    const { doctorId, hospitalId } = req.query;
+    const { doctorId, hospitalId, patientName, patientPhone } = req.query;
+
     if (!doctorId)
       return res
         .status(400)
         .json({ success: false, message: "doctorId required" });
+
+    // eligibility (existing logic via shared helper)
     const result = await checkFollowUpEligibility({
       customerId: req.user._id,
       doctorId,
       hospitalId,
     });
-    res.json({ success: true, data: result });
+
+    if (!result.isEligible) {
+      return res.json({ success: true, data: result });
+    }
+
+    // ── Patient identity validation ───────────────────────────────────────────
+    // Only enforce when caller provides patientName / patientPhone for validation.
+    // If neither provided → return eligible + warn client to validate before booking.
+    if (patientName || patientPhone) {
+      // Fetch original booking's patientInfo via the parentOp's booking ref
+      const parentOp = await OutPatientRecord.findById(result.parentOp)
+        .select("patientName booking")
+        .lean();
+
+      let originalPhone = null;
+      if (parentOp?.booking) {
+        const origBooking = await Booking.findById(parentOp.booking)
+          .select("patientInfo")
+          .lean();
+        originalPhone = origBooking?.patientInfo?.phone ?? null;
+      }
+
+      const normName = (s) =>
+        String(s ?? "")
+          .toLowerCase()
+          .trim()
+          .replace(/\s+/g, " ");
+      const normPhone = (s) =>
+        String(s ?? "")
+          .replace(/\D/g, "")
+          .slice(-10);
+
+      const nameMatch = patientName
+        ? normName(patientName) === normName(parentOp?.patientName)
+        : true;
+
+      const phoneMatch =
+        patientPhone && originalPhone
+          ? normPhone(patientPhone) === normPhone(originalPhone)
+          : true; // no phone on file → skip phone check
+
+      if (!nameMatch || !phoneMatch) {
+        return res.json({
+          success: true,
+          data: {
+            isEligible: false,
+            reason:
+              "Patient details do not match the original consultation. Follow-up is only valid for the same patient.",
+            mismatch: {
+              name: !nameMatch,
+              phone: !phoneMatch,
+            },
+          },
+        });
+      }
+    }
+
+    // All checks pass
+    return res.json({ success: true, data: result });
   } catch (err) {
+    console.error("[GET /follow-up/check]", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -1082,7 +1124,7 @@ router.post(
         consultationType,
       );
       const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
-      
+
       const {
         fee: consultationFee,
         doctorShare,
@@ -1122,7 +1164,7 @@ router.post(
         ? +(careResult.fee * 0.18).toFixed(2)
         : 0;
       const consultGst = 0;
-      
+
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
         doctorShare,
@@ -1151,11 +1193,6 @@ router.post(
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
           : "pending";
-
-      const caStandardFreeNote =
-        careResult.caStandardTierFree && careResult.sub?._id
-          ? `caStandardTierFreeSubId:${careResult.sub._id.toString()}`
-          : undefined;
 
       const booking = await Booking.create({
         bookingType: "full_care_ride",
@@ -1193,7 +1230,7 @@ router.post(
         couponCode: couponCode || undefined,
         coinsRedeemed: coinsToRedeem,
         status: initialStatus,
-        internalNotes: caStandardFreeNote,
+
         createdBy: req.user._id,
         careAssistantSnapshot: null,
         subscriptionUsagePending: [],
@@ -1238,7 +1275,7 @@ router.post(
         await booking.save();
         if (!walletResult.needsRazorpay) {
           await flushAndRecord(booking);
-          await processCaStandardTierUsage(booking);
+
           sendPaymentConfirmedEmails({ booking, paymentMethod: "Wallet" });
         }
         razorpayOrder = walletResult.razorpayOrder;
@@ -1249,7 +1286,7 @@ router.post(
         booking.status = "pending";
         await booking.save();
         await flushAndRecord(booking);
-        await processCaStandardTierUsage(booking);
+
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
 
@@ -1536,7 +1573,7 @@ router.post(
         consultationType,
       );
       const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
-      
+
       const {
         fee: consultationFee,
         doctorShare,
@@ -1551,7 +1588,7 @@ router.post(
         hospitalId,
         consultationType,
       });
-      
+
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
         doctorShare,
@@ -1559,7 +1596,7 @@ router.post(
         taxPercent:
           pricingSource === "subscription" ? 0 : Math.round(gstRate * 100),
       });
-      
+
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -1745,18 +1782,12 @@ router.post(
         });
       }
 
-      let scheduledDate;
-      const rawStr = String(scheduledAt).trim();
-      if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
-        scheduledDate = new Date(`${rawStr}T00:00:00+05:30`);
-      } else {
-        scheduledDate = new Date(rawStr);
-      }
+      const scheduledDate = parseFrontendDateTime(scheduledAt);
       if (isNaN(scheduledDate.getTime())) {
         return res.status(400).json({
           success: false,
           message:
-            'Invalid scheduledAt — use ISO 8601 format e.g. "2026-06-15T10:30:00+05:30"',
+            'Invalid scheduledAt — use ISO 8601 e.g. "2026-06-15T10:30:00+05:30"',
         });
       }
       const GRACE_MS = 10 * 60 * 1000;
@@ -1787,7 +1818,7 @@ router.post(
         "video",
       );
       const isCoveredBySubscription = subCheck.allowed && subCheck.isFree;
-      
+
       const {
         fee: consultationFee,
         doctorShare,
@@ -1802,14 +1833,14 @@ router.post(
         hospitalId: null,
         consultationType: "video",
       });
-      
+
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
         doctorShare,
         hospitalShare,
         taxPercent: isCoveredBySubscription ? 0 : Math.round(gstRate * 100),
       });
-      
+
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -2088,7 +2119,7 @@ router.post(
         );
         isCoveredBySub = subCheck.allowed && subCheck.isFree;
         subRef = subCheck.sub;
-        
+
         const feeResult = await resolveConsultationFee({
           isFollowUp: false,
           followUpFee: 0,
@@ -2110,7 +2141,7 @@ router.post(
         transportFee: transportCalc.totalTransportFee,
         taxPercent: config?.tax?.transportGstPercent ?? 5,
       });
-      
+
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -2418,7 +2449,7 @@ router.post(
         hospitalId: null,
         consultationType: visitType === "homeVisit" ? "homeVisit" : "inPerson",
       });
-      
+
       const config = await PlatformPricingConfig.getGlobal();
       const fareBreakdown = buildFareBreakdown({
         consultationFee,
@@ -2426,7 +2457,7 @@ router.post(
         hospitalShare,
         taxPercent: config?.tax?.consultationGstPercent ?? 0,
       });
-      
+
       const initialStatus =
         paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
           ? "payment_pending"
@@ -2532,17 +2563,19 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       doctorId,
       hospitalId,
       scheduledAt,
-      patientInfo,
+      patientInfo, // required — name + phone used for identity check
       consultationType = "inPerson",
       slotId,
       paymentMethod = "Razorpay",
     } = req.body;
+
     if (!doctorId || !scheduledAt || !patientInfo)
       return res.status(400).json({
         success: false,
         message: "doctorId, scheduledAt, patientInfo required",
       });
 
+    // ── Follow-up eligibility ─────────────────────────────────────────────────
     const followUpCheck = await checkFollowUpEligibility({
       customerId: req.user._id,
       doctorId,
@@ -2553,7 +2586,48 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
         .status(400)
         .json({ success: false, message: followUpCheck.reason });
 
-    const scheduledDate = new Date(scheduledAt);
+    // ── Patient identity validation ───────────────────────────────────────────
+    // Fetch original OP + its booking to compare patientName + phone.
+    const parentOp = await OutPatientRecord.findById(followUpCheck.parentOp)
+      .select("patientName booking")
+      .lean();
+
+    let originalPhone = null;
+    if (parentOp?.booking) {
+      const origBooking = await Booking.findById(parentOp.booking)
+        .select("patientInfo")
+        .lean();
+      originalPhone = origBooking?.patientInfo?.phone ?? null;
+    }
+
+    const normName = (s) =>
+      String(s ?? "")
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, " ");
+    const normPhone = (s) =>
+      String(s ?? "")
+        .replace(/\D/g, "")
+        .slice(-10);
+
+    const nameMatch =
+      normName(patientInfo.name) === normName(parentOp?.patientName);
+    const phoneMatch =
+      patientInfo.phone && originalPhone
+        ? normPhone(patientInfo.phone) === normPhone(originalPhone)
+        : true; // original had no phone recorded → skip
+
+    if (!nameMatch || !phoneMatch) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Patient details do not match the original consultation. Follow-up is only valid for the same patient.",
+        mismatch: { name: !nameMatch, phone: !phoneMatch },
+      });
+    }
+
+    // ── Doctor availability ───────────────────────────────────────────────────
+    const scheduledDate = parseFrontendDateTime(scheduledAt);
     const avail = await checkHospitalOrDoctorAvailability({
       hospitalId,
       doctorId,
@@ -2562,6 +2636,7 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
     if (!avail.available)
       return res.status(400).json({ success: false, message: avail.reason });
 
+    // ── Fee resolution ────────────────────────────────────────────────────────
     const {
       fee: consultationFee,
       doctorShare,
@@ -2574,7 +2649,7 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       hospitalId,
       consultationType,
     });
-    
+
     const config = await PlatformPricingConfig.getGlobal();
     const fareBreakdown = buildFareBreakdown({
       consultationFee,
@@ -2582,16 +2657,17 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       hospitalShare,
       taxPercent: config?.tax?.consultationGstPercent ?? 0,
     });
-    
+
     const initialStatus =
       paymentMethod === "Razorpay" && fareBreakdown.totalAmount > 0
         ? "payment_pending"
         : "pending";
 
+    // ── Create booking ────────────────────────────────────────────────────────
     const booking = await Booking.create({
       bookingType: "follow_up",
       customer: req.user._id,
-      patientInfo,
+      patientInfo, // validated — same patient as original
       doctor: doctorId,
       hospital: hospitalId || null,
       consultationType,
@@ -2609,6 +2685,7 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       confirmedSubscriptionUsage: [],
     });
 
+    // ── Payment handling ──────────────────────────────────────────────────────
     let razorpayOrder = null;
     let walletResult = null;
 
@@ -2630,6 +2707,7 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       }
       razorpayOrder = walletResult.razorpayOrder;
     }
+
     if (fareBreakdown.totalAmount === 0 && paymentMethod === "Razorpay") {
       booking.paymentStatus = "paid";
       booking.status = "pending";
@@ -2637,18 +2715,20 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
       await flushAndRecord(booking);
       sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
     }
+
     if (paymentMethod === "Cash") {
       booking.paymentStatus = "pending_cash";
       await booking.save();
     }
 
+    // ── OP Record ─────────────────────────────────────────────────────────────
     const opNumber = await generateOpNumber(hospitalId);
     await OutPatientRecord.create({
       opNumber,
       booking: booking._id,
       bookingNumber: booking.bookingCode,
       patient: req.user._id,
-      patientName: patientInfo.name,
+      patientName: patientInfo.name, // validated match
       doctor: doctorId,
       hospital: hospitalId || null,
       consultationType: "follow_up",
@@ -2694,7 +2774,8 @@ router.post("/follow-up", protect, authorize("customer"), async (req, res) => {
           expiryWas: followUpCheck.followUpExpiry,
           daysWereLeft: followUpCheck.daysRemaining,
           followUpFee: consultationFee,
-          note: "Follow-up fee charged by hospital/doctor policy. Subscription quota not consumed.",
+          patientValidated: true,
+          note: "Follow-up fee charged by doctor/hospital policy. Patient identity verified against original consultation.",
         },
         razorpayOrder,
       },
@@ -3248,11 +3329,6 @@ router.post(
           ? "payment_pending"
           : "pending";
 
-      const caStandardFreeNote =
-        careResult.caStandardTierFree && careResult.sub?._id
-          ? `caStandardTierFreeSubId:${careResult.sub._id.toString()}`
-          : undefined;
-
       const booking = await Booking.create({
         bookingType: "care_assistant",
         customer: req.user._id,
@@ -3272,7 +3348,7 @@ router.post(
         paymentStatus: "unpaid",
         payments: [],
         status: initialStatus,
-        internalNotes: caStandardFreeNote,
+
         createdBy: req.user._id,
         careAssistantSnapshot: null,
         subscriptionUsagePending: [],
@@ -3313,7 +3389,7 @@ router.post(
         await booking.save();
         if (!walletResult?.needsRazorpay) {
           await flushAndRecord(booking);
-          await processCaStandardTierUsage(booking);
+
           sendPaymentConfirmedEmails({ booking, paymentMethod: "Wallet" });
         }
         if (walletResult?.razorpayOrder)
@@ -3324,7 +3400,7 @@ router.post(
         booking.status = "pending";
         await booking.save();
         await flushAndRecord(booking);
-        await processCaStandardTierUsage(booking);
+
         sendPaymentConfirmedEmails({ booking, paymentMethod: "Free (₹0)" });
       }
       if (paymentMethod === "Cash") {
@@ -3491,7 +3567,6 @@ router.post("/verify-payment", protect, async (req, res) => {
     await flushAndRecord(booking);
 
     await processHomeCollectionUsage(booking);
-    await processCaStandardTierUsage(booking);
 
     console.log(
       `[verify-payment] ✅ payment verified + usage flushed for booking:${bookingId}`,
@@ -3599,7 +3674,6 @@ router.post(
       await flushAndRecord(booking);
 
       await processHomeCollectionUsage(booking);
-      await processCaStandardTierUsage(booking);
 
       console.log(
         `[confirm-cash-payment] ✅ cash confirmed + usage flushed for booking:${bookingId}`,
@@ -3727,7 +3801,7 @@ router.post(
       const booking = await Booking.findOne({
         _id: req.params.bookingId,
         customer: req.user._id,
-      });
+      }).select("+internalNotes");
       if (!booking)
         return res
           .status(404)
@@ -3750,24 +3824,6 @@ router.post(
       }
 
       const recoveryResult = await recoverSubscriptionUsageOnCancel(booking);
-
-      if (
-        ["care_assistant", "full_care_ride"].includes(booking.bookingType) &&
-        booking.internalNotes &&
-        booking.paymentStatus === "paid"
-      ) {
-        const m = String(booking.internalNotes).match(
-          /caStandardTierFreeSubId:([a-f0-9]{24})/i,
-        );
-        if (m?.[1]) {
-          await recoverCaStandardTierUsage(m[1]).catch((e) =>
-            console.error(
-              "[cancel] recoverCaStandardTierUsage failed:",
-              e.message,
-            ),
-          );
-        }
-      }
 
       booking.status = "cancelled";
       booking.cancellation = {
@@ -4291,14 +4347,14 @@ router.get(
       const homeCollectionUsedOnce =
         sub.limits?.homeCollectionUsedOnce ?? false;
 
-      const homeVisitUnlimited = false; 
+      const homeVisitUnlimited = false;
       const homeCollectionAvailable =
         homeSampleCollection === true && homeCollectionUsedOnce === false;
       const homeVisitsRemaining = !homeSampleCollection
         ? 0
         : homeCollectionAvailable
-          ? 1 
-          : 0; 
+          ? 1
+          : 0;
       const homeVisitPercentUsed = !homeSampleCollection
         ? 100
         : homeCollectionUsedOnce
@@ -4337,6 +4393,41 @@ router.get(
       });
     } catch (err) {
       console.error("[GET /subscription-benefits/labs]", err);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+);
+
+router.get(
+  "/previous-patient-info",
+  protect,
+  authorize("customer"),
+  async (req, res) => {
+    try {
+      const last = await Booking.findOne({ customer: req.user._id })
+        .sort({ createdAt: -1 })
+        .select("patientInfo bookingCode bookingType createdAt")
+        .lean();
+
+      if (!last) {
+        return res.json({
+          success: true,
+          data: null,
+          message: "No previous bookings found.",
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          patientInfo: last.patientInfo, // name, age, gender, phone, bloodGroup, weight, isSelf
+          fromBooking: last.bookingCode,
+          bookingType: last.bookingType,
+          bookedAt: last.createdAt,
+        },
+      });
+    } catch (err) {
+      console.error("[GET /previous-patient-info]", err);
       return res.status(500).json({ success: false, message: err.message });
     }
   },

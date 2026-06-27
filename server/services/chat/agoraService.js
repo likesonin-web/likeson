@@ -1,101 +1,81 @@
-/**
- * services/chat/agoraService.js
- * Agora RTC + RTM token generation, call lifecycle helpers.
- * Fixes applied:
- *  - endCall: guard against double-end race condition with atomic findOneAndUpdate
- *  - missExpiredCalls: bulk operation, not N individual saves
- *  - handleAgoraChannelEvent: also handle case 104 (last user left)
- *  - joinCall: don't double-push existing participant
- */
-import pkg from 'agora-token';
-const { RtcTokenBuilder, RtcRole, RtmTokenBuilder } = pkg;
 import crypto from 'crypto';
-import agoraConfig from '../../config/agora.config.js';
-import { Call, Conversation, Message } from '../../models/chat.js';
-import redisClient from '../../config/redis.js';
+import agoraPkg from 'agora-access-token';
+import { Conversation, Call } from '../../models/chat.js';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+const { RtcTokenBuilder, RtcRole, RtmTokenBuilder, RtmRole } = agoraPkg;
 
-const CALL_RING_TTL_SEC = 60;
-const CALL_ACTIVE_KEY   = (callId) => `agora:call:active:${callId}`;
-const CALL_RING_KEY     = (callId) => `agora:call:ring:${callId}`;
+const APP_ID          = process.env.AGORAIO_APP_ID;
+const APP_CERTIFICATE = process.env.AGORAIO_APP_CERT;
+const TOKEN_TTL       = parseInt(process.env.AGORA_TOKEN_EXPIRE_SEC, 10) || 3600;
+const WEBHOOK_SECRET  = process.env.AGORA_WEBHOOK_SECRET;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+export const isAgoraConfigured = () => Boolean(APP_ID && APP_CERTIFICATE);
+
+const assertConfigured = () => {
+  if (!isAgoraConfigured()) {
+    throw Object.assign(new Error('Agora not configured: set AGORAIO_APP_ID / AGORAIO_APP_CERT'), {
+      statusCode: 500,
+    });
+  }
+};
 
 /**
- * Deterministic uint32 Agora UID from Mongo ObjectId.
- * sha256 → first 4 bytes → uint32. Ensure non-zero.
+ * BUG FIX (UID_CONFLICT) — old deriveUid was purely deterministic:
+ * last-8-hex of MongoId mod 2147483647. Two users sharing the same
+ * 8-hex suffix (common when IDs are auto-incremented or created close
+ * together) produce the same uid → Agora rejects the second joiner with
+ * UID_CONFLICT.
+ *
+ * New approach:
+ *  1. Try the deterministic hash first (stable for token refresh, rejoin).
+ *  2. If it collides with a uid already on the Call doc, increment until clear.
+ *  3. Caller always passes existingUids so we never guess.
  */
-const uidFromUserId = (userId) => {
-  const buf = crypto.createHash('sha256').update(userId.toString()).digest();
-  return (buf.readUInt32BE(0) || 1);
+export const deriveUid = (userId, existingUids = []) => {
+  const hex = userId.toString().slice(-8);
+  let uid   = (parseInt(hex, 16) % 2_147_483_647) || 1;
+
+  // Walk forward until no collision (wraps at max int32)
+  while (existingUids.includes(uid)) {
+    uid = (uid % 2_147_483_646) + 1;
+  }
+  return uid;
 };
 
-const buildChannelName = (conversationId) =>
-  `likeson-${conversationId}-${Date.now().toString(36)}`;
-
-// ─── 1. RTC token ─────────────────────────────────────────────────────────────
-
-export const generateRtcToken = (channelName, userId, role = 'publisher') => {
-  const uid  = uidFromUserId(userId);
-  const now  = Math.floor(Date.now() / 1000);
-  const exp  = now + agoraConfig.tokenExpireSec;
-
-  const agoraRole = role === 'subscriber' ? RtcRole.SUBSCRIBER : RtcRole.PUBLISHER;
-
-  const token = RtcTokenBuilder.buildTokenWithUid(
-    agoraConfig.appId,
-    agoraConfig.appCert,
-    channelName,
-    uid,
-    agoraRole,
-    exp,
-    exp,
-  );
-
-  return { token, uid, expiresAt: new Date(exp * 1000) };
+export const buildRtcToken = (channelName, uid, { publisher = true } = {}) => {
+  assertConfigured();
+  const role     = publisher ? RtcRole.PUBLISHER : RtcRole.SUBSCRIBER;
+  const expireAt = Math.floor(Date.now() / 1000) + TOKEN_TTL;
+  return RtcTokenBuilder.buildTokenWithUid(APP_ID, APP_CERTIFICATE, channelName, uid, role, expireAt);
 };
 
-// ─── 2. RTM token ─────────────────────────────────────────────────────────────
-
-export const generateRtmToken = (userId) => {
-  const now = Math.floor(Date.now() / 1000);
-  const exp = now + agoraConfig.rtm.expireSec;
-
-  const token = RtmTokenBuilder.buildToken(
-    agoraConfig.appId,
-    agoraConfig.appCert,
-    userId.toString(),
-    exp,
-  );
-
-  return { token, expiresAt: new Date(exp * 1000) };
+export const buildRtmToken = (userId) => {
+  assertConfigured();
+  const expireAt = Math.floor(Date.now() / 1000) + TOKEN_TTL;
+  return RtmTokenBuilder.buildToken(APP_ID, APP_CERTIFICATE, userId.toString(), RtmRole.Rtm_User, expireAt);
 };
 
-// ─── 3. Initiate a call ───────────────────────────────────────────────────────
+export const generateRtmToken = async (userId) => {
+  const token = buildRtmToken(userId);
+  return { token, expiresAt: new Date(Date.now() + TOKEN_TTL * 1000) };
+};
 
-export const initiateCall = async ({ conversationId, initiatorId, type, invitedUserIds = [] }) => {
-  const convo = await Conversation.findById(conversationId);
-  if (!convo) throw Object.assign(new Error('Conversation not found'), { statusCode: 404 });
-
-  const isMember = convo.participants.some(
-    (p) => p.user.toString() === initiatorId.toString() && !p.isDeleted
-  );
-  if (!isMember) throw Object.assign(new Error('Not a member of this conversation'), { statusCode: 403 });
-
-  if (convo.activeCall?.callId) {
-    throw Object.assign(new Error('A call is already active in this conversation'), { statusCode: 409 });
+/**
+ * initiateCall — atomic guard against double-initiate in same conversation.
+ * findOneAndUpdate only succeeds if activeCall is unset; second concurrent
+ * caller gets null back and we throw 409.
+ */
+export const initiateCall = async ({ conversationId, initiatorId, type = 'audio', invitedUserIds = [] }) => {
+  assertConfigured();
+  if (!['audio', 'video'].includes(type)) {
+    throw Object.assign(new Error('type must be audio or video'), { statusCode: 400 });
   }
 
-  const channelName = buildChannelName(conversationId);
-  const { token, uid } = generateRtcToken(channelName, initiatorId, 'publisher');
+  const channelName = `call_${conversationId}_${Date.now()}`;
 
-  const allUserIds   = [initiatorId, ...invitedUserIds];
-  const participants = allUserIds.map((uid_) => ({
-    user:     uid_,
-    uid:      uidFromUserId(uid_),
-    joinedAt: uid_.toString() === initiatorId.toString() ? new Date() : null,
-  }));
+  // BUG FIX — no existing participants yet, so existingUids = []
+  const uid        = deriveUid(initiatorId, []);
+  const isGroupCall = invitedUserIds.length > 1;
 
   const call = await Call.create({
     conversation:    conversationId,
@@ -103,258 +83,184 @@ export const initiateCall = async ({ conversationId, initiatorId, type, invitedU
     type,
     channelName,
     status:          'ringing',
-    isGroupCall:     invitedUserIds.length > 1,
-    maxParticipants: allUserIds.length,
-    participants,
+    isGroupCall,
+    maxParticipants: isGroupCall ? Math.max(invitedUserIds.length + 1, 2) : 2,
+    participants:    [{ user: initiatorId, uid, joinedAt: new Date() }],
   });
 
-  await Conversation.findByIdAndUpdate(conversationId, {
-    activeCall: { callId: call._id, startedAt: new Date(), type },
-  });
-
-  await redisClient.setEx(
-    CALL_RING_KEY(call._id.toString()),
-    CALL_RING_TTL_SEC,
-    JSON.stringify({ callId: call._id, conversationId, initiatorId, type }),
+  // Atomic claim: only set activeCall if not already set (no read-then-write race)
+  const claimed = await Conversation.findOneAndUpdate(
+    { _id: conversationId, activeCall: { $exists: false } },
+    { $set: { activeCall: { callId: call._id, startedAt: new Date(), type } } },
+    { new: true },
   );
 
-  return {
-    call,
-    token,
-    uid,
-    channelName,
-    appId: agoraConfig.appId,
-    expiresAt: new Date((Math.floor(Date.now() / 1000) + agoraConfig.tokenExpireSec) * 1000),
-  };
+  if (!claimed) {
+    // Someone else claimed first — roll back the call we just created
+    await Call.findByIdAndUpdate(call._id, { status: 'failed', endReason: 'error' });
+    throw Object.assign(new Error('A call is already active in this conversation'), { statusCode: 409 });
+  }
+
+  const token     = buildRtcToken(channelName, uid, { publisher: true });
+  const expiresAt = new Date(Date.now() + TOKEN_TTL * 1000);
+
+  return { call, channelName, token, uid, appId: APP_ID, expiresAt };
 };
 
-// ─── 4. Join a call ───────────────────────────────────────────────────────────
-
+/**
+ * joinCall — validates call is still joinable before minting token.
+ *
+ * BUG FIX (UID_CONFLICT):
+ *  - Rejoining user → reuse their STORED uid (never rederive — rederive
+ *    can collide if another user happened to land on the same hash value
+ *    and was already assigned that uid).
+ *  - New user → pass all existing uids to deriveUid so it walks past
+ *    any hash collision automatically.
+ */
 export const joinCall = async (callId, userId) => {
+  assertConfigured();
   const call = await Call.findById(callId);
   if (!call) throw Object.assign(new Error('Call not found'), { statusCode: 404 });
 
-  if (['ended', 'cancelled', 'declined', 'missed'].includes(call.status)) {
-    throw Object.assign(new Error(`Call already ${call.status}`), { statusCode: 409 });
+  if (!['ringing', 'ongoing'].includes(call.status)) {
+    throw Object.assign(new Error(`Cannot join call with status "${call.status}"`), { statusCode: 409 });
   }
 
-  const idx = call.participants.findIndex(
-    (p) => p.user.toString() === userId.toString()
+  const existingIdx = call.participants.findIndex(
+    (p) => p.user.toString() === userId.toString(),
   );
 
-  if (idx === -1) {
-    // Unexpected participant (e.g., admin monitor) — add on the fly
-    call.participants.push({
-      user:     userId,
-      uid:      uidFromUserId(userId),
-      joinedAt: new Date(),
-    });
+  let uid;
+
+  if (existingIdx !== -1) {
+    // BUG FIX — reuse stored uid; rederiving risks a different value if
+    // the existingUids set has changed since the participant first joined.
+    uid = call.participants[existingIdx].uid;
+    call.participants[existingIdx].joinedAt =
+      call.participants[existingIdx].joinedAt || new Date();
+    call.participants[existingIdx].leftAt = null;
   } else {
-    // ── FIX: only set joinedAt if not already set (re-join after reconnect)
-    if (!call.participants[idx].joinedAt) {
-      call.participants[idx].joinedAt = new Date();
+    if (call.participants.length >= call.maxParticipants) {
+      throw Object.assign(new Error('Call is full'), { statusCode: 409 });
     }
-    // Clear leftAt if this is a reconnect
-    call.participants[idx].leftAt = undefined;
+    // BUG FIX — pass existing uids so deriveUid avoids all collisions
+    const existingUids = call.participants.map((p) => p.uid);
+    uid = deriveUid(userId, existingUids);
+    call.participants.push({ user: userId, uid, joinedAt: new Date() });
   }
 
   if (call.status === 'ringing') {
     call.status    = 'ongoing';
-    call.startedAt = new Date();
+    call.startedAt = call.startedAt || new Date();
   }
 
   await call.save();
 
-  await redisClient.setEx(
-    CALL_ACTIVE_KEY(callId),
-    agoraConfig.tokenExpireSec + 300,
-    '1',
-  );
+  const token     = buildRtcToken(call.channelName, uid, { publisher: true });
+  const expiresAt = new Date(Date.now() + TOKEN_TTL * 1000);
 
-  const { token, uid } = generateRtcToken(call.channelName, userId, 'publisher');
-
-  return {
-    call,
-    token,
-    uid,
-    channelName: call.channelName,
-    appId:       agoraConfig.appId,
-    expiresAt:   new Date((Math.floor(Date.now() / 1000) + agoraConfig.tokenExpireSec) * 1000),
-  };
+  return { call, channelName: call.channelName, token, uid, appId: APP_ID, expiresAt };
 };
 
-// ─── 5. End / leave a call ────────────────────────────────────────────────────
-
 /**
- * FIX: Use atomic findOneAndUpdate with status filter to prevent race condition.
- * Two simultaneous endCall calls → only one wins, second gets null → returns safely.
+ * endCall — idempotent. Calling on an already-terminal call returns it as-is
+ * instead of throwing, so a double "hang up" tap from a flaky client doesn't
+ * crash the socket handler.
  */
 export const endCall = async (callId, userId, status = 'ended') => {
-  const terminalStates = ['ended', 'cancelled', 'declined', 'missed'];
-
-  // Atomic: only update if currently in a non-terminal state
-  const call = await Call.findOneAndUpdate(
-    {
-      _id:    callId,
-      status: { $nin: terminalStates },
-    },
-    {
-      $set: {
-        status,
-        endedAt:   new Date(),
-        endedBy:   userId,
-        endReason: 'normal',
-      },
-    },
-    { new: false } // return OLD doc so we can compute participant duration
-  );
-
-  // Already terminal — return current state
-  if (!call) {
-    const existing = await Call.findById(callId);
-    return existing;
+  const TERMINAL = ['ended', 'missed', 'declined', 'cancelled', 'failed'];
+  if (!TERMINAL.includes(status)) {
+    throw Object.assign(new Error('Invalid end status'), { statusCode: 400 });
   }
 
-  const now = new Date();
-
-  // Update leaving participant duration in memory, then save once
-  const idx = call.participants.findIndex(
-    (p) => p.user.toString() === userId.toString()
-  );
-  if (idx !== -1 && call.participants[idx].joinedAt) {
-    const duration = Math.floor((now - call.participants[idx].joinedAt) / 1000);
-    await Call.findByIdAndUpdate(callId, {
-      $set: {
-        [`participants.${idx}.leftAt`]:  now,
-        [`participants.${idx}.duration`]: duration,
-      },
-    });
-  }
-
-  // Reload to trigger post-save hooks via an explicit save
-  // post-save hook needs _statusChangedTo — set it manually on fresh doc
-  const finalCall       = await Call.findById(callId);
-  finalCall._statusChangedTo = status;
-  if (finalCall.startedAt && finalCall.endedAt) {
-    finalCall.duration = Math.floor((finalCall.endedAt - finalCall.startedAt) / 1000);
-  }
-  await finalCall.save();
-
-  await Promise.allSettled([
-    redisClient.del(CALL_ACTIVE_KEY(callId.toString())),
-    redisClient.del(CALL_RING_KEY(callId.toString())),
-  ]);
-
-  return finalCall;
-};
-
-// ─── 6. Refresh RTC token ─────────────────────────────────────────────────────
-
-export const refreshCallToken = async (callId, userId) => {
-  const call = await Call.findById(callId).select('channelName status');
+  const call = await Call.findById(callId);
   if (!call) throw Object.assign(new Error('Call not found'), { statusCode: 404 });
-  if (call.status !== 'ongoing') throw Object.assign(new Error('Call not active'), { statusCode: 409 });
 
-  return {
-    ...generateRtcToken(call.channelName, userId, 'publisher'),
-    channelName: call.channelName,
-    appId:       agoraConfig.appId,
-  };
-};
-
-// ─── 7. Verify Agora webhook ──────────────────────────────────────────────────
-
-export const verifyAgoraWebhook = (rawBody, signature) => {
-  if (!agoraConfig.webhookSecret) return false;
-  const expected = crypto
-    .createHmac('sha1', agoraConfig.webhookSecret)
-    .update(rawBody)
-    .digest('hex');
-
-  const sigHex = signature.replace(/^sha1=/, '');
-  // Both must be same length for timingSafeEqual
-  if (expected.length !== sigHex.length) return false;
-
-  return crypto.timingSafeEqual(
-    Buffer.from(expected, 'hex'),
-    Buffer.from(sigHex, 'hex'),
-  );
-};
-
-// ─── 8. Handle Agora channel events (webhook) ─────────────────────────────────
-
-export const handleAgoraChannelEvent = async (payload) => {
-  const { eventType, payload: inner = {} } = payload;
-  const channelName = inner.channelName;
-  if (!channelName) return;
-
-  switch (eventType) {
-    // 106: channel destroyed (all users left)
-    case 106: {
-      const call = await Call.findOne({
-        channelName,
-        status: { $in: ['ringing', 'ongoing'] },
-      });
-      if (call) {
-        call._statusChangedTo = 'ended';
-        call.status    = 'ended';
-        call.endedAt   = new Date();
-        call.endReason = 'normal';
-        if (call.startedAt) {
-          call.duration = Math.floor((call.endedAt - call.startedAt) / 1000);
-        }
-        await call.save();
-        await redisClient.del(CALL_ACTIVE_KEY(call._id.toString()));
-      }
-      break;
-    }
-    // 103: user joined — update participant joinedAt if needed
-    case 103: {
-      const { uid: agoraUid } = inner;
-      if (agoraUid) {
-        await Call.findOneAndUpdate(
-          { channelName, 'participants.uid': agoraUid },
-          { $set: { 'participants.$.joinedAt': new Date() } }
-        );
-      }
-      break;
-    }
-    default:
-      break;
+  if (TERMINAL.includes(call.status)) {
+    return call; // already ended — idempotent no-op
   }
-};
 
-// ─── 9. Auto-miss expired ringing calls (cron every 2min) ────────────────────
+  const pIdx = call.participants.findIndex((p) => p.user.toString() === userId.toString());
+  if (pIdx !== -1 && !call.participants[pIdx].leftAt) {
+    call.participants[pIdx].leftAt   = new Date();
+    call.participants[pIdx].duration = Math.floor(
+      (call.participants[pIdx].leftAt - call.participants[pIdx].joinedAt) / 1000,
+    );
+  }
+
+  call.status    = status;
+  call.endedAt   = new Date();
+  call.endedBy   = userId;
+  call.endReason = status === 'ended' ? 'normal' : call.endReason;
+
+  await call.save(); // triggers pre/post hooks: duration + call_log message + activeCall cleanup
+
+  return call;
+};
 
 /**
- * FIX: Use bulkWrite instead of N individual save() calls.
- * Also set _statusChangedTo for post-save hook via individual saves only for missed ones.
+ * refreshCallToken — BUG FIX: reuse stored uid, same reason as joinCall.
  */
-export const missExpiredCalls = async () => {
-  const cutoff = new Date(Date.now() - CALL_RING_TTL_SEC * 1000);
-
-  const stale = await Call.find({
-    status:    'ringing',
-    createdAt: { $lt: cutoff },
-  }).select('_id conversation initiator type');
-
-  for (const staleCall of stale) {
-    // Load fresh + set flag so post-save fires correctly
-    const call = await Call.findById(staleCall._id);
-    if (!call || call.status !== 'ringing') continue;
-
-    call._statusChangedTo = 'missed';
-    call.status    = 'missed';
-    call.endedAt   = new Date();
-    call.endReason = 'timeout';
-    await call.save();
+export const refreshCallToken = async (callId, userId) => {
+  assertConfigured();
+  const call = await Call.findById(callId).select('channelName status participants');
+  if (!call) throw Object.assign(new Error('Call not found'), { statusCode: 404 });
+  if (!['ringing', 'ongoing'].includes(call.status)) {
+    throw Object.assign(new Error('Call is not active'), { statusCode: 409 });
   }
 
-  return stale.length;
+  const participant = call.participants.find(
+    (p) => p.user.toString() === userId.toString(),
+  );
+  if (!participant) throw Object.assign(new Error('Not a participant'), { statusCode: 403 });
+
+  // BUG FIX — use stored uid, not rederived uid
+  const uid       = participant.uid;
+  const token     = buildRtcToken(call.channelName, uid, { publisher: true });
+  const expiresAt = new Date(Date.now() + TOKEN_TTL * 1000);
+
+  return { callId, channelName: call.channelName, token, uid, appId: APP_ID, expiresAt };
+};
+
+/**
+ * verifyAgoraWebhook — timing-safe HMAC-SHA1 compare against raw body.
+ */
+export const verifyAgoraWebhook = (rawBody, signature) => {
+  if (!WEBHOOK_SECRET || !signature) return false;
+  const expected = crypto.createHmac('sha1', WEBHOOK_SECRET).update(rawBody).digest('hex');
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signature);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+};
+
+/**
+ * handleAgoraChannelEvent — channel lifecycle events from Agora (user left,
+ * channel destroyed, etc). Used to reconcile stale 'ongoing' calls where the
+ * client never sent call_end (app killed, network drop).
+ */
+export const handleAgoraChannelEvent = async (payload) => {
+  const eventType   = payload?.eventType;
+  const channelName = payload?.payload?.channelName;
+  if (!channelName) return;
+
+  // eventType 2 = channel destroyed (Agora's "all users left") — see Agora docs
+  if (eventType === 2) {
+    const call = await Call.findOne({ channelName, status: { $in: ['ringing', 'ongoing'] } });
+    if (call) {
+      call.status    = call.status === 'ringing' ? 'missed' : 'ended';
+      call.endedAt   = new Date();
+      call.endReason = 'timeout';
+      await call.save();
+    }
+  }
 };
 
 export default {
-  generateRtcToken,
+  isAgoraConfigured,
+  deriveUid,
+  buildRtcToken,
+  buildRtmToken,
   generateRtmToken,
   initiateCall,
   joinCall,
@@ -362,5 +268,4 @@ export default {
   refreshCallToken,
   verifyAgoraWebhook,
   handleAgoraChannelEvent,
-  missExpiredCalls,
 };

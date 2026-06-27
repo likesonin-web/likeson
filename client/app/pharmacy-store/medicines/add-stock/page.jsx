@@ -1,21 +1,5 @@
 'use client';
 
-/**
- * AddStockPage.jsx — Pharmacy Inventory Restocking
- *
- * Design Direction: "Surgical Precision"
- *   Clean two-panel layout. Rich data-density in the medicine selector.
- *   Form side uses a fixed sticky panel with live preview of what's being added.
- *   Micro-animations on every state transition. Green pharmacy tokens throughout.
- *
- * Architecture:
- *  - All API work via pharmacyStoreSlice thunks (no direct API calls)
- *  - Memoised sub-components to prevent unnecessary re-renders
- *  - useCallback / useMemo for all handlers and derived values
- *  - Framer Motion for entrance animations and step transitions
- *  - data-theme="pharmacy" activates the green pharmacy CSS token set
- */
-
 import {
   useEffect,
   useCallback,
@@ -36,8 +20,6 @@ import {
   Pill,
   ArrowLeft,
   Info,
-  TrendingUp,
-  TrendingDown,
   Hash,
   Calendar,
   IndianRupee,
@@ -50,10 +32,15 @@ import {
   Sparkles,
   Check,
   AlertTriangle,
+  MapPin,
+  Truck,
+  Percent,
+  Tag
 } from 'lucide-react';
 import {
   addStock,
   fetchMedicines,
+  fetchSuppliers,
   clearSuccess,
   clearError,
 } from '@/store/slices/pharmacy/pharmacyStoreSlice';
@@ -164,23 +151,15 @@ const StepIndicator = memo(function StepIndicator({ step }) {
 // ─── Medicine Card ────────────────────────────────────────────────────────────
 
 const MedicineCard = memo(function MedicineCard({ med, onSelect, index }) {
-  const storeQty = useMemo(
-    () => (med.storeInventory || []).reduce((s, inv) => s + (inv.stockQuantity || 0), 0),
-    [med.storeInventory]
-  );
+  const medicineDetails = med.medicineId || {};
+  const storeQty = med.stockQuantity || 0;
+  
   const isOut  = storeQty === 0;
   const isLow  = storeQty > 0 && storeQty <= LOW_STOCK_THRESHOLD;
-  const catCls = CATEGORY_COLORS[med.category] ?? CATEGORY_COLORS.default;
-  const primaryImg = med.images?.find((img) => img.isPrimary)?.url;
+  const catCls = CATEGORY_COLORS[medicineDetails.category] ?? CATEGORY_COLORS.default;
+  const primaryImg = medicineDetails.images?.find((img) => img.isPrimary)?.url;
 
-  // Nearest expiry across store inventory
-  const nearestExpiry = useMemo(() => {
-    const dates = (med.storeInventory || [])
-      .map((inv) => inv.expiryDate)
-      .filter(Boolean)
-      .sort();
-    return dates[0] ? new Date(dates[0]) : null;
-  }, [med.storeInventory]);
+  const nearestExpiry = med.batchId?.expiryDate ? new Date(med.batchId.expiryDate) : null;
 
   const daysToExpiry = nearestExpiry
     ? Math.ceil((nearestExpiry.getTime() - Date.now()) / 86400000)
@@ -197,7 +176,7 @@ const MedicineCard = memo(function MedicineCard({ med, onSelect, index }) {
       role="button"
       tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && onSelect(med)}
-      aria-label={`Select ${med.brandName} for restocking`}
+      aria-label={`Select ${medicineDetails.brandName} for restocking`}
       className={[
         'group card p-4 cursor-pointer flex items-start gap-4',
         'hover:border-primary hover:shadow-primary transition-all duration-200',
@@ -205,18 +184,16 @@ const MedicineCard = memo(function MedicineCard({ med, onSelect, index }) {
         isOut ? 'border-error/30 bg-error/[0.02]' : '',
       ].join(' ')}
     >
-      {/* Icon / Image */}
       <div className="relative shrink-0">
         <div className={[
           'w-12 h-12 rounded-xl flex items-center justify-center overflow-hidden',
           'bg-gradient-to-br from-primary/20 to-secondary/20',
         ].join(' ')}>
           {primaryImg
-            ? <img src={primaryImg} alt={med.brandName} className="w-full h-full object-cover" />
+            ? <img src={primaryImg} alt={medicineDetails.brandName} className="w-full h-full object-cover" />
             : <Pill size={20} className="text-primary" aria-hidden="true" />
           }
         </div>
-        {/* Stock status dot */}
         <span
           className={[
             'absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-base-100',
@@ -227,31 +204,27 @@ const MedicineCard = memo(function MedicineCard({ med, onSelect, index }) {
         />
       </div>
 
-      {/* Content */}
       <div className="flex-1 min-w-0">
-        {/* Title row */}
         <div className="flex items-start gap-2 flex-wrap mb-1">
           <span className="font-bold text-sm text-base-content leading-tight truncate">
-            {med.brandName}
+            {medicineDetails.brandName}
           </span>
           <span className={`badge text-[10px] px-2 py-0.5 border rounded-full font-semibold ${catCls}`}>
-            {med.category}
+            {medicineDetails.category}
           </span>
-          {med.schedule && med.schedule !== 'None' && (
+          {medicineDetails.schedule && medicineDetails.schedule !== 'None' && (
             <span className="badge text-[10px] px-2 py-0.5 border rounded-full font-semibold bg-error/10 text-error border-error/30">
-              Sch {med.schedule}
+              Sch {medicineDetails.schedule}
             </span>
           )}
         </div>
 
-        {/* Generic + dosage */}
         <p className="text-xs text-base-content/55 truncate mb-2">
-          {med.genericName}
-          {med.dosage ? <span className="text-base-content/35"> · {med.dosage}</span> : null}
-          {med.manufacturer ? <span className="text-base-content/35"> · {med.manufacturer}</span> : null}
+          {medicineDetails.genericName}
+          {medicineDetails.dosage ? <span className="text-base-content/35"> · {medicineDetails.dosage}</span> : null}
+          {medicineDetails.manufacturer ? <span className="text-base-content/35"> · {medicineDetails.manufacturer}</span> : null}
         </p>
 
-        {/* Stats row */}
         <div className="flex flex-wrap items-center gap-3">
           <span className="flex items-center gap-1 text-[11px] font-semibold">
             <Layers size={11} className="text-base-content/35" />
@@ -261,7 +234,7 @@ const MedicineCard = memo(function MedicineCard({ med, onSelect, index }) {
           </span>
           <span className="flex items-center gap-1 text-[11px] text-base-content/45">
             <IndianRupee size={11} />
-            MRP {med.mrp}
+            MRP {med.mrp || medicineDetails.referenceMrp || 0}
           </span>
           {daysToExpiry !== null && daysToExpiry <= 90 && (
             <span className={`flex items-center gap-1 text-[11px] font-semibold ${daysToExpiry <= 30 ? 'text-error' : 'text-warning'}`}>
@@ -269,7 +242,7 @@ const MedicineCard = memo(function MedicineCard({ med, onSelect, index }) {
               Exp in {daysToExpiry}d
             </span>
           )}
-          {med.isPrescriptionRequired && (
+          {medicineDetails.isPrescriptionRequired && (
             <span className="flex items-center gap-1 text-[11px] text-base-content/40">
               <ShieldAlert size={11} />
               Rx
@@ -278,7 +251,6 @@ const MedicineCard = memo(function MedicineCard({ med, onSelect, index }) {
         </div>
       </div>
 
-      {/* Arrow */}
       <ChevronRight
         size={16}
         className="text-base-content/25 group-hover:text-primary group-hover:translate-x-0.5 transition-all shrink-0 mt-1"
@@ -314,10 +286,7 @@ const EmptySearch = memo(function EmptySearch({ query }) {
 // ─── Live Stock Preview Panel ──────────────────────────────────────────────────
 
 const StockPreview = memo(function StockPreview({ medicine, form }) {
-  const currentQty = useMemo(
-    () => (medicine?.storeInventory || []).reduce((s, inv) => s + (inv.stockQuantity || 0), 0),
-    [medicine?.storeInventory]
-  );
+  const currentQty = medicine?.stockQuantity || 0;
   const addingQty  = Number(form.stockQuantity) || 0;
   const newTotal   = currentQty + addingQty;
   const isLow      = newTotal <= LOW_STOCK_THRESHOLD && newTotal > 0;
@@ -418,7 +387,7 @@ const SuccessOverlay = memo(function SuccessOverlay({ medicine, qty }) {
         <h3 className="text-2xl font-black text-base-content tracking-tight mb-1">Stock Added!</h3>
         <p className="text-sm text-base-content/55">
           <span className="font-semibold text-base-content">{qty} units</span> added to{' '}
-          <span className="font-semibold text-primary">{medicine?.brandName}</span>
+          <span className="font-semibold text-primary">{medicine?.medicineId?.brandName}</span>
         </p>
       </motion.div>
       <motion.div
@@ -436,11 +405,9 @@ const SuccessOverlay = memo(function SuccessOverlay({ medicine, qty }) {
 // ─── Selected Medicine Badge (Step 2 header) ──────────────────────────────────
 
 const SelectedMedicineBanner = memo(function SelectedMedicineBanner({ medicine, onBack }) {
-  const storeQty = useMemo(
-    () => (medicine.storeInventory || []).reduce((s, inv) => s + (inv.stockQuantity || 0), 0),
-    [medicine.storeInventory]
-  );
-  const primaryImg = medicine.images?.find((img) => img.isPrimary)?.url;
+  const medicineDetails = medicine.medicineId || {};
+  const storeQty = medicine.stockQuantity || 0;
+  const primaryImg = medicineDetails.images?.find((img) => img.isPrimary)?.url;
 
   return (
     <div className="glass-card p-4 flex items-center gap-4">
@@ -463,13 +430,13 @@ const SelectedMedicineBanner = memo(function SelectedMedicineBanner({ medicine, 
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-black text-base-content text-sm leading-tight">{medicine.brandName}</span>
-          <span className={`badge text-[10px] px-2 py-0.5 border rounded-full font-semibold ${CATEGORY_COLORS[medicine.category] ?? CATEGORY_COLORS.default}`}>
-            {medicine.category}
+          <span className="font-black text-base-content text-sm leading-tight">{medicineDetails.brandName}</span>
+          <span className={`badge text-[10px] px-2 py-0.5 border rounded-full font-semibold ${CATEGORY_COLORS[medicineDetails.category] ?? CATEGORY_COLORS.default}`}>
+            {medicineDetails.category}
           </span>
         </div>
         <p className="text-xs text-base-content/45 truncate mt-0.5">
-          {medicine.genericName} · {medicine.dosage}
+          {medicineDetails.genericName} · {medicineDetails.dosage}
         </p>
       </div>
 
@@ -488,7 +455,7 @@ const SelectedMedicineBanner = memo(function SelectedMedicineBanner({ medicine, 
 
 export default function AddStockPage() {
   const dispatch = useDispatch();
-  const { medicines, loading, errors, success } = useSelector((s) => s.pharmacyStore);
+  const { medicines, suppliers, loading, errors, success } = useSelector((s) => s.pharmacyStore);
 
   // ── Local state ───────────────────────────────────────────────────────────
   const [search, setSearch]       = useState('');
@@ -497,10 +464,15 @@ export default function AddStockPage() {
   const [submitted, setSubmitted] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
   const [form, setForm] = useState({
-    stockQuantity: '',
-    batchNumber:   '',
-    expiryDate:    '',
-    pricePerUnit:  '',
+    stockQuantity:   '',
+    batchNumber:     '',
+    expiryDate:      '',
+    mrp:             '',
+    sellingPrice:    '',
+    purchasePrice:   '',
+    discountPercent: '',
+    supplierId:      '',
+    rackLocation:    '',
   });
 
   const searchRef  = useRef(null);
@@ -512,10 +484,15 @@ export default function AddStockPage() {
     if (step === 2) setTimeout(() => qtyRef.current?.focus(), 350);
   }, [step]);
 
-  // ── Fetch medicines on search change (debounced by Redux) ─────────────────
+  // ── Fetch medicines & suppliers ───────────────────────────────────────────
   useEffect(() => {
     dispatch(fetchMedicines({ search: search.trim(), limit: 12 }));
   }, [search, dispatch]);
+
+  useEffect(() => {
+    // Fetch suppliers once so the dropdown is populated
+    dispatch(fetchSuppliers({ limit: 100 }));
+  }, [dispatch]);
 
   // ── Handle add-stock success ──────────────────────────────────────────────
   useEffect(() => {
@@ -526,7 +503,11 @@ export default function AddStockPage() {
       setSubmitted(false);
       setSelected(null);
       setStep(1);
-      setForm({ stockQuantity: '', batchNumber: '', expiryDate: '', pricePerUnit: '' });
+      setForm({
+        stockQuantity: '', batchNumber: '', expiryDate: '', mrp: '', 
+        sellingPrice: '', purchasePrice: '', discountPercent: '', 
+        supplierId: '', rackLocation: ''
+      });
       setFieldErrors({});
     }, 2800);
     return () => clearTimeout(timer);
@@ -535,7 +516,18 @@ export default function AddStockPage() {
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleSelect = useCallback((med) => {
     setSelected(med);
-    setForm((f) => ({ ...f, pricePerUnit: med.mrp != null ? String(med.mrp) : '' }));
+    
+    // Auto-fill existing inventory values if they exist, otherwise fallback to reference MRP
+    setForm((f) => ({
+      ...f,
+      mrp:             med.mrp != null ? String(med.mrp) : (med.medicineId?.referenceMrp ? String(med.medicineId.referenceMrp) : ''),
+      sellingPrice:    med.sellingPrice != null ? String(med.sellingPrice) : (med.medicineId?.referenceMrp ? String(med.medicineId.referenceMrp) : ''),
+      purchasePrice:   '',
+      discountPercent: med.discountPercent != null ? String(med.discountPercent) : '',
+      rackLocation:    med.rackLocation || '',
+      supplierId:      med.supplierId?._id || '',
+    }));
+    
     setFieldErrors({});
     dispatch(clearError('addStock'));
     setStep(2);
@@ -544,7 +536,11 @@ export default function AddStockPage() {
   const handleBack = useCallback(() => {
     setStep(1);
     setSelected(null);
-    setForm({ stockQuantity: '', batchNumber: '', expiryDate: '', pricePerUnit: '' });
+    setForm({
+      stockQuantity: '', batchNumber: '', expiryDate: '', mrp: '', 
+      sellingPrice: '', purchasePrice: '', discountPercent: '', 
+      supplierId: '', rackLocation: ''
+    });
     setFieldErrors({});
     dispatch(clearError('addStock'));
   }, [dispatch]);
@@ -563,15 +559,18 @@ export default function AddStockPage() {
   const validate = useCallback(() => {
     const errs = {};
     if (!form.stockQuantity || Number(form.stockQuantity) <= 0)
-      errs.stockQuantity = 'Enter a quantity greater than 0';
+      errs.stockQuantity = 'Enter a valid quantity';
     if (!form.batchNumber.trim())
       errs.batchNumber = 'Batch number is required';
     if (!form.expiryDate)
       errs.expiryDate = 'Expiry date is required';
     else if (new Date(form.expiryDate) <= new Date())
       errs.expiryDate = 'Expiry date must be in the future';
-    if (form.pricePerUnit && Number(form.pricePerUnit) < 0)
-      errs.pricePerUnit = 'Price cannot be negative';
+    if (!form.mrp || Number(form.mrp) <= 0)
+      errs.mrp = 'Valid MRP is required';
+    if (!form.sellingPrice || Number(form.sellingPrice) <= 0)
+      errs.sellingPrice = 'Valid Selling Price is required';
+    
     setFieldErrors(errs);
     return Object.keys(errs).length === 0;
   }, [form]);
@@ -579,12 +578,19 @@ export default function AddStockPage() {
   const handleSubmit = useCallback((e) => {
     e.preventDefault();
     if (!selected || !validate()) return;
+
     dispatch(addStock({
-      medicineId:    selected._id,
-      stockQuantity: Number(form.stockQuantity),
-      batchNumber:   form.batchNumber.trim().toUpperCase(),
-      expiryDate:    form.expiryDate,
-      pricePerUnit:  form.pricePerUnit ? Number(form.pricePerUnit) : undefined,
+      medicineId:      selected.medicineId._id,
+      stockQuantity:   Number(form.stockQuantity),
+      batchNumber:     form.batchNumber.trim().toUpperCase(),
+      expiryDate:      form.expiryDate,
+      mrp:             Number(form.mrp),
+      sellingPrice:    Number(form.sellingPrice),
+      // Optional fields mapped safely
+      ...(form.purchasePrice   && { purchasePrice: Number(form.purchasePrice) }),
+      ...(form.discountPercent && { discountPercent: Number(form.discountPercent) }),
+      ...(form.supplierId      && { supplierId: form.supplierId }),
+      ...(form.rackLocation    && { rackLocation: form.rackLocation.trim() }),
     }));
   }, [selected, form, validate, dispatch]);
 
@@ -604,7 +610,7 @@ export default function AddStockPage() {
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div data-theme="pharmacy" className="min-h-screen bg-base-200">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 md:py-10">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 md:py-10">
 
         {/* ── Page Header ─────────────────────────────────────────────── */}
         <motion.header
@@ -628,7 +634,7 @@ export default function AddStockPage() {
               <p className="text-sm text-base-content/50 ml-10">
                 {step === 1
                   ? 'Search and select a medicine to restock'
-                  : `Restocking · ${selected?.brandName}`}
+                  : `Restocking · ${selected?.medicineId?.brandName}`}
               </p>
             </div>
 
@@ -655,7 +661,7 @@ export default function AddStockPage() {
                 initial="hidden"
                 animate="visible"
                 custom={1}
-                className="mb-5"
+                className="mb-5 max-w-4xl mx-auto"
               >
                 <div className="card p-3 flex items-center gap-3">
                   <Search size={16} className="text-primary shrink-0" aria-hidden="true" />
@@ -683,26 +689,28 @@ export default function AddStockPage() {
               </motion.div>
 
               {/* Results */}
-              {loading.medicines && medicines.length === 0 ? (
-                <div className="space-y-3">
-                  {Array.from({ length: 4 }).map((_, i) => <MedicineSkeleton key={i} />)}
-                </div>
-              ) : medicines.length === 0 ? (
-                <EmptySearch query={search} />
-              ) : (
-                <div className="space-y-2.5" role="list" aria-label="Medicine search results">
-                  <AnimatePresence>
-                    {medicines.map((med, i) => (
-                      <MedicineCard
-                        key={med._id}
-                        med={med}
-                        onSelect={handleSelect}
-                        index={i}
-                      />
-                    ))}
-                  </AnimatePresence>
-                </div>
-              )}
+              <div className="max-w-4xl mx-auto">
+                {loading.medicines && medicines.length === 0 ? (
+                  <div className="space-y-3">
+                    {Array.from({ length: 4 }).map((_, i) => <MedicineSkeleton key={i} />)}
+                  </div>
+                ) : medicines.length === 0 ? (
+                  <EmptySearch query={search} />
+                ) : (
+                  <div className="space-y-2.5" role="list" aria-label="Medicine search results">
+                    <AnimatePresence>
+                      {medicines.map((med, i) => (
+                        <MedicineCard
+                          key={med._id}
+                          med={med}
+                          onSelect={handleSelect}
+                          index={i}
+                        />
+                      ))}
+                    </AnimatePresence>
+                  </div>
+                )}
+              </div>
             </motion.div>
           )}
 
@@ -723,7 +731,7 @@ export default function AddStockPage() {
               <AnimatePresence mode="wait">
                 {/* Success state */}
                 {submitted ? (
-                  <motion.div key="success" variants={FADE_UP} initial="hidden" animate="visible" exit="exit">
+                  <motion.div key="success" variants={FADE_UP} initial="hidden" animate="visible" exit="exit" className="max-w-2xl mx-auto">
                     <SuccessOverlay medicine={selected} qty={form.stockQuantity} />
                   </motion.div>
                 ) : (
@@ -733,113 +741,167 @@ export default function AddStockPage() {
                     initial="hidden"
                     animate="visible"
                     custom={1}
-                    className="grid grid-cols-1 lg:grid-cols-5 gap-5"
+                    className="grid grid-cols-1 lg:grid-cols-12 gap-5"
                   >
-                    {/* ── Main Form (3/5 width) ───────────────────────── */}
+                    {/* ── Main Form (8/12 width) ───────────────────────── */}
                     <form
                       onSubmit={handleSubmit}
                       noValidate
-                      className="lg:col-span-3 card p-6 space-y-5"
+                      className="lg:col-span-8 card p-6 space-y-6"
                       aria-label="Add stock form"
                     >
-                      {/* Section header */}
-                      <div className="flex items-center gap-2 pb-3 border-b border-base-300">
-                        <Package size={15} className="text-primary" />
-                        <span className="text-xs font-bold text-primary/80 uppercase tracking-widest">
-                          Stock Information
-                        </span>
+                      {/* Section 1: Basic Info */}
+                      <div>
+                        <div className="flex items-center gap-2 pb-3 mb-4 border-b border-base-300">
+                          <Package size={15} className="text-primary" />
+                          <span className="text-xs font-bold text-primary/80 uppercase tracking-widest">
+                            Batch & Quantity
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                          <FormField id="stockQuantity" label="Quantity" required icon={Hash} error={fieldErrors.stockQuantity}>
+                            <input
+                              ref={qtyRef}
+                              id="stockQuantity"
+                              type="number"
+                              min="1"
+                              inputMode="numeric"
+                              value={form.stockQuantity}
+                              onChange={(e) => handleFieldChange('stockQuantity', e.target.value)}
+                              placeholder="e.g. 100"
+                              aria-required="true"
+                              className={inputCls(fieldErrors.stockQuantity)}
+                            />
+                          </FormField>
+
+                          <FormField id="batchNumber" label="Batch Number" required icon={Hash} error={fieldErrors.batchNumber}>
+                            <input
+                              id="batchNumber"
+                              type="text"
+                              value={form.batchNumber}
+                              onChange={(e) => handleFieldChange('batchNumber', e.target.value)}
+                              placeholder="e.g. BATCH-001"
+                              aria-required="true"
+                              className={inputCls(fieldErrors.batchNumber)}
+                            />
+                          </FormField>
+
+                          <FormField id="expiryDate" label="Expiry Date" required icon={Calendar} error={fieldErrors.expiryDate}>
+                            <input
+                              id="expiryDate"
+                              type="date"
+                              min={minExpiryDate}
+                              value={form.expiryDate}
+                              onChange={(e) => handleFieldChange('expiryDate', e.target.value)}
+                              aria-required="true"
+                              className={inputCls(fieldErrors.expiryDate)}
+                            />
+                          </FormField>
+                        </div>
                       </div>
 
-                      {/* Quantity + Batch */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <FormField
-                          id="stockQuantity"
-                          label="Stock Quantity"
-                          required
-                          icon={Hash}
-                          error={fieldErrors.stockQuantity}
-                        >
-                          <input
-                            ref={qtyRef}
-                            id="stockQuantity"
-                            type="number"
-                            min="1"
-                            inputMode="numeric"
-                            value={form.stockQuantity}
-                            onChange={(e) => handleFieldChange('stockQuantity', e.target.value)}
-                            placeholder="e.g. 100"
-                            aria-required="true"
-                            aria-invalid={!!fieldErrors.stockQuantity}
-                            className={inputCls(fieldErrors.stockQuantity)}
-                          />
-                        </FormField>
+                      {/* Section 2: Pricing */}
+                      <div>
+                        <div className="flex items-center gap-2 pb-3 mb-4 border-b border-base-300">
+                          <IndianRupee size={15} className="text-primary" />
+                          <span className="text-xs font-bold text-primary/80 uppercase tracking-widest">
+                            Pricing Configuration
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                          <FormField id="mrp" label="MRP (₹)" required icon={IndianRupee} error={fieldErrors.mrp}>
+                            <input
+                              id="mrp"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={form.mrp}
+                              onChange={(e) => handleFieldChange('mrp', e.target.value)}
+                              placeholder="0.00"
+                              className={inputCls(fieldErrors.mrp)}
+                            />
+                          </FormField>
 
-                        <FormField
-                          id="batchNumber"
-                          label="Batch Number"
-                          required
-                          icon={Hash}
-                          error={fieldErrors.batchNumber}
-                          hint="Will be auto-uppercased"
-                        >
-                          <input
-                            id="batchNumber"
-                            type="text"
-                            value={form.batchNumber}
-                            onChange={(e) => handleFieldChange('batchNumber', e.target.value)}
-                            placeholder="e.g. BATCH-2024-001"
-                            aria-required="true"
-                            aria-invalid={!!fieldErrors.batchNumber}
-                            className={inputCls(fieldErrors.batchNumber)}
-                          />
-                        </FormField>
+                          <FormField id="sellingPrice" label="Selling Price (₹)" required icon={Tag} error={fieldErrors.sellingPrice}>
+                            <input
+                              id="sellingPrice"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={form.sellingPrice}
+                              onChange={(e) => handleFieldChange('sellingPrice', e.target.value)}
+                              placeholder="0.00"
+                              className={inputCls(fieldErrors.sellingPrice)}
+                            />
+                          </FormField>
+
+                          <FormField id="discountPercent" label="Discount (%)" icon={Percent} hint="Optional">
+                            <input
+                              id="discountPercent"
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.1"
+                              value={form.discountPercent}
+                              onChange={(e) => handleFieldChange('discountPercent', e.target.value)}
+                              placeholder="0"
+                              className={inputCls(false)}
+                            />
+                          </FormField>
+
+                          <FormField id="purchasePrice" label="Purchase Price (₹)" icon={IndianRupee} hint="Optional PTR">
+                            <input
+                              id="purchasePrice"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={form.purchasePrice}
+                              onChange={(e) => handleFieldChange('purchasePrice', e.target.value)}
+                              placeholder="0.00"
+                              className={inputCls(false)}
+                            />
+                          </FormField>
+                        </div>
                       </div>
 
-                      {/* Expiry + Price */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <FormField
-                          id="expiryDate"
-                          label="Expiry Date"
-                          required
-                          icon={Calendar}
-                          error={fieldErrors.expiryDate}
-                        >
-                          <input
-                            id="expiryDate"
-                            type="date"
-                            min={minExpiryDate}
-                            value={form.expiryDate}
-                            onChange={(e) => handleFieldChange('expiryDate', e.target.value)}
-                            aria-required="true"
-                            aria-invalid={!!fieldErrors.expiryDate}
-                            className={inputCls(fieldErrors.expiryDate)}
-                          />
-                        </FormField>
+                      {/* Section 3: Supply & Storage */}
+                      <div>
+                        <div className="flex items-center gap-2 pb-3 mb-4 border-b border-base-300">
+                          <Truck size={15} className="text-primary" />
+                          <span className="text-xs font-bold text-primary/80 uppercase tracking-widest">
+                            Source & Storage
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <FormField id="supplierId" label="Supplier" icon={Truck} hint="Where did this stock come from?">
+                            <select
+                              id="supplierId"
+                              value={form.supplierId}
+                              onChange={(e) => handleFieldChange('supplierId', e.target.value)}
+                              className={inputCls(false)}
+                            >
+                              <option value="">Select Supplier (Optional)</option>
+                              {(suppliers || []).map((s) => (
+                                <option key={s._id} value={s._id}>{s.name} ({s.code})</option>
+                              ))}
+                            </select>
+                          </FormField>
 
-                        <FormField
-                          id="pricePerUnit"
-                          label="Price Per Unit (₹)"
-                          icon={IndianRupee}
-                          error={fieldErrors.pricePerUnit}
-                          hint={`Defaults to MRP ₹${selected?.mrp ?? '—'}`}
-                        >
-                          <input
-                            id="pricePerUnit"
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            inputMode="decimal"
-                            value={form.pricePerUnit}
-                            onChange={(e) => handleFieldChange('pricePerUnit', e.target.value)}
-                            placeholder={`₹${selected?.mrp ?? '0.00'}`}
-                            aria-invalid={!!fieldErrors.pricePerUnit}
-                            className={inputCls(fieldErrors.pricePerUnit)}
-                          />
-                        </FormField>
+                          <FormField id="rackLocation" label="Rack Location" icon={MapPin} hint="e.g. Aisle-3 / Rack-B">
+                            <input
+                              id="rackLocation"
+                              type="text"
+                              value={form.rackLocation}
+                              onChange={(e) => handleFieldChange('rackLocation', e.target.value)}
+                              placeholder="Physical storage location"
+                              className={inputCls(false)}
+                            />
+                          </FormField>
+                        </div>
                       </div>
 
                       {/* Info alert */}
-                      <div className="alert alert-info text-xs" role="note">
+                      <div className="alert alert-info text-xs py-2" role="note">
                         <Info size={14} className="text-info shrink-0 mt-0.5" aria-hidden="true" />
                         <span>
                           A low-stock alert is automatically dispatched when units drop to or below{' '}
@@ -865,7 +927,7 @@ export default function AddStockPage() {
                         type="submit"
                         disabled={loading.addStock}
                         aria-busy={loading.addStock}
-                        className="btn-primary-cta w-full flex items-center justify-center gap-2.5 disabled:opacity-60 disabled:cursor-not-allowed"
+                        className="btn-primary-cta w-full flex items-center justify-center gap-2.5 disabled:opacity-60 disabled:cursor-not-allowed mt-2"
                       >
                         {loading.addStock ? (
                           <>
@@ -881,8 +943,8 @@ export default function AddStockPage() {
                       </button>
                     </form>
 
-                    {/* ── Side Panel (2/5 width) ───────────────────────── */}
-                    <aside className="lg:col-span-2 space-y-4" aria-label="Stock details sidebar">
+                    {/* ── Side Panel (4/12 width) ───────────────────────── */}
+                    <aside className="lg:col-span-4 space-y-4" aria-label="Stock details sidebar">
                       {/* Stock preview widget */}
                       <motion.div variants={FADE_UP} initial="hidden" animate="visible" custom={2}>
                         <StockPreview medicine={selected} form={form} />
@@ -904,12 +966,12 @@ export default function AddStockPage() {
                         </div>
 
                         {[
-                          { label: 'Generic',      value: selected?.genericName },
-                          { label: 'Manufacturer', value: selected?.manufacturer },
-                          { label: 'Packaging',    value: selected?.packaging },
-                          { label: 'MRP',          value: selected?.mrp != null ? `₹${selected.mrp}` : null },
-                          { label: 'Schedule',     value: selected?.schedule !== 'None' ? `Schedule ${selected?.schedule}` : 'OTC' },
-                          { label: 'GST',          value: selected?.gstPercentage != null ? `${selected.gstPercentage}%` : null },
+                          { label: 'Generic',      value: selected?.medicineId?.genericName },
+                          { label: 'Manufacturer', value: selected?.medicineId?.manufacturer },
+                          { label: 'Packaging',    value: selected?.medicineId?.packaging },
+                          { label: 'Ref MRP',      value: selected?.medicineId?.referenceMrp != null ? `₹${selected.medicineId.referenceMrp}` : null },
+                          { label: 'Schedule',     value: selected?.medicineId?.schedule && selected?.medicineId?.schedule !== 'None' ? `Schedule ${selected?.medicineId?.schedule}` : 'OTC' },
+                          { label: 'GST',          value: selected?.medicineId?.gstPercentage != null ? `${selected.medicineId.gstPercentage}%` : null },
                         ].filter((r) => r.value).map(({ label, value }) => (
                           <div key={label} className="flex justify-between items-baseline gap-2">
                             <span className="text-xs text-base-content/40 shrink-0">{label}</span>
@@ -918,8 +980,8 @@ export default function AddStockPage() {
                         ))}
                       </motion.div>
 
-                      {/* Existing batches summary */}
-                      {selected?.storeInventory?.length > 0 && (
+                      {/* Active batch summary */}
+                      {selected?.batchId && (
                         <motion.div
                           variants={FADE_UP}
                           initial="hidden"
@@ -930,30 +992,25 @@ export default function AddStockPage() {
                           <div className="flex items-center gap-2 mb-3">
                             <RefreshCcw size={13} className="text-primary" />
                             <span className="text-[11px] font-bold text-base-content/50 uppercase tracking-widest">
-                              Existing Batches
+                              Active Batch
                             </span>
                           </div>
                           <div className="space-y-2 max-h-40 overflow-y-auto">
-                            {selected.storeInventory.slice(0, 5).map((inv, i) => (
-                              <div
-                                key={i}
-                                className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-base-200"
-                              >
-                                <span className="font-mono text-base-content/60 text-[11px]">
-                                  {inv.batchNumber || '—'}
+                            <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-base-200">
+                              <span className="font-mono text-base-content/60 text-[11px]">
+                                {selected.batchId.batchNumber || '—'}
+                              </span>
+                              <div className="flex items-center gap-3">
+                                <span className={`font-bold tabular-nums ${selected.batchId.remainingQuantity <= LOW_STOCK_THRESHOLD ? 'text-warning' : 'text-success'}`}>
+                                  {selected.batchId.remainingQuantity} u
                                 </span>
-                                <div className="flex items-center gap-3">
-                                  <span className={`font-bold tabular-nums ${inv.stockQuantity <= LOW_STOCK_THRESHOLD ? 'text-warning' : 'text-success'}`}>
-                                    {inv.stockQuantity} u
+                                {selected.batchId.expiryDate && (
+                                  <span className="text-base-content/35 text-[10px]">
+                                    {new Date(selected.batchId.expiryDate).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })}
                                   </span>
-                                  {inv.expiryDate && (
-                                    <span className="text-base-content/35 text-[10px]">
-                                      {new Date(inv.expiryDate).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })}
-                                    </span>
-                                  )}
-                                </div>
+                                )}
                               </div>
-                            ))}
+                            </div>
                           </div>
                         </motion.div>
                       )}

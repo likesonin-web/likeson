@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -71,7 +72,7 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ROLES = [
-  { value: '',               label: 'All Roles',     icon: Users,          color: 'primary'   },
+  { value: '',               label: 'All Roles',      icon: Users,          color: 'primary'   },
   { value: 'customer',       label: 'Customer',       icon: UserCircle,     color: 'info'      },
   { value: 'doctor',         label: 'Doctor',         icon: Stethoscope,    color: 'success'   },
   { value: 'lab partner',    label: 'Lab Partner',    icon: FlaskConical,   color: 'warning'   },
@@ -83,10 +84,6 @@ const ROLES = [
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ROLE CREATE CONFIG
-// Each field may have:
-//   note      — shown as a small info label below the input (guidelines / rules)
-//   hint      — shown as placeholder text inside the input
-//   maxLength — shown alongside the note
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ROLE_CREATE_CONFIG = {
@@ -94,246 +91,81 @@ const ROLE_CREATE_CONFIG = {
     label: 'Customer', icon: UserCircle, color: 'info',
     description: 'Creates a patient/customer account. A temporary password will be emailed upon creation.',
     fields: [
-      {
-        name: 'name', label: 'Full Name', type: 'text', required: true,
-        hint: 'e.g. Ravi Kumar',
-        note: 'Enter the legal name as it appears on government ID. Used for prescriptions & reports.',
-      },
-      {
-        name: 'email', label: 'Email Address', type: 'email', required: true,
-        hint: 'e.g. ravi@example.com',
-        note: 'Login credential. Temporary password will be sent here. Must be unique across all users.',
-      },
-      {
-        name: 'phone', label: 'Mobile Number', type: 'tel', required: false,
-        hint: 'e.g. 9876543210',
-        note: 'Indian mobile only (10 digits, starts 6–9). Used for OTP & SMS notifications.',
-      },
-      {
-        name: 'gender', label: 'Gender', type: 'select', required: false,
-        options: ['Male', 'Female', 'Transgender', 'Other', 'Prefer not to say'],
-        note: 'Optional. Displayed in health profile and used for gender-specific care prompts.',
-      },
-      {
-        name: 'bloodGroup', label: 'Blood Group', type: 'select', required: false,
-        options: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
-        note: 'Optional. Critical for emergency care. Customer can update later from their profile.',
-      },
+      { name: 'name', label: 'Full Name', type: 'text', required: true, hint: 'e.g. Ravi Kumar', note: 'Enter the legal name as it appears on government ID.' },
+      { name: 'email', label: 'Email Address', type: 'email', required: true, hint: 'e.g. ravi@example.com', note: 'Login credential. Temporary password will be sent here.' },
+      { name: 'phone', label: 'Mobile Number', type: 'tel', required: false, hint: 'e.g. 9876543210', note: 'Indian mobile only (10 digits, starts 6–9).' },
+      { name: 'gender', label: 'Gender', type: 'select', required: false, options: ['Male', 'Female', 'Transgender', 'Other', 'Prefer not to say'] },
+      { name: 'bloodGroup', label: 'Blood Group', type: 'select', required: false, options: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] },
     ],
   },
-
   doctor: {
     label: 'Doctor', icon: Stethoscope, color: 'success',
     description: 'Creates a doctor account linked to a hospital. Doctor can set their own availability after login.',
     fields: [
-      {
-        name: 'name', label: 'Full Name', type: 'text', required: true,
-        hint: 'e.g. Dr. Priya Sharma',
-        note: 'Legal name shown on appointment cards. Include "Dr." prefix if applicable.',
-      },
-      {
-        name: 'email', label: 'Email Address', type: 'email', required: true,
-        hint: 'e.g. dr.priya@hospital.com',
-        note: 'Login credential. Temporary password sent here. Must be unique. Preferably a professional email.',
-      },
-      {
-        name: 'phone', label: 'Mobile Number', type: 'tel', required: false,
-        hint: 'e.g. 9876543210',
-        note: 'Used for urgent alerts and OTP. Indian 10-digit mobile number.',
-      },
-      {
-        name: 'specialization', label: 'Specialization', type: 'select', required: true,
-        options: ['General Physician','Cardiologist','Neurologist','Pediatrician',
-                  'Oncologist','Orthopedic Surgeon','Gastroenterologist','Gynecologist',
-                  'Dermatologist','Urologist','Psychiatry','Physiotherapist'],
-        note: 'Primary clinical specialty. Determines which booking category this doctor appears under.',
-      },
-      {
-        name: 'experienceYears', label: 'Years of Experience', type: 'number', required: true,
-        hint: 'e.g. 8',
-        note: 'Total years of clinical practice after completing MBBS/degree. Min 0, Max 70.',
-      },
-      {
-        name: 'registrationNumber', label: 'MCI Registration No.', type: 'text', required: false,
-        hint: 'e.g. MH-123456',
-        note: 'Medical Council of India or State Medical Council number. Used for KYC verification.',
-      },
-      {
-        name: 'primaryHospital', label: 'Primary Hospital', type: 'ref', required: true,
-        refKey: 'hospitals',
-        note: 'The hospital where doctor primarily practices. Determines pricing model — if hospital-managed, hospital sets fees; if doctor-owned (Clinic/Nursing Home), doctor sets fees.',
-      },
-      {
-        name: 'inPersonFee', label: 'In-Person Consultation Fee (₹)', type: 'number', required: true,
-        hint: 'e.g. 500',
-        note: 'Applies only for doctor-owned clinics. For hospital-managed hospitals, this is overridden by hospital pricing. Min ₹0.',
-      },
+      { name: 'name', label: 'Full Name', type: 'text', required: true, hint: 'e.g. Dr. Priya Sharma' },
+      { name: 'email', label: 'Email Address', type: 'email', required: true, hint: 'e.g. dr.priya@hospital.com' },
+      { name: 'phone', label: 'Mobile Number', type: 'tel', required: false, hint: 'e.g. 9876543210' },
+      { name: 'specialization', label: 'Specialization', type: 'select', required: true, options: ['General Physician','Cardiologist','Neurologist','Pediatrician','Oncologist','Orthopedic Surgeon','Gastroenterologist','Gynecologist','Dermatologist','Urologist','Psychiatry','Physiotherapist'] },
+      { name: 'experienceYears', label: 'Years of Experience', type: 'number', required: true, hint: 'e.g. 8' },
+      { name: 'registrationNumber', label: 'MCI Registration No.', type: 'text', required: false, hint: 'e.g. MH-123456' },
+      { name: 'primaryHospital', label: 'Primary Hospital', type: 'ref', required: true, refKey: 'hospitals' },
+      { name: 'inPersonFee', label: 'In-Person Consultation Fee (₹)', type: 'number', required: true, hint: 'e.g. 500' },
     ],
   },
-
   'lab partner': {
     label: 'Lab Partner', icon: FlaskConical, color: 'warning',
     description: 'Creates a lab technician/partner account linked to a Clinic or Diagnostic Center.',
     fields: [
-      {
-        name: 'name', label: 'Full Name', type: 'text', required: true,
-        hint: 'e.g. Suresh Babu',
-        note: 'Full legal name of the lab technician. Shown on test reports.',
-      },
-      {
-        name: 'email', label: 'Email Address', type: 'email', required: true,
-        hint: 'e.g. suresh@diagnostics.com',
-        note: 'Login email. Temporary password sent here. Must be unique.',
-      },
-      {
-        name: 'phone', label: 'Mobile Number', type: 'tel', required: false,
-        hint: 'e.g. 9876543210',
-        note: 'Indian 10-digit mobile. Used for booking alerts and report uploads.',
-      },
-      {
-        name: 'assignedHospital', label: 'Assigned Clinic / Lab', type: 'ref', required: true,
-        refKey: 'labPartnerHospitals',
-        note: 'Only Clinics and Diagnostic Centers are listed here. The lab partner operates exclusively under this facility.',
-      },
+      { name: 'name', label: 'Full Name', type: 'text', required: true, hint: 'e.g. Suresh Babu' },
+      { name: 'email', label: 'Email Address', type: 'email', required: true, hint: 'e.g. suresh@diagnostics.com' },
+      { name: 'phone', label: 'Mobile Number', type: 'tel', required: false, hint: 'e.g. 9876543210' },
+      { name: 'assignedHospital', label: 'Assigned Clinic / Lab', type: 'ref', required: true, refKey: 'labPartnerHospitals' },
     ],
   },
-
   transportpartner: {
     label: 'Transport Partner', icon: Truck, color: 'accent',
     description: 'Links a user account to an existing Transport Agency. KYC is mandatory per transport regulations.',
     fields: [
-      {
-        name: 'name', label: 'Full Name', type: 'text', required: true,
-        hint: 'e.g. Ramesh Yadav',
-        note: 'Legal name of the agency owner/operator as on PAN/Aadhaar. Used for KYC matching.',
-      },
-      {
-        name: 'email', label: 'Email Address', type: 'email', required: true,
-        hint: 'e.g. ramesh@transagency.com',
-        note: 'Login credential. Password sent here. Must match agency owner\'s contact email.',
-      },
-      {
-        name: 'phone', label: 'Mobile Number', type: 'tel', required: false,
-        hint: 'e.g. 9876543210',
-        note: 'Indian 10-digit mobile. Validated via regex — must start with 6–9.',
-      },
-      {
-        name: 'agencyId', label: 'Transport Agency', type: 'ref', required: true,
-        refKey: 'transportPartners',
-        note: 'Each agency can be linked to only one user account. Only agencies without an existing user are selectable.',
-      },
-      {
-        name: 'kyc.panNumber', label: 'PAN Number', type: 'text', required: true,
-        hint: 'e.g. ABCDE1234F',
-        note: 'Mandatory per RBI/transport compliance. Format: 5 uppercase letters + 4 digits + 1 uppercase letter. Stored encrypted.',
-      },
-      {
-        name: 'kyc.aadhaarNumber', label: 'Aadhaar Number', type: 'text', required: true,
-        hint: 'e.g. 123456789012',
-        note: 'Exactly 12 digits. Only last 4 digits stored in profile (aadhaarLast4). Full number encrypted.',
-      },
-      {
-        name: 'kyc.documentUrl', label: 'Identity Proof Document', type: 'upload', required: true,
-        hint: 'PAN card / Aadhaar scan / Passport',
-        note: 'Accepted: JPG, PNG, PDF. Max size: 5 MB. Uploaded to ImageKit under kyc/transport-partners/.',
-        folder: 'kyc/transport-partners',
-      },
+      { name: 'name', label: 'Full Name', type: 'text', required: true, hint: 'e.g. Ramesh Yadav' },
+      { name: 'email', label: 'Email Address', type: 'email', required: true, hint: 'e.g. ramesh@transagency.com' },
+      { name: 'phone', label: 'Mobile Number', type: 'tel', required: false, hint: 'e.g. 9876543210' },
+      { name: 'agencyId', label: 'Transport Agency', type: 'ref', required: true, refKey: 'transportPartners' },
+      { name: 'kyc.panNumber', label: 'PAN Number', type: 'text', required: true, hint: 'e.g. ABCDE1234F', note: 'Mandatory per RBI/transport compliance.' },
+      { name: 'kyc.aadhaarNumber', label: 'Aadhaar Number', type: 'text', required: true, hint: 'Enter 12-digit number', note: 'Exactly 12 digits. Only last 4 digits stored in profile.' },
+      { name: 'kyc.documentUrl', label: 'Identity Proof Document', type: 'upload', required: true, hint: 'PAN card / Aadhaar scan / Passport', folder: 'kyc/transport-partners' },
     ],
   },
-
   pharmacy: {
     label: 'Pharmacist', icon: Pill, color: 'secondary',
     description: 'Creates a pharmacist account linked to a Pharmacy Store. Pharmacist manages orders for that store.',
     fields: [
-      {
-        name: 'name', label: 'Full Name', type: 'text', required: true,
-        hint: 'e.g. Meena Pillai',
-        note: 'Legal name of the pharmacist. Must match PCI registration records.',
-      },
-      {
-        name: 'email', label: 'Email Address', type: 'email', required: true,
-        hint: 'e.g. meena@pharma.com',
-        note: 'Login email. Password emailed here. Must be unique.',
-      },
-      {
-        name: 'phone', label: 'Mobile Number', type: 'tel', required: false,
-        hint: 'e.g. 9876543210',
-        note: 'Indian 10-digit mobile. Used for order alerts and OTP.',
-      },
-      {
-        name: 'pharmacistName', label: 'Pharmacist Display Name', type: 'text', required: true,
-        hint: 'e.g. Meena R. Pillai',
-        note: 'Name shown on prescriptions and order invoices. Can differ from account name (e.g., include middle initial).',
-      },
-      {
-        name: 'registrationNumber', label: 'PCI Registration No.', type: 'text', required: true,
-        hint: 'e.g. AP/2019/123456',
-        note: 'Pharmacy Council of India registration number. Must be unique. Required for regulatory compliance.',
-      },
-      {
-        name: 'qualification', label: 'Qualification', type: 'select', required: true,
-        options: ['D.Pharm', 'B.Pharm', 'M.Pharm', 'Pharm.D'],
-        note: 'Minimum D.Pharm required to operate a pharmacy store. Affects prescription handling permissions.',
-      },
-      {
-        name: 'assignedStore', label: 'Assigned Pharmacy Store', type: 'ref', required: true,
-        refKey: 'pharmacyStores',
-        note: 'The store this pharmacist will manage. Only active (non-Inactive) stores are listed. One pharmacist per store is recommended.',
-      },
+      { name: 'name', label: 'Full Name', type: 'text', required: true, hint: 'e.g. Meena Pillai' },
+      { name: 'email', label: 'Email Address', type: 'email', required: true, hint: 'e.g. meena@pharma.com' },
+      { name: 'phone', label: 'Mobile Number', type: 'tel', required: false, hint: 'e.g. 9876543210' },
+      { name: 'pharmacistName', label: 'Pharmacist Display Name', type: 'text', required: true, hint: 'e.g. Meena R. Pillai' },
+      { name: 'registrationNumber', label: 'PCI Registration No.', type: 'text', required: true, hint: 'e.g. AP/2019/123456' },
+      { name: 'qualification', label: 'Qualification', type: 'select', required: true, options: ['D.Pharm', 'B.Pharm', 'M.Pharm', 'Pharm.D'] },
+      { name: 'assignedStore', label: 'Assigned Pharmacy Store', type: 'ref', required: true, refKey: 'pharmacyStores' },
     ],
   },
-
   finance: {
     label: 'Finance', icon: BadgeDollarSign, color: 'success',
     description: 'Creates a Finance team account. Only Superadmins can create Finance users.',
     fields: [
-      {
-        name: 'name', label: 'Full Name', type: 'text', required: true,
-        hint: 'e.g. Ananya Krishnan',
-        note: 'Full name of the finance team member. Used in settlement reports and audit logs.',
-      },
-      {
-        name: 'email', label: 'Email Address', type: 'email', required: true,
-        hint: 'e.g. ananya@likeson.in',
-        note: 'Login credential. Must be an official company email. Temporary password sent here.',
-      },
-      {
-        name: 'phone', label: 'Mobile Number', type: 'tel', required: false,
-        hint: 'e.g. 9876543210',
-        note: 'Used for 2FA and internal alerts. Indian 10-digit mobile.',
-      },
+      { name: 'name', label: 'Full Name', type: 'text', required: true, hint: 'e.g. Ananya Krishnan' },
+      { name: 'email', label: 'Email Address', type: 'email', required: true, hint: 'e.g. ananya@likeson.in' },
+      { name: 'phone', label: 'Mobile Number', type: 'tel', required: false, hint: 'e.g. 9876543210' },
     ],
   },
-
   'care assistant': {
     label: 'Care Assistant', icon: HeartHandshake, color: 'error',
     description: 'Creates a Care Assistant account for home-based patient support. Background verification required separately.',
     fields: [
-      {
-        name: 'name', label: 'Full Name', type: 'text', required: true,
-        hint: 'e.g. Lakshmi Devi',
-        note: 'Legal name. Stored as fullName in CareAssistantProfile. Shown to customers during booking.',
-      },
-      {
-        name: 'email', label: 'Email Address', type: 'email', required: true,
-        hint: 'e.g. lakshmi@care.com',
-        note: 'Login credential. Temporary password sent here. Must be unique.',
-      },
-      {
-        name: 'phone', label: 'Mobile Number', type: 'tel', required: false,
-        hint: 'e.g. 9876543210',
-        note: 'Primary contact for task dispatching and real-time alerts. Indian 10-digit mobile.',
-      },
-      {
-        name: 'experienceYears', label: 'Years of Experience', type: 'number', required: false,
-        hint: 'e.g. 3',
-        note: 'Total years providing patient/elder care. Affects search ranking. Defaults to 0 if not provided.',
-      },
-      {
-        name: 'baseServiceCharge', label: 'Base Service Charge (₹)', type: 'number', required: false,
-        hint: 'e.g. 500',
-        note: 'Minimum charge per assignment. Platform-level pricing (PlatformPricingConfig) takes precedence. Defaults to ₹500.',
-      },
+      { name: 'name', label: 'Full Name', type: 'text', required: true, hint: 'e.g. Lakshmi Devi' },
+      { name: 'email', label: 'Email Address', type: 'email', required: true, hint: 'e.g. lakshmi@care.com' },
+      { name: 'phone', label: 'Mobile Number', type: 'tel', required: false, hint: 'e.g. 9876543210' },
+      { name: 'experienceYears', label: 'Years of Experience', type: 'number', required: false, hint: 'e.g. 3' },
+      { name: 'baseServiceCharge', label: 'Base Service Charge (₹)', type: 'number', required: false, hint: 'e.g. 500' },
     ],
   },
 };
@@ -354,6 +186,16 @@ const CREATE_THUNKS = {
   finance:          createFinance,
   'care assistant': createCareAssistant,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL WRAPPER (Fixes Fixed Positioning & Scroll issues)
+// ─────────────────────────────────────────────────────────────────────────────
+function ModalsPortal({ children }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+  return createPortal(children, document.body);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REF ITEM LABEL RESOLVER
@@ -420,9 +262,6 @@ const EmptyState = ({ message = 'No users found' }) => (
   </motion.div>
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FIELD NOTE — small info label shown below each form field
-// ─────────────────────────────────────────────────────────────────────────────
 const FieldNote = ({ note }) => {
   if (!note) return null;
   return (
@@ -521,15 +360,17 @@ function AnalyticsSection({ users, pagination }) {
   const [isExpanded, setIsExpanded]   = useState(true);
 
   const total    = pagination?.total || 0;
-  const blocked  = users.filter(u => u.isBlocked).length;
-  const verified = users.filter(u => u.isEmailVerified).length;
-  const online   = users.filter(u => u.isOnline).length;
+  // Based entirely on the current page to avoid mathematically incorrect numbers globally
+  const pageBlocked  = users.filter(u => u.isBlocked).length;
+  const pageVerified = users.filter(u => u.isEmailVerified).length;
+  const pageOnline   = users.filter(u => u.isOnline).length;
 
   const roleCount = {};
   users.forEach(u => {
     const label = ROLES.find(r => r.value === u.role)?.label || u.role || 'Unknown';
     roleCount[label] = (roleCount[label] || 0) + 1;
   });
+  
   const pieData = Object.entries(roleCount).map(([name, value]) => ({ name, value }));
   const barData = Object.entries(roleCount).map(([name, count]) => ({
     name: name.length > 10 ? name.slice(0, 9) + '…' : name, count,
@@ -544,7 +385,7 @@ function AnalyticsSection({ users, pagination }) {
           </div>
           <div>
             <h2 className="font-black text-base-content text-base">Platform Analytics</h2>
-            <p className="text-[11px] text-base-content/50">Live stats · {total.toLocaleString()} users</p>
+            <p className="text-[11px] text-base-content/50">Total Platform Users & Current Page Data</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -571,10 +412,10 @@ function AnalyticsSection({ users, pagination }) {
         {isExpanded && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.3 }} style={{ overflow: 'hidden' }}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-5 border-b border-base-300">
-              <StatCard label="Total Users"    value={total}         icon={Users}        color="primary"  trend={8}  trendLabel="vs last month" delay={0}    />
-              <StatCard label="Active"         value={total-blocked} icon={Shield}       color="success"  trend={3}  trendLabel="vs last week"  delay={0.05} />
-              <StatCard label="Verified"       value={verified}      icon={CheckCircle2} color="info"     trend={12} trendLabel="email verified" delay={0.1}  />
-              <StatCard label="Online Now"     value={online}        icon={Activity}     color="accent"              trendLabel="currently active" delay={0.15} />
+              <StatCard label="Total Users"    value={total}         icon={Users}        color="primary"  trend={8}  trendLabel="Global platform total" delay={0}    />
+              <StatCard label="Verified (Page)" value={pageVerified} icon={CheckCircle2} color="info"                trendLabel="Of current page sample" delay={0.05} />
+              <StatCard label="Blocked (Page)"  value={pageBlocked}  icon={ShieldOff}    color="error"               trendLabel="Of current page sample" delay={0.1}  />
+              <StatCard label="Online Now"     value={pageOnline}    icon={Activity}     color="accent"              trendLabel="Of current page sample" delay={0.15} />
             </div>
             <div className="p-5">
               <AnimatePresence mode="wait">
@@ -621,7 +462,7 @@ function AnalyticsSection({ users, pagination }) {
                 {activeChart === 'pie' && (
                   <motion.div key="pie" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.25 }} className="flex items-center gap-4">
                     <div className="flex-1">
-                      <p className="text-xs font-black uppercase tracking-widest text-base-content/40 mb-4">Role Distribution</p>
+                      <p className="text-xs font-black uppercase tracking-widest text-base-content/40 mb-4">Role Distribution · Current Page Sample</p>
                       <ResponsiveContainer width="100%" height={180}>
                         <PieChart>
                           <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
@@ -845,7 +686,7 @@ function CreateUserModal({ onClose }) {
   return (
     <motion.div
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
@@ -854,7 +695,7 @@ function CreateUserModal({ onClose }) {
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.92, opacity: 0, y: 20 }}
         transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-        className="card w-full max-w-2xl max-h-[92vh] overflow-hidden flex flex-col"
+        className="card w-full max-w-2xl max-h-[92vh] overflow-hidden flex flex-col bg-base-100"
       >
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-base-300 flex-shrink-0">
@@ -1083,7 +924,7 @@ function UserDetailDrawer({ userId, onClose }) {
   return (
     <motion.div
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex justify-end"
+      className="fixed inset-0 z-[9999] flex justify-end"
       style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)' }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
@@ -1339,7 +1180,7 @@ function UserDetailDrawer({ userId, onClose }) {
                                 <p className="text-[10px] text-base-content/50">{session.ipAddress}</p>
                               </div>
                             </div>
-                            <button onClick={() => handleRevokeSession(session._id)}
+                            <button onClick={(e) => { e.stopPropagation(); handleRevokeSession(session._id); }}
                               className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold bg-error/10 text-error hover:bg-error/20 transition-colors">
                               <LogOut size={10} /> Revoke
                             </button>
@@ -1367,39 +1208,39 @@ function FiltersBar({ filters, onFilterChange, onReset, onSearch }) {
 
   return (
     <div className="flex  flex-wrap items-center gap-3 p-4 bg-base-200/40 border-b border-base-300">
-      <form onSubmit={handleSearchSubmit} className="flex relative  items-center gap-2 flex-1 min-w-52">
-        <div className=" flex-1 w-full max-w-xl">
+      <form onSubmit={handleSearchSubmit} className="flex relative items-center gap-2 flex-1 min-w-52">
+        <div className=" flex-1 w-full max-w-xl relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
           <input type="text" placeholder="Search name, email, phone…" value={searchValue}
             onChange={e => setSearchValue(e.target.value)} className="input-field w-full pl-9 py-2 text-sm" />
         </div>
         <button type="submit" className="btn-primary-cta btn px-3 py-2 text-xs"><Search size={12} /></button>
       </form>
-           <select className="input-field w-20  py-2 text-sm min-w-32" value={filters.role} onChange={e => onFilterChange({ role: e.target.value })}>
+      <select className="input-field w-20 py-2 text-sm min-w-32" value={filters.role || ''} onChange={e => onFilterChange({ role: e.target.value })}>
         {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
       </select>
-       <div className='flex  gap-2'>
-      <select className="input-field py-2 text-sm" value={filters.isBlocked !== undefined ? String(filters.isBlocked) : ''} onChange={e => onFilterChange({ isBlocked: e.target.value })}>
-        <option value="">All Status</option>
-        <option value="false">Active</option>
-        <option value="true">Blocked</option>
-      </select>
-      <select className="input-field py-2 text-sm" value={filters.isEmailVerified !== undefined ? String(filters.isEmailVerified) : ''} onChange={e => onFilterChange({ isEmailVerified: e.target.value })}>
-        <option value="">All Verified</option>
-        <option value="true">Verified</option>
-        <option value="false">Unverified</option>
-      </select>
-      <select className="input-field py-2 text-sm" value={`${filters.sortBy}_${filters.sortOrder}`}
-        onChange={e => { const [sortBy, sortOrder] = e.target.value.split('_'); onFilterChange({ sortBy, sortOrder }); }}>
-        <option value="createdAt_desc">Newest First</option>
-        <option value="createdAt_asc">Oldest First</option>
-        <option value="name_asc">Name A–Z</option>
-        <option value="name_desc">Name Z–A</option>
-      </select>
-      <button onClick={onReset} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-base-content/60 hover:text-base-content bg-base-200 hover:bg-base-300 transition-colors">
-        <RefreshCw size={12} /> Reset
-      </button>
-       </div>
+      <div className='flex gap-2'>
+        <select className="input-field py-2 text-sm" value={filters.isBlocked !== undefined ? String(filters.isBlocked) : ''} onChange={e => onFilterChange({ isBlocked: e.target.value })}>
+          <option value="">All Status</option>
+          <option value="false">Active</option>
+          <option value="true">Blocked</option>
+        </select>
+        <select className="input-field py-2 text-sm" value={filters.isEmailVerified !== undefined ? String(filters.isEmailVerified) : ''} onChange={e => onFilterChange({ isEmailVerified: e.target.value })}>
+          <option value="">All Verified</option>
+          <option value="true">Verified</option>
+          <option value="false">Unverified</option>
+        </select>
+        <select className="input-field py-2 text-sm" value={`${filters.sortBy || 'createdAt'}_${filters.sortOrder || 'desc'}`}
+          onChange={e => { const [sortBy, sortOrder] = e.target.value.split('_'); onFilterChange({ sortBy, sortOrder }); }}>
+          <option value="createdAt_desc">Newest First</option>
+          <option value="createdAt_asc">Oldest First</option>
+          <option value="name_asc">Name A–Z</option>
+          <option value="name_desc">Name Z–A</option>
+        </select>
+        <button onClick={onReset} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-base-content/60 hover:text-base-content bg-base-200 hover:bg-base-300 transition-colors">
+          <RefreshCw size={12} /> Reset
+        </button>
+      </div>
     </div>
   );
 }
@@ -1410,6 +1251,7 @@ function FiltersBar({ filters, onFilterChange, onReset, onSearch }) {
 function UserRow({ user, onView, onBlock, onResetPwd, onDelete, mutLoading }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  
   useEffect(() => {
     const handleClick = (e) => { if (!menuRef.current?.contains(e.target)) setMenuOpen(false); };
     document.addEventListener('mousedown', handleClick);
@@ -1418,7 +1260,7 @@ function UserRow({ user, onView, onBlock, onResetPwd, onDelete, mutLoading }) {
 
   return (
     <motion.tr initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-      className="border-b border-base-300 hover:bg-primary/3 transition-colors group">
+      className="border-b border-base-300 hover:bg-primary/3 transition-colors group relative">
       <td className="px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="relative flex-shrink-0">
@@ -1442,23 +1284,23 @@ function UserRow({ user, onView, onBlock, onResetPwd, onDelete, mutLoading }) {
       <td className="px-4 py-3"><p className="text-xs text-base-content/60">{new Date(user.createdAt).toLocaleDateString('en-IN')}</p></td>
       <td className="px-4 py-3">
         <div className="flex items-center gap-1">
-          <button onClick={() => onView(user._id)} className="w-7 h-7 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary flex items-center justify-center transition-colors" title="View Details">
+          <button onClick={(e) => { e.stopPropagation(); onView(user._id); }} className="w-7 h-7 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary flex items-center justify-center transition-colors" title="View Details">
             <Eye size={13} />
           </button>
           <div className="relative" ref={menuRef}>
-            <button onClick={() => setMenuOpen(!menuOpen)} className="w-7 h-7 rounded-lg bg-base-200 hover:bg-base-300 flex items-center justify-center transition-colors">
+            <button onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }} className="w-7 h-7 rounded-lg bg-base-200 hover:bg-base-300 flex items-center justify-center transition-colors">
               <MoreVertical size={13} />
             </button>
             <AnimatePresence>
               {menuOpen && (
                 <motion.div initial={{ opacity: 0, scale: 0.92, y: -4 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.92 }}
-                  className="absolute right-0 top-8 z-20 w-44 card shadow-xl py-1 overflow-hidden">
+                  className="absolute right-0 top-8 z-20 w-44 card shadow-xl py-1 overflow-hidden bg-base-100">
                   {[
-                    { icon: user.isBlocked ? Shield : ShieldOff, label: user.isBlocked ? 'Unblock' : 'Block', color: user.isBlocked ? 'text-success' : 'text-error', onClick: () => { onBlock(user); setMenuOpen(false); } },
-                    { icon: KeyRound, label: 'Reset Password', color: 'text-warning', onClick: () => { onResetPwd(user._id); setMenuOpen(false); } },
-                    { icon: Trash2, label: 'Delete User', color: 'text-error', onClick: () => { onDelete(user._id); setMenuOpen(false); } },
+                    { icon: user.isBlocked ? Shield : ShieldOff, label: user.isBlocked ? 'Unblock' : 'Block', color: user.isBlocked ? 'text-success' : 'text-error', onClick: () => { onBlock(user); } },
+                    { icon: KeyRound, label: 'Reset Password', color: 'text-warning', onClick: () => { onResetPwd(user._id); } },
+                    { icon: Trash2, label: 'Delete User', color: 'text-error', onClick: () => { onDelete(user._id); } },
                   ].map(({ icon: Icon, label, color, onClick }) => (
-                    <button key={label} onClick={onClick} disabled={mutLoading}
+                    <button key={label} onClick={(e) => { e.stopPropagation(); onClick(); setMenuOpen(false); }} disabled={mutLoading}
                       className={`w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold ${color} hover:bg-base-200 transition-colors disabled:opacity-50`}>
                       <Icon size={12} /> {label}
                     </button>
@@ -1479,6 +1321,7 @@ function UserRow({ user, onView, onBlock, onResetPwd, onDelete, mutLoading }) {
 function UserGridCard({ user, onView, onBlock, onResetPwd, onDelete, mutLoading, index }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  
   useEffect(() => {
     const handleClick = (e) => { if (!menuRef.current?.contains(e.target)) setMenuOpen(false); };
     document.addEventListener('mousedown', handleClick);
@@ -1490,9 +1333,9 @@ function UserGridCard({ user, onView, onBlock, onResetPwd, onDelete, mutLoading,
     <motion.div
       initial={{ opacity: 0, y: 20, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
       transition={{ delay: index * 0.03, type: 'spring', damping: 22, stiffness: 280 }}
-      className="card p-5 group relative overflow-hidden"
+      className="card p-5 group relative overflow-visible"
     >
-      <div className="absolute top-0 left-0 right-0 h-0.5 opacity-60 group-hover:opacity-100 transition-opacity" style={{ background: `var(--${roleCfg.color})` }} />
+      <div className="absolute top-0 left-0 right-0 h-0.5 opacity-60 group-hover:opacity-100 transition-opacity rounded-t-[inherit]" style={{ background: `var(--${roleCfg.color})` }} />
       <div className="flex items-start justify-between mb-4">
         <div className="flex items-center gap-3">
           <div className="relative flex-shrink-0">
@@ -1506,20 +1349,20 @@ function UserGridCard({ user, onView, onBlock, onResetPwd, onDelete, mutLoading,
           </div>
         </div>
         <div className="relative" ref={menuRef}>
-          <button onClick={() => setMenuOpen(!menuOpen)} className="w-7 h-7 rounded-lg bg-base-200 hover:bg-base-300 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100">
+          <button onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }} className="w-7 h-7 rounded-lg bg-base-200 hover:bg-base-300 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100">
             <MoreVertical size={12} />
           </button>
           <AnimatePresence>
             {menuOpen && (
               <motion.div initial={{ opacity: 0, scale: 0.88, y: -4 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.88 }}
-                className="absolute right-0 top-8 z-20 w-44 card shadow-xl py-1 overflow-hidden">
+                className="absolute right-0 top-8 z-20 w-44 card shadow-xl py-1 overflow-hidden bg-base-100">
                 {[
-                  { icon: EyeIcon, label: 'View Details', color: 'text-primary', onClick: () => { onView(user._id); setMenuOpen(false); } },
-                  { icon: user.isBlocked ? Shield : ShieldOff, label: user.isBlocked ? 'Unblock' : 'Block', color: user.isBlocked ? 'text-success' : 'text-error', onClick: () => { onBlock(user); setMenuOpen(false); } },
-                  { icon: KeyRound, label: 'Reset Password', color: 'text-warning', onClick: () => { onResetPwd(user._id); setMenuOpen(false); } },
-                  { icon: Trash2, label: 'Delete User', color: 'text-error', onClick: () => { onDelete(user._id); setMenuOpen(false); } },
+                  { icon: EyeIcon, label: 'View Details', color: 'text-primary', onClick: () => { onView(user._id); } },
+                  { icon: user.isBlocked ? Shield : ShieldOff, label: user.isBlocked ? 'Unblock' : 'Block', color: user.isBlocked ? 'text-success' : 'text-error', onClick: () => { onBlock(user); } },
+                  { icon: KeyRound, label: 'Reset Password', color: 'text-warning', onClick: () => { onResetPwd(user._id); } },
+                  { icon: Trash2, label: 'Delete User', color: 'text-error', onClick: () => { onDelete(user._id); } },
                 ].map(({ icon: Icon, label, color, onClick }) => (
-                  <button key={label} onClick={onClick} disabled={mutLoading}
+                  <button key={label} onClick={(e) => { e.stopPropagation(); onClick(); setMenuOpen(false); }} disabled={mutLoading}
                     className={`w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold ${color} hover:bg-base-200 transition-colors disabled:opacity-50`}>
                     <Icon size={12} /> {label}
                   </button>
@@ -1544,7 +1387,7 @@ function UserGridCard({ user, onView, onBlock, onResetPwd, onDelete, mutLoading,
             : <><Clock size={9} className="text-warning" /><span className="text-warning">Unverified</span></>}
         </div>
       </div>
-      <button onClick={() => onView(user._id)} className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold bg-primary/8 text-primary hover:bg-primary/15 transition-colors">
+      <button onClick={(e) => { e.stopPropagation(); onView(user._id); }} className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold bg-primary/8 text-primary hover:bg-primary/15 transition-colors">
         <Eye size={11} /> View Details
       </button>
     </motion.div>
@@ -1554,18 +1397,21 @@ function UserGridCard({ user, onView, onBlock, onResetPwd, onDelete, mutLoading,
 // ─────────────────────────────────────────────────────────────────────────────
 // PAGINATION
 // ─────────────────────────────────────────────────────────────────────────────
-function Pagination({ pagination, onPageChange, onLimitChange }) {
-  const { total, page, limit, totalPages } = pagination;
-  const from = (page - 1) * limit + 1;
-  const to   = Math.min(page * limit, total);
+function Pagination({ pagination, limit, onPageChange, onLimitChange }) {
+  const { total, page, totalPages } = pagination;
+  const effectiveLimit = limit || pagination.limit || 20;
+  
+  const from = (page - 1) * effectiveLimit + 1;
+  const to   = Math.min(page * effectiveLimit, total);
+  
   return (
     <div className="flex items-center justify-between p-4 border-t border-base-300">
       <div className="flex items-center gap-2 text-xs text-base-content/60">
         <span>Show</span>
-        <select className="input-field py-1 px-2 text-xs" value={limit} onChange={e => onLimitChange(Number(e.target.value))}>
+        <select className="input-field py-1 px-2 text-xs" value={effectiveLimit} onChange={e => onLimitChange(Number(e.target.value))}>
           {[10,20,50,100].map(n => <option key={n} value={n}>{n}</option>)}
         </select>
-        <span>of <strong className="text-base-content">{total.toLocaleString()}</strong> users ({from}–{to})</span>
+        <span>of <strong className="text-base-content">{total.toLocaleString()}</strong> users ({from > total ? 0 : from}–{to})</span>
       </div>
       <div className="flex items-center gap-1">
         <button onClick={() => onPageChange(page - 1)} disabled={page <= 1} className="w-8 h-8 rounded-lg bg-base-200 hover:bg-base-300 flex items-center justify-center disabled:opacity-30 transition-colors">
@@ -1581,7 +1427,7 @@ function Pagination({ pagination, onPageChange, onLimitChange }) {
             </button>
           );
         })}
-        <button onClick={() => onPageChange(page + 1)} disabled={page >= totalPages} className="w-8 h-8 rounded-lg bg-base-200 hover:bg-base-300 flex items-center justify-center disabled:opacity-30 transition-colors">
+        <button onClick={() => onPageChange(page + 1)} disabled={page >= totalPages || totalPages === 0} className="w-8 h-8 rounded-lg bg-base-200 hover:bg-base-300 flex items-center justify-center disabled:opacity-30 transition-colors">
           <ChevronRight size={14} />
         </button>
       </div>
@@ -1594,21 +1440,21 @@ function Pagination({ pagination, onPageChange, onLimitChange }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function ConfirmDialog({ action, onConfirm, onCancel, loading }) {
   const configs = {
-    block:    { title: 'Block User',     body: 'This will prevent the user from logging in.',              color: 'error',   icon: ShieldOff },
-    unblock:  { title: 'Unblock User',   body: 'The user will regain access to their account.',            color: 'success', icon: Shield    },
-    delete:   { title: 'Delete User',    body: 'Soft delete — user is blocked and email anonymised.',      color: 'error',   icon: Trash2    },
-    resetPwd: { title: 'Reset Password', body: 'A new password is generated and emailed to the user.',     color: 'warning', icon: KeyRound  },
+    block:    { title: 'Block User',     body: 'This will prevent the user from logging in.',             color: 'error',   icon: ShieldOff },
+    unblock:  { title: 'Unblock User',   body: 'The user will regain access to their account.',           color: 'success', icon: Shield    },
+    delete:   { title: 'Delete User',    body: 'Soft delete — user is blocked and email anonymised.',     color: 'error',   icon: Trash2    },
+    resetPwd: { title: 'Reset Password', body: 'A new password is generated and emailed to the user.',    color: 'warning', icon: KeyRound  },
   };
   const cfg  = configs[action?.type] || configs.block;
   const Icon = cfg.icon;
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-60 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}>
       <motion.div initial={{ scale: 0.88, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.88, opacity: 0 }}
         transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-        className="card w-full max-w-sm p-6 space-y-4">
+        className="card w-full max-w-sm p-6 space-y-4 bg-base-100">
         <div className={`w-12 h-12 rounded-2xl bg-${cfg.color}/10 flex items-center justify-center mx-auto`}>
           <Icon size={24} className={`text-${cfg.color}`} />
         </div>
@@ -1616,7 +1462,7 @@ function ConfirmDialog({ action, onConfirm, onCancel, loading }) {
           <h3 className="text-lg font-black text-base-content">{cfg.title}</h3>
           <p className="text-sm text-base-content/60 mt-1">{cfg.body}</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 mt-4">
           <button onClick={onCancel} className="flex-1 btn-secondary py-2 text-sm">Cancel</button>
           <button onClick={onConfirm} disabled={loading}
             className={`flex-1 py-2 text-sm font-bold rounded-lg flex items-center justify-center gap-2 transition-all bg-${cfg.color} text-${cfg.color === 'warning' ? 'base-100' : `${cfg.color}-content`} hover:brightness-110 disabled:opacity-60`}>
@@ -1648,15 +1494,21 @@ export default function UsersManagement() {
   const [confirmAction, setConfirmAction] = useState(null);
   const [viewMode,      setViewMode]      = useState('table');
 
-  useEffect(() => {
-    dispatch(fetchAllUsers({ ...filters, page: pagination.page, limit: pagination.limit }));
-  }, [filters, pagination.page, pagination.limit, dispatch]);
+  const activeLimit = filters.limit || pagination.limit || 20;
 
-  const handleFilterChange = (changes) => dispatch(setFilters(changes));
-  const handleSearch       = (search)  => dispatch(setFilters({ search }));
-  const handleResetFilters = ()        => dispatch(setFilters({ role: '', isBlocked: '', isEmailVerified: '', search: '', sortBy: 'createdAt', sortOrder: 'desc' }));
+  useEffect(() => {
+    dispatch(fetchAllUsers({ 
+      ...filters, 
+      page: pagination.page || 1, 
+      limit: activeLimit 
+    }));
+  }, [filters, pagination.page, activeLimit, dispatch]);
+
+  const handleFilterChange = (changes) => { dispatch(setFilters(changes)); dispatch(setPage(1)); };
+  const handleSearch       = (search)  => { dispatch(setFilters({ search })); dispatch(setPage(1)); };
+  const handleResetFilters = ()        => { dispatch(setFilters({ role: '', isBlocked: '', isEmailVerified: '', search: '', sortBy: 'createdAt', sortOrder: 'desc', limit: 20 })); dispatch(setPage(1)); };
   const handlePageChange   = (page)    => dispatch(setPage(page));
-  const handleLimitChange  = (limit)   => dispatch(setFilters({ limit }));
+  const handleLimitChange  = (limit)   => { dispatch(setFilters({ limit })); dispatch(setPage(1)); };
   const handleBlock        = (user)    => setConfirmAction({ type: user.isBlocked ? 'unblock' : 'block', userId: user._id, user });
   const handleResetPwd     = (userId)  => setConfirmAction({ type: 'resetPwd', userId });
   const handleDelete       = (userId)  => setConfirmAction({ type: 'delete', userId });
@@ -1683,7 +1535,7 @@ export default function UsersManagement() {
           <div>
             <h1 className="text-2xl font-black text-base-content tracking-tight">Users Management</h1>
             <p className="text-sm text-base-content/50 mt-0.5">
-              <strong className="text-base-content">{pagination.total.toLocaleString()}</strong> total users across all roles
+              <strong className="text-base-content">{pagination.total?.toLocaleString() || 0}</strong> total users across all roles
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1696,7 +1548,7 @@ export default function UsersManagement() {
                 title="Grid view"><LayoutGrid size={15} /></button>
             </div>
             <button
-              onClick={() => dispatch(fetchAllUsers({ ...filters, page: pagination.page, limit: pagination.limit }))}
+              onClick={() => dispatch(fetchAllUsers({ ...filters, page: pagination.page, limit: activeLimit }))}
               disabled={listLoading}
               className="w-9 h-9 rounded-xl bg-base-200 hover:bg-base-300 flex items-center justify-center transition-colors"
               title="Refresh"
@@ -1710,7 +1562,7 @@ export default function UsersManagement() {
         </div>
       </div>
 
-      <div className="p-6 space-y-4">
+      <div className="p-6 space-y-4 relative z-10">
 
         {/* ── Analytics ── */}
         <AnalyticsSection users={users} pagination={pagination} />
@@ -1718,8 +1570,8 @@ export default function UsersManagement() {
         {/* ── Role Pills ── */}
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="flex flex-wrap gap-2">
           <button onClick={() => handleFilterChange({ role: '' })}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${filters.role === '' ? 'bg-primary text-primary-content border-primary' : 'bg-base-200 text-base-content/70 border-base-300 hover:border-primary/50'}`}>
-            <Users size={11} />All · {pagination.total.toLocaleString()}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${!filters.role ? 'bg-primary text-primary-content border-primary' : 'bg-base-200 text-base-content/70 border-base-300 hover:border-primary/50'}`}>
+            <Users size={11} />All · {pagination.total?.toLocaleString() || 0}
           </button>
           {ROLES.slice(1).map(r => {
             const Icon = r.icon;
@@ -1733,7 +1585,7 @@ export default function UsersManagement() {
         </motion.div>
 
         {/* ── Table / Grid ── */}
-        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="card overflow-hidden">
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="card overflow-visible">
           <FiltersBar filters={filters} onFilterChange={handleFilterChange} onReset={handleResetFilters} onSearch={handleSearch} />
 
           {listError && (
@@ -1743,7 +1595,7 @@ export default function UsersManagement() {
           )}
 
           {viewMode === 'table' && (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto min-h-[400px]">
               <table className="w-full">
                 <thead>
                   <tr className="bg-base-200/60 border-b border-base-300">
@@ -1770,7 +1622,7 @@ export default function UsersManagement() {
           )}
 
           {viewMode === 'grid' && (
-            <div className="p-4">
+            <div className="p-4 min-h-[400px]">
               {listLoading ? (
                 <div className="flex items-center justify-center py-24"><LoadingSpinner size={32} /></div>
               ) : users.length === 0 ? (
@@ -1788,23 +1640,25 @@ export default function UsersManagement() {
           )}
 
           {pagination.total > 0 && (
-            <Pagination pagination={pagination} onPageChange={handlePageChange} onLimitChange={handleLimitChange} />
+            <Pagination pagination={pagination} limit={activeLimit} onPageChange={handlePageChange} onLimitChange={handleLimitChange} />
           )}
         </motion.div>
       </div>
 
-      {/* ── Overlays ── */}
-      <AnimatePresence>
-        {showCreate && (
-          <CreateUserModal onClose={() => { setShowCreate(false); dispatch(clearErrors()); dispatch(resetUploadState()); }} />
-        )}
-        {viewUserId && (
-          <UserDetailDrawer userId={viewUserId} onClose={() => setViewUserId(null)} />
-        )}
-        {confirmAction && (
-          <ConfirmDialog action={confirmAction} onConfirm={handleConfirm} onCancel={() => setConfirmAction(null)} loading={mutLoading} />
-        )}
-      </AnimatePresence>
+      {/* ── Overlays (Portaled to strictly prevent scrolling bugs) ── */}
+      <ModalsPortal>
+        <AnimatePresence>
+          {showCreate && (
+            <CreateUserModal onClose={() => { setShowCreate(false); dispatch(clearErrors()); dispatch(resetUploadState()); }} />
+          )}
+          {viewUserId && (
+            <UserDetailDrawer userId={viewUserId} onClose={() => setViewUserId(null)} />
+          )}
+          {confirmAction && (
+            <ConfirmDialog action={confirmAction} onConfirm={handleConfirm} onCancel={() => setConfirmAction(null)} loading={mutLoading} />
+          )}
+        </AnimatePresence>
+      </ModalsPortal>
     </div>
   );
 }

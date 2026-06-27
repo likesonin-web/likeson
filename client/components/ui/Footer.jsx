@@ -87,7 +87,7 @@ const Footer = () => {
     return (
       (pathname.startsWith('/rides/') && pathname.endsWith('/tracking')) ||
       pathname.startsWith('/driver/tracking') ||
-      pathname.includes('/tracking')
+      pathname.includes('/tracking') || pathname.includes('/chat')
     );
   }, [pathname]);
 

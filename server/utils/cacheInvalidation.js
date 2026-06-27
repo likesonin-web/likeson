@@ -1,24 +1,6 @@
 import redisClient from "../config/redis.js";
 
-/**
- * ─────────────────────────────────────────────────────────────────────────────
- * Cache Invalidation Helpers
- * ─────────────────────────────────────────────────────────────────────────────
- *
- * Three strategies are supported:
- *
- *  1. invalidateKey(key)          – delete one exact key
- *  2. invalidateKeys(keys[])      – delete multiple exact keys at once
- *  3. invalidatePattern(pattern)  – delete all keys matching a glob pattern
- *                                   (uses SCAN so it's safe on large datasets)
- *
- * Common patterns used across the project
- * ────────────────────────────────────────
- *  "GET:/api/hospitals"           – list cache set by the cache() middleware
- *  "hospital:<id>"                – detail cache set with a custom keyFn
- *  "user:<id>:*"                  – all cached data for one user
- *  "GET:/api/medicines*"          – all medicine list/search pages
- */
+ 
 
 // ── 1. Delete a single exact key ─────────────────────────────────────────────
 export const invalidateKey = async (key) => {

@@ -1,1566 +1,2769 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useDispatch, useSelector } from "react-redux";
-import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
-  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area,
-} from "recharts";
+  Building2, Users, MapPin, Shield, DollarSign, Image, Trash2,
+  Link, Unlink, CheckCircle, XCircle, ToggleLeft, ToggleRight,
+  Upload, Edit3, Settings, Lock, Send, Plus,
+  ChevronRight, ChevronDown, Search, RefreshCw, AlertTriangle,
+  Star, Bed, Stethoscope, Activity,
+  BarChart2, TrendingUp, Camera, X, Check,
+  Hospital, Layers, Zap,
+  Info, Paperclip, LinkIcon,
+} from 'lucide-react';
 import {
-  Hospital, UserRound, ShieldCheck, Trash2, ToggleLeft, ToggleRight,
-  MapPin, Upload, Link2, ImagePlus, BadgeCheck, BadgeX, Settings2,
-  DollarSign, Stethoscope, ChevronDown, ChevronUp, Search, Filter,
-  Plus, Edit3, X, Eye, EyeOff, RefreshCw, AlertTriangle, CheckCircle2,
-  Clock, Building2, Siren, Ambulance, FlaskConical, Droplets,
-  Accessibility, BedDouble, Star, Activity, TrendingUp, Users,
-  FileText, Key, CreditCard, Calendar, Phone, Mail, Globe, MessageSquare,
-  Percent, Hash, Banknote, Lock, Unlink, Link, LayoutDashboard, Zap,
-  ChevronRight, ArrowUpRight, Layers, Shield,
-} from "lucide-react";
+  Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, Legend,
+} from 'recharts';
 
 import {
-  fetchAllHospitals, fetchHospitalById,
-  createHospital, updateHospitalProfile, updateHospitalSettings,
-  updateHospitalSecurity, updateHospitalPlatformFee,
-  uploadHospitalImages, deleteHospitalImage, updateHospitalLocation,
-  linkDoctorToHospital, unlinkDoctorFromHospital,
+  fetchAllHospitals, fetchHospitalById, createHospital,
+  updateHospitalProfile, updateHospitalSettings, updateHospitalSecurity,
+  updateHospitalConsultationPricing,
+  resendHospitalManagerCredentials, uploadHospitalImages, deleteHospitalImage,
+  updateHospitalLocation, linkDoctorToHospital, unlinkDoctorFromHospital,
   verifyHospital, toggleHospitalActive, deleteHospital,
-  fetchAllDoctors, createDoctorProfile, updateDoctorProfile,
-  updateDoctorSettings, updateDoctorAvailability, updateDoctorBankDetails,
-  updateDoctorKyc, uploadDoctorPhoto, updateDoctorSecurity,
-  updateDoctorPlatformFee, updateDoctorPartnership, verifyDoctorKyc,
-  toggleDoctorActive, deleteDoctorProfile,
-  clearSelectedHospital, clearSelectedDoctor, clearError,
-  selectHospitals, selectSelectedHospital, selectHospitalLoading,
-  selectHospitalError, selectDoctors, selectSelectedDoctor,
-  selectHospitalTotal, selectDoctorTotal,
-} from "@/store/slices/hospitalSlice";
+  fetchAllDoctors, fetchDoctorsByHospital,
+  createDoctorProfile, updateDoctorProfile, updateDoctorSettings,
+  updateDoctorBankDetails, updateDoctorKyc,
+  updateDoctorPlatformFee,
+  updateDoctorPartnership, verifyDoctorKyc, toggleDoctorActive,
+  resendDoctorCredentials, deleteDoctorProfile,
+  fetchHospitalEffectivePricing,
+  clearSelectedHospital, clearHospitalDoctors,
+} from '@/store/slices/hospitalSlice';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const HOSPITAL_TYPES = ["Multi-Specialty","Super-Specialty","Clinic","Diagnostic Center","Government","Nursing Home","Trust"];
-const SPECIALIZATIONS = ["General Physician","Cardiologist","Neurologist","Pediatrician","Oncologist","Orthopedic Surgeon","Gastroenterologist","Gynecologist","Dermatologist","Urologist","Psychiatry","Physiotherapist"];
-const ACCREDITATIONS  = ["NABH","NABL","JCI","ISO","AHPI","Other"];
-const SETTLEMENT_OPTS = ["weekly","biweekly","monthly"];
-const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-const KYC_STATUSES = ["not-submitted","pending","under-review","verified","rejected"];
-const PARTNERSHIP_STATUSES = ["Pending","Active","Inactive","Suspended"];
+import {
+  selectHospitals, selectSelectedHospital, selectHospitalDoctors,
+  selectHospitalLoading, selectHospitalError,
+  selectDoctors, selectHospitalTotal, selectHospitalPages,
+} from '@/store/slices/hospitalSlice';
 
-// ─── Animation Variants ───────────────────────────────────────────────────────
-const fadeUp = {
-  hidden: { opacity: 0, y: 20 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.23, 1, 0.32, 1] } }
-};
-const stagger = { visible: { transition: { staggerChildren: 0.06 } } };
-const slideRight = {
-  hidden: { opacity: 0, x: -16 },
-  visible: { opacity: 1, x: 0, transition: { duration: 0.4, ease: [0.23, 1, 0.32, 1] } }
-};
-const scaleUp = {
-  hidden: { opacity: 0, scale: 0.96 },
-  visible: { opacity: 1, scale: 1, transition: { duration: 0.35, ease: [0.23, 1, 0.32, 1] } }
-};
+// ─────────────────────────────────────────────────────────────────────────────
+//  CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ─── Design Tokens ────────────────────────────────────────────────────────────
-const tokens = {
-  primary: "var(--color-primary)",
-  secondary: "var(--color-secondary)",
-  success: "var(--color-success)",
-  warning: "var(--color-warning)",
-  error: "var(--color-error)",
-};
-
-const chartPalette = [
-  "var(--color-primary)", "var(--color-secondary)", "var(--color-success)",
-  "var(--color-warning)", "var(--color-error)", "var(--color-accent)",
+const HOSPITAL_TYPES  = ['Multi-Specialty', 'Super-Specialty', 'Trust', 'Government', 'Clinic', 'Nursing Home'];
+const MANAGED_TYPES   = ['Multi-Specialty', 'Super-Specialty', 'Trust', 'Government'];
+const SPECIALIZATIONS = [
+  'General Physician', 'Cardiologist', 'Neurologist', 'Pediatrician',
+  'Oncologist', 'Orthopedic Surgeon', 'Gastroenterologist', 'Gynecologist',
+  'Dermatologist', 'Urologist', 'Psychiatry', 'Physiotherapist',
+];
+const ACCREDITATIONS       = ['NABH', 'NABL', 'JCI', 'ISO', 'AHPI', 'Other'];
+const PARTNERSHIP_STATUSES = ['Pending', 'Active', 'Inactive', 'Suspended'];
+const INDIAN_STATES = [
+  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa',
+  'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala',
+  'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland',
+  'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura',
+  'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Jammu & Kashmir',
+  'Ladakh', 'Puducherry',
+];
+const ACCEPTED_SCHEMES = [
+  'Ayushman Bharat', 'PMJAY', 'CGHS', 'ECHS', 'ESI',
+  'State Govt Scheme', 'Insurance', 'Cash Only',
+];
+const SPECIALTIES_LIST = [
+  'Cardiology', 'Neurology', 'Oncology', 'Orthopedics', 'Gynecology',
+  'Pediatrics', 'Dermatology', 'Urology', 'Psychiatry', 'Gastroenterology',
+  'Pulmonology', 'Nephrology', 'Endocrinology', 'Rheumatology', 'ENT',
+  'Ophthalmology', 'Dental', 'Physiotherapy', 'Radiology', 'Pathology',
+];
+const FACILITIES_LIST = [
+  'ICU', 'NICU', 'PICU', 'Burns Unit', 'Dialysis', 'Cath Lab',
+  'Operation Theatre', 'Modular OT', 'Blood Bank', 'Pharmacy', 'Ambulance',
+  'Canteen', 'Parking', 'WiFi', 'ATM', 'Wheelchair Access',
 ];
 
-// ══════════════════════════════════════════════════════════════════════════════
-// PRIMITIVES
-// ══════════════════════════════════════════════════════════════════════════════
+const SECTION_TABS = [
+  { id: 'overview',     label: 'Overview',    icon: BarChart2   },
+  { id: 'profile',      label: 'Profile',     icon: Edit3       },
+  { id: 'settings',     label: 'Settings',    icon: Settings    },
+  { id: 'security',     label: 'Security',    icon: Lock        },
+  { id: 'pricing',      label: 'Pricing',     icon: DollarSign  },
+  { id: 'images',       label: 'Images',      icon: Image       },
+  { id: 'location',     label: 'Location',    icon: MapPin      },
+  { id: 'doctors',      label: 'Doctors',     icon: Stethoscope },
+  { id: 'verification', label: 'Verify',      icon: Shield      },
+];
 
-function Input({ className = "", label, note, ...props }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      {label && <label className="hm-label">{label}</label>}
-      <input className={`hm-input ${className}`} {...props} />
-      {note && <p className="hm-note">{note}</p>}
+const CHART_COLORS = [
+  'var(--chart-1)', 
+  'var(--chart-2)', 
+  'var(--chart-3)', 
+  'var(--chart-4)', 
+  'var(--chart-5)', 
+  'var(--chart-6)'
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  TINY REUSABLE COMPONENTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const Spinner = ({ size = 'sm' }) => (
+  <div
+    className={`inline-block rounded-full border-2 border-primary/30 border-t-primary animate-spin ${
+      size === 'sm' ? 'w-4 h-4' : 'w-6 h-6'
+    }`}
+  />
+);
+
+const SectionCard = ({ title, icon: Icon, children, action }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 12 }}
+    animate={{ opacity: 1, y: 0 }}
+    className="bg-base-100 border border-base-300 rounded-2xl overflow-hidden shadow-sm"
+  >
+    <div className="flex items-center justify-between px-5 py-4 border-b border-base-300 bg-base-200">
+      <div className="flex items-center gap-2.5">
+        {Icon && <Icon size={16} className="text-primary" />}
+        <span className="font-bold text-sm text-base-content font-montserrat">{title}</span>
+      </div>
+      {action}
     </div>
-  );
-}
+    <div className="p-5">{children}</div>
+  </motion.div>
+);
 
-function Textarea({ className = "", label, note, ...props }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      {label && <label className="hm-label">{label}</label>}
-      <textarea className={`hm-input resize-none ${className}`} rows={3} {...props} />
-      {note && <p className="hm-note">{note}</p>}
-    </div>
-  );
-}
+const Field = ({ label, note, children }) => (
+  <div className="flex flex-col gap-1">
+    {label && (
+      <label className="text-xs font-semibold text-base-content/70 uppercase tracking-wider">
+        {label}
+      </label>
+    )}
+    {children}
+    {note && (
+      <span className="flex items-center gap-1 text-[10px] text-base-content/40 leading-snug">
+        <Info size={9} className="shrink-0" />
+        {note}
+      </span>
+    )}
+  </div>
+);
 
-function Select({ className = "", label, note, children, ...props }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      {label && <label className="hm-label">{label}</label>}
-      <select className={`hm-input ${className}`} {...props}>{children}</select>
-      {note && <p className="hm-note">{note}</p>}
-    </div>
-  );
-}
+const InputField = ({ label, note, value, onChange, type = 'text', placeholder, disabled, required }) => (
+  <Field label={label} note={note}>
+    <input
+      type={type}
+      value={value ?? ''}
+      onChange={(e) => onChange?.(e.target.value)}
+      placeholder={placeholder}
+      disabled={disabled}
+      required={required}
+      className="input-field w-full text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+    />
+  </Field>
+);
 
-function Toggle({ checked, onChange, label }) {
-  return (
-    <label className="flex items-center gap-2.5 cursor-pointer group">
-      <button type="button" onClick={() => onChange(!checked)}
-        className={`relative w-10 h-5 rounded-full transition-all duration-300 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 ${checked ? "bg-primary shadow-[0_0_10px_var(--color-primary,_rgba(99,102,241,0.5))]" : "bg-base-300"}`}>
-        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-md transition-transform duration-300 ${checked ? "translate-x-5" : ""}`} />
-      </button>
-      {label && <span className="text-xs font-semibold text-base-content/70 group-hover:text-base-content transition-colors">{label}</span>}
+const SelectField = ({ label, note, value, onChange, options, disabled, placeholder }) => (
+  <Field label={label} note={note}>
+    <select
+      value={value ?? ''}
+      onChange={(e) => onChange?.(e.target.value)}
+      disabled={disabled}
+      className="input-field w-full text-sm disabled:opacity-50"
+    >
+      <option value="">{placeholder ?? 'Select…'}</option>
+      {options.map((o) => (
+        <option key={typeof o === 'string' ? o : o.value} value={typeof o === 'string' ? o : o.value}>
+          {typeof o === 'string' ? o : o.label}
+        </option>
+      ))}
+    </select>
+  </Field>
+);
+
+const TextareaField = ({ label, note, value, onChange, rows = 3, placeholder }) => (
+  <Field label={label} note={note}>
+    <textarea
+      value={value ?? ''}
+      onChange={(e) => onChange?.(e.target.value)}
+      rows={rows}
+      placeholder={placeholder}
+      className="input-field w-full text-sm resize-none"
+    />
+  </Field>
+);
+
+const Toggle = ({ label, note, checked, onChange }) => (
+  <div className="flex flex-col gap-0.5">
+    <label className="flex items-center gap-3 cursor-pointer group">
+      <span className="text-sm text-base-content/80 font-medium">{label}</span>
+      <div
+        onClick={() => onChange(!checked)}
+        className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${
+          checked ? 'bg-primary' : 'bg-base-300'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
+            checked ? 'translate-x-5' : ''
+          }`}
+        />
+      </div>
     </label>
-  );
-}
+    {note && (
+      <span className="flex items-center gap-1 text-[10px] text-base-content/40 ml-0.5">
+        <Info size={9} />
+        {note}
+      </span>
+    )}
+  </div>
+);
 
-function Pill({ children, active, onClick }) {
+const MultiSelect = ({ label, note, options, selected, onChange }) => {
+  const toggle = (v) => onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
   return (
-    <button type="button" onClick={onClick}
-      className={`px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border transition-all duration-200 ${active ? "bg-primary text-primary-content border-primary shadow-[0_0_12px_var(--color-primary,rgba(99,102,241,0.4))]" : "border-base-300 text-base-content/50 hover:border-primary/60 hover:text-base-content"}`}>
-      {children}
-    </button>
-  );
-}
-
-function StatusBadge({ children, variant = "info" }) {
-  const map = {
-    success: "hm-badge-success",
-    warning: "hm-badge-warning",
-    error:   "hm-badge-error",
-    info:    "hm-badge-info",
-    primary: "hm-badge-primary",
-  };
-  return <span className={`hm-badge ${map[variant]}`}>{children}</span>;
-}
-
-function Btn({ children, variant = "primary", size = "md", loading = false, className = "", icon, ...props }) {
-  const base = "inline-flex items-center gap-2 font-bold rounded-lg transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-40 disabled:pointer-events-none whitespace-nowrap";
-  const sizes = { xs: "px-2.5 py-1 text-[11px]", sm: "px-3 py-1.5 text-xs", md: "px-4 py-2 text-sm", lg: "px-6 py-3 text-sm" };
-  const variants = {
-    primary:   "hm-btn-primary focus-visible:ring-primary",
-    secondary: "hm-btn-secondary focus-visible:ring-primary",
-    success:   "hm-btn-success focus-visible:ring-success",
-    danger:    "hm-btn-danger focus-visible:ring-error",
-    ghost:     "hm-btn-ghost focus-visible:ring-primary",
-    warning:   "hm-btn-warning focus-visible:ring-warning",
-    subtle:    "hm-btn-subtle focus-visible:ring-primary",
-  };
-  return (
-    <button className={`${base} ${sizes[size]} ${variants[variant]} ${className}`} disabled={loading} {...props}>
-      {loading ? <RefreshCw size={13} className="animate-spin" /> : icon}
-      {children}
-    </button>
-  );
-}
-
-// ─── Section Card ─────────────────────────────────────────────────────────────
-function SectionCard({ title, icon: Icon, children, className = "", collapsible = false, defaultOpen = true, accent }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className={`hm-section-card ${className}`}>
-      <button onClick={() => collapsible && setOpen(o => !o)}
-        className={`w-full flex items-center gap-3 px-5 py-3.5 ${collapsible ? "cursor-pointer" : "cursor-default"} transition-colors`}>
-        <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${accent || "bg-primary/15"}`}>
-          <Icon size={14} className="text-primary" />
-        </div>
-        <span className="hm-section-title">{title}</span>
-        {collapsible && (
-          <ChevronDown size={14} className={`ml-auto text-base-content/30 transition-transform duration-300 ${open ? "rotate-180" : ""}`} />
-        )}
-      </button>
-      <AnimatePresence initial={false}>
-        {(!collapsible || open) && (
-          <motion.div key="c"
-            initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
-            className="overflow-hidden">
-            <div className="px-5 pb-5">{children}</div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// ─── Confirm Dialog ───────────────────────────────────────────────────────────
-function ConfirmDialog({ open, message, onConfirm, onCancel, danger = true }) {
-  return (
-    <AnimatePresence>
-      {open && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
-          <motion.div initial={{ scale: 0.88, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.88, opacity: 0 }}
-            transition={{ duration: 0.25, ease: [0.23, 1, 0.32, 1] }}
-            className="hm-modal-surface max-w-sm w-full p-6">
-            <div className="flex items-start gap-4 mb-5">
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${danger ? "bg-error/15" : "bg-warning/15"}`}>
-                <AlertTriangle size={18} className={danger ? "text-error" : "text-warning"} />
-              </div>
-              <div>
-                <h3 className="font-bold text-base-content text-sm mb-1">Confirm Action</h3>
-                <p className="text-xs text-base-content/60 leading-relaxed">{message}</p>
-              </div>
-            </div>
-            <div className="flex gap-2.5 justify-end">
-              <Btn variant="ghost" size="sm" onClick={onCancel}>Cancel</Btn>
-              <Btn variant={danger ? "danger" : "warning"} size="sm" onClick={onConfirm}>Confirm</Btn>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-}
-
-// ─── Modal ────────────────────────────────────────────────────────────────────
-function Modal({ open, onClose, title, subtitle, icon: Icon, children, maxW = "max-w-2xl", accentColor }) {
-  return (
-    <AnimatePresence>
-      {open && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[200] flex items-start justify-center bg-black/65 backdrop-blur-md p-4 overflow-y-auto">
-          <motion.div initial={{ scale: 0.94, opacity: 0, y: 24 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0, y: 8 }}
-            transition={{ duration: 0.32, ease: [0.23, 1, 0.32, 1] }}
-            className={`hm-modal-surface w-full ${maxW} my-8`}>
-            {/* Header */}
-            <div className="hm-modal-header">
-              <div className="flex items-center gap-3 flex-1 min-w-0">
-                {Icon && (
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${accentColor || "bg-primary/15"}`}>
-                    <Icon size={16} className="text-primary" />
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <h2 className="font-bold text-sm text-base-content truncate">{title}</h2>
-                  {subtitle && <p className="text-[11px] text-base-content/45 mt-0.5 truncate">{subtitle}</p>}
-                </div>
-              </div>
-              <button onClick={onClose}
-                className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-base-300 transition-colors text-base-content/50 hover:text-base-content shrink-0">
-                <X size={15} />
-              </button>
-            </div>
-            {/* Body */}
-            <div className="p-5 space-y-4">{children}</div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-}
-
-// ─── InfoBanner ───────────────────────────────────────────────────────────────
-function InfoBanner({ children, variant = "info" }) {
-  const map = {
-    info:    "bg-info/8 border-info/25 text-info",
-    warning: "bg-warning/8 border-warning/25 text-warning",
-    success: "bg-success/8 border-success/25 text-success",
-    error:   "bg-error/8 border-error/25 text-error",
-  };
-  return (
-    <div className={`border rounded-xl p-3.5 text-[11px] leading-relaxed font-medium ${map[variant]}`}>
-      {children}
-    </div>
-  );
-}
-
-// ─── Stat Card ────────────────────────────────────────────────────────────────
-function StatCard({ label, value, icon: Icon, trend, color = "primary", sublabel }) {
-  const colorMap = {
-    primary:   { bg: "bg-primary/10",   text: "text-primary",   glow: "shadow-[0_0_20px_var(--color-primary,rgba(99,102,241,0.2))]" },
-    secondary: { bg: "bg-secondary/10", text: "text-secondary", glow: "shadow-[0_0_20px_var(--color-secondary,rgba(99,102,241,0.2))]" },
-    success:   { bg: "bg-success/10",   text: "text-success",   glow: "" },
-    warning:   { bg: "bg-warning/10",   text: "text-warning",   glow: "" },
-    error:     { bg: "bg-error/10",     text: "text-error",     glow: "" },
-    info:      { bg: "bg-info/10",      text: "text-info",      glow: "" },
-  };
-  const c = colorMap[color] || colorMap.primary;
-
-  return (
-    <motion.div variants={fadeUp} className="hm-stat-card group">
-      <div className="flex items-start justify-between mb-4">
-        <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${c.bg} transition-all duration-300 group-hover:scale-110`}>
-          <Icon size={20} className={c.text} />
-        </div>
-        {trend !== undefined && (
-          <span className={`flex items-center gap-1 text-[11px] font-bold ${trend >= 0 ? "text-success" : "text-error"}`}>
-            <ArrowUpRight size={12} className={trend < 0 ? "rotate-180" : ""} />
-            {Math.abs(trend)}%
-          </span>
-        )}
-      </div>
-      <p className="hm-stat-value">{value}</p>
-      <p className="hm-stat-label">{label}</p>
-      {sublabel && <p className="text-[10px] text-base-content/35 mt-0.5">{sublabel}</p>}
-    </motion.div>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// HOSPITAL FORMS
-// ══════════════════════════════════════════════════════════════════════════════
-
-function CreateHospitalModal({ open, onClose, onSubmit, loading }) {
-  const [form, setForm] = useState({
-    name: "", hospitalType: "Multi-Specialty", description: "",
-    contact: { phone: "", email: "", emergencyPhone: "", alternatePhone: "", website: "", whatsapp: "" },
-    address: { line1: "", line2: "", landmark: "", city: "Vijayawada", state: "Andhra Pradesh", pincode: "" },
-    registrationDetails: { licenseNumber: "", gstNumber: "", panNumber: "" },
-    specialties: "", facilities: "", acceptedSchemes: "",
-    bedCount: { total: 0, icu: 0 }, accreditations: [],
-    isEmergencyReady: false, hasICU: false, hasBloodBank: false,
-    hasPharmacy: false, hasDiagnostics: false, hasAmbulance: false,
-    hasWheelchairAccess: false, is24x7: false, nabledLabAvailable: false,
-    googleMapsUrl: "",
-  });
-  const set = (path, val) => setForm(prev => {
-    const keys = path.split(".");
-    const next = { ...prev };
-    let cur = next;
-    for (let i = 0; i < keys.length - 1; i++) { cur[keys[i]] = { ...cur[keys[i]] }; cur = cur[keys[i]]; }
-    cur[keys.at(-1)] = val; return next;
-  });
-  const handleSubmit = () => onSubmit({
-    ...form,
-    specialties: form.specialties.split(",").map(s => s.trim()).filter(Boolean),
-    facilities: form.facilities.split(",").map(s => s.trim()).filter(Boolean),
-    acceptedSchemes: form.acceptedSchemes.split(",").map(s => s.trim()).filter(Boolean),
-  });
-
-  const flags = [
-    { key: "isEmergencyReady", label: "Emergency Ready", icon: Siren },
-    { key: "hasICU", label: "ICU", icon: Activity },
-    { key: "hasBloodBank", label: "Blood Bank", icon: Droplets },
-    { key: "hasPharmacy", label: "Pharmacy", icon: Pill },
-    { key: "hasDiagnostics", label: "Diagnostics", icon: FlaskConical },
-    { key: "hasAmbulance", label: "Ambulance", icon: Ambulance },
-    { key: "hasWheelchairAccess", label: "Wheelchair", icon: Accessibility },
-    { key: "is24x7", label: "24×7", icon: Clock },
-    { key: "nabledLabAvailable", label: "NABL Lab", icon: Shield },
-  ];
-
-  return (
-    <Modal open={open} onClose={onClose} title="Create New Hospital" subtitle="Register a hospital on the platform" icon={Building2} maxW="max-w-4xl">
-      <motion.div variants={stagger} initial="hidden" animate="visible" className="space-y-4">
-        <SectionCard title="Basic Identity" icon={Building2} collapsible defaultOpen>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1">
-            <Input label="Hospital Name *" value={form.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Apollo Hospitals, Vijayawada" note="Official registered name" />
-            <Select label="Hospital Type *" value={form.hospitalType} onChange={e => set("hospitalType", e.target.value)} note="Primary category">
-              {HOSPITAL_TYPES.map(t => <option key={t}>{t}</option>)}
-            </Select>
-            <Textarea label="Description" className="md:col-span-2" value={form.description} onChange={e => set("description", e.target.value)} placeholder="Describe services, mission, and key features..." maxLength={1000} note="Public-facing overview (max 1000 chars)" />
-            <Input label="Google Maps URL" value={form.googleMapsUrl} onChange={e => set("googleMapsUrl", e.target.value)} placeholder="https://maps.google.com/?q=..." note="For patient navigation" />
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Contact Details" icon={Phone} collapsible>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1">
-            <Input label="Phone *" value={form.contact.phone} onChange={e => set("contact.phone", e.target.value)} placeholder="+91 98765 43210" note="Primary reception number" />
-            <Input label="Email" type="email" value={form.contact.email} onChange={e => set("contact.email", e.target.value)} placeholder="info@hospital.com" />
-            <Input label="Emergency Phone" value={form.contact.emergencyPhone} onChange={e => set("contact.emergencyPhone", e.target.value)} placeholder="+91 99999 00000" note="24/7 emergency helpline" />
-            <Input label="Alternate Phone" value={form.contact.alternatePhone} onChange={e => set("contact.alternatePhone", e.target.value)} placeholder="+91 91234 56789" />
-            <Input label="Website" value={form.contact.website} onChange={e => set("contact.website", e.target.value)} placeholder="https://hospital.com" />
-            <Input label="WhatsApp" value={form.contact.whatsapp} onChange={e => set("contact.whatsapp", e.target.value)} placeholder="+91 98765 43210" />
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Address" icon={MapPin} collapsible>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1">
-            <Input label="Address Line 1 *" className="md:col-span-2" value={form.address.line1} onChange={e => set("address.line1", e.target.value)} placeholder="123, MG Road, Benz Circle" />
-            <Input label="Address Line 2" value={form.address.line2} onChange={e => set("address.line2", e.target.value)} placeholder="2nd Floor, Block B" />
-            <Input label="Landmark" value={form.address.landmark} onChange={e => set("address.landmark", e.target.value)} placeholder="Near Benz Circle Flyover" />
-            <Input label="City" value={form.address.city} onChange={e => set("address.city", e.target.value)} placeholder="Vijayawada" />
-            <Input label="State" value={form.address.state} onChange={e => set("address.state", e.target.value)} placeholder="Andhra Pradesh" />
-            <Input label="PIN Code *" value={form.address.pincode} onChange={e => set("address.pincode", e.target.value)} placeholder="520001" maxLength={6} />
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Registration / Legal" icon={FileText} collapsible>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-1">
-            <Input label="License Number *" value={form.registrationDetails.licenseNumber} onChange={e => set("registrationDetails.licenseNumber", e.target.value)} placeholder="AP/HOS/2024/001" note="Unique registration number" />
-            <Input label="GST Number" value={form.registrationDetails.gstNumber} onChange={e => set("registrationDetails.gstNumber", e.target.value)} placeholder="37AABCU9603R1ZX" maxLength={15} />
-            <Input label="PAN Number" value={form.registrationDetails.panNumber} onChange={e => set("registrationDetails.panNumber", e.target.value)} placeholder="ABCDE1234F" maxLength={10} />
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Specialties & Facilities" icon={Stethoscope} collapsible>
-          <div className="space-y-3 mt-1">
-            <Input label="Specialties" value={form.specialties} onChange={e => set("specialties", e.target.value)} placeholder="Cardiology, Neurology, Orthopedics" note="Comma-separated" />
-            <Input label="Facilities" value={form.facilities} onChange={e => set("facilities", e.target.value)} placeholder="ICU, OT, Blood Bank, Cafeteria" note="Comma-separated" />
-            <Input label="Accepted Schemes" value={form.acceptedSchemes} onChange={e => set("acceptedSchemes", e.target.value)} placeholder="Ayushman Bharat, CGHS, ESI" note="Comma-separated" />
-            <div>
-              <label className="hm-label mb-2 block">Accreditations</label>
-              <div className="flex flex-wrap gap-1.5">
-                {ACCREDITATIONS.map(a => (
-                  <Pill key={a} active={form.accreditations.includes(a)} onClick={() => set("accreditations", form.accreditations.includes(a) ? form.accreditations.filter(x => x !== a) : [...form.accreditations, a])}>{a}</Pill>
-                ))}
-              </div>
-            </div>
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Bed Count & Flags" icon={BedDouble} collapsible>
-          <div className="mt-1 space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <Input label="Total Beds" type="number" min={0} value={form.bedCount.total} onChange={e => set("bedCount.total", +e.target.value)} placeholder="250" note="Inpatient capacity" />
-              <Input label="ICU Beds" type="number" min={0} value={form.bedCount.icu} onChange={e => set("bedCount.icu", +e.target.value)} placeholder="20" />
-            </div>
-            <div className="hm-flags-grid">
-              {flags.map(({ key, label, icon: FlagIcon }) => (
-                <div key={key} className="hm-flag-item">
-                  <FlagIcon size={13} className="text-primary/60 shrink-0" />
-                  <Toggle checked={form[key]} onChange={v => set(key, v)} label={label} />
-                </div>
-              ))}
-            </div>
-          </div>
-        </SectionCard>
-      </motion.div>
-
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} onClick={handleSubmit} icon={<Plus size={14} />}>Create Hospital</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UpdateHospitalProfileModal({ open, onClose, hospital, onSubmit, loading }) {
-  const [form, setForm] = useState({ name: "", description: "", hospitalType: "Multi-Specialty", googleMapsUrl: "", logo: "", images: "", specialties: "", facilities: "", acceptedSchemes: "", contact: {}, address: {}, accreditations: [], nabledLabAvailable: false });
-  useEffect(() => {
-    if (hospital) setForm({ name: hospital.name || "", description: hospital.description || "", hospitalType: hospital.hospitalType || "Multi-Specialty", googleMapsUrl: hospital.googleMapsUrl || "", logo: hospital.logo || "", images: (hospital.images || []).join(", "), specialties: (hospital.specialties || []).join(", "), facilities: (hospital.facilities || []).join(", "), acceptedSchemes: (hospital.acceptedSchemes || []).join(", "), contact: { ...hospital.contact }, address: { ...hospital.address }, accreditations: hospital.accreditations || [], nabledLabAvailable: hospital.nabledLabAvailable || false });
-  }, [hospital]);
-  const set = (path, val) => setForm(prev => { const keys = path.split("."); const next = { ...prev }; let cur = next; for (let i = 0; i < keys.length - 1; i++) { cur[keys[i]] = { ...cur[keys[i]] }; cur = cur[keys[i]]; } cur[keys.at(-1)] = val; return next; });
-  if (!hospital) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Edit Hospital Profile" subtitle={hospital.name} icon={Edit3} maxW="max-w-3xl">
-      <div className="space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Input label="Hospital Name *" value={form.name} onChange={e => set("name", e.target.value)} />
-          <Select label="Hospital Type *" value={form.hospitalType} onChange={e => set("hospitalType", e.target.value)}>
-            {HOSPITAL_TYPES.map(t => <option key={t}>{t}</option>)}
-          </Select>
-          <Textarea label="Description" className="md:col-span-2" value={form.description} onChange={e => set("description", e.target.value)} maxLength={1000} />
-        </div>
-        <Input label="Logo URL" value={form.logo} onChange={e => set("logo", e.target.value)} placeholder="https://ik.imagekit.io/.../logo.png" />
-        <Textarea label="Gallery Image URLs" value={form.images} onChange={e => set("images", e.target.value)} placeholder="Comma-separated CDN URLs" rows={2} />
-        <Input label="Google Maps URL" value={form.googleMapsUrl} onChange={e => set("googleMapsUrl", e.target.value)} />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Input label="Phone" value={form.contact?.phone || ""} onChange={e => set("contact.phone", e.target.value)} placeholder="+91 98765 43210" />
-          <Input label="Email" value={form.contact?.email || ""} onChange={e => set("contact.email", e.target.value)} />
-          <Input label="Specialties" value={form.specialties} onChange={e => set("specialties", e.target.value)} placeholder="Comma-separated" />
-          <Input label="Accepted Schemes" value={form.acceptedSchemes} onChange={e => set("acceptedSchemes", e.target.value)} placeholder="Comma-separated" />
-        </div>
-        <div>
-          <label className="hm-label mb-2 block">Accreditations</label>
-          <div className="flex flex-wrap gap-1.5">
-            {ACCREDITATIONS.map(a => <Pill key={a} active={form.accreditations?.includes(a)} onClick={() => set("accreditations", form.accreditations?.includes(a) ? form.accreditations.filter(x => x !== a) : [...(form.accreditations || []), a])}>{a}</Pill>)}
-          </div>
-        </div>
-        <Toggle checked={form.nabledLabAvailable} onChange={v => set("nabledLabAvailable", v)} label="NABL Lab Available" />
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} icon={<Edit3 size={14} />} onClick={() => onSubmit({ id: hospital._id, ...form, logo: form.logo || null, images: form.images ? form.images.split(",").map(s => s.trim()).filter(Boolean) : [], specialties: form.specialties.split(",").map(s => s.trim()).filter(Boolean), facilities: form.facilities.split(",").map(s => s.trim()).filter(Boolean), acceptedSchemes: form.acceptedSchemes.split(",").map(s => s.trim()).filter(Boolean) })}>Update Profile</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UpdateHospitalSettingsModal({ open, onClose, hospital, onSubmit, loading }) {
-  const [form, setForm] = useState({ isEmergencyReady: false, hasICU: false, hasBloodBank: false, hasPharmacy: false, hasDiagnostics: false, hasAmbulance: false, hasWheelchairAccess: false, is24x7: false, nabledLabAvailable: false, bedCount: { total: 0, icu: 0 }, acceptedSchemes: "" });
-  useEffect(() => { if (hospital) setForm({ isEmergencyReady: hospital.isEmergencyReady || false, hasICU: hospital.hasICU || false, hasBloodBank: hospital.hasBloodBank || false, hasPharmacy: hospital.hasPharmacy || false, hasDiagnostics: hospital.hasDiagnostics || false, hasAmbulance: hospital.hasAmbulance || false, hasWheelchairAccess: hospital.hasWheelchairAccess || false, is24x7: hospital.is24x7 || false, nabledLabAvailable: hospital.nabledLabAvailable || false, bedCount: { ...hospital.bedCount } || { total: 0, icu: 0 }, acceptedSchemes: (hospital.acceptedSchemes || []).join(", ") }); }, [hospital]);
-  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
-  const setNested = (path, val) => setForm(prev => { const [k1, k2] = path.split("."); return { ...prev, [k1]: { ...prev[k1], [k2]: val } }; });
-  if (!hospital) return null;
-  const flags = [{ key: "isEmergencyReady", label: "Emergency Ready", icon: Siren }, { key: "hasICU", label: "Has ICU", icon: Activity }, { key: "hasBloodBank", label: "Blood Bank", icon: Droplets }, { key: "hasPharmacy", label: "Pharmacy", icon: Pill }, { key: "hasDiagnostics", label: "Diagnostics", icon: FlaskConical }, { key: "hasAmbulance", label: "Ambulance", icon: Ambulance }, { key: "hasWheelchairAccess", label: "Wheelchair", icon: Accessibility }, { key: "is24x7", label: "24×7 Open", icon: Clock }, { key: "nabledLabAvailable", label: "NABL Lab", icon: Shield }];
-  return (
-    <Modal open={open} onClose={onClose} title="Hospital Settings" subtitle={hospital.name} icon={Settings2}>
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Total Beds" type="number" min={0} value={form.bedCount.total} onChange={e => setNested("bedCount.total", +e.target.value)} note="Inpatient capacity" />
-          <Input label="ICU Beds" type="number" min={0} value={form.bedCount.icu} onChange={e => setNested("bedCount.icu", +e.target.value)} />
-        </div>
-        <Input label="Accepted Schemes" value={form.acceptedSchemes} onChange={e => set("acceptedSchemes", e.target.value)} placeholder="CGHS, ESI, Ayushman Bharat" note="Comma-separated" />
-        <div className="hm-flags-grid">
-          {flags.map(({ key, label, icon: FlagIcon }) => (
-            <div key={key} className="hm-flag-item"><FlagIcon size={13} className="text-primary/60 shrink-0" /><Toggle checked={form[key]} onChange={v => set(key, v)} label={label} /></div>
-          ))}
-        </div>
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} icon={<Settings2 size={14} />} onClick={() => onSubmit({ id: hospital._id, ...form, acceptedSchemes: form.acceptedSchemes.split(",").map(s => s.trim()).filter(Boolean) })}>Save Settings</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UpdateHospitalSecurityModal({ open, onClose, hospital, onSubmit, loading }) {
-  const [form, setForm] = useState({ licenseNumber: "", gstNumber: "", panNumber: "", documentUrl: "", licenseExpiry: "" });
-  useEffect(() => { if (hospital?.registrationDetails) { const r = hospital.registrationDetails; setForm({ licenseNumber: r.licenseNumber || "", gstNumber: r.gstNumber || "", panNumber: r.panNumber || "", documentUrl: r.documentUrl || "", licenseExpiry: r.licenseExpiry ? r.licenseExpiry.split("T")[0] : "" }); } }, [hospital]);
-  if (!hospital) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Registration Details" subtitle={hospital.name} icon={Lock}>
-      <div className="space-y-3">
-        <Input label="License Number" value={form.licenseNumber} onChange={e => setForm(p => ({ ...p, licenseNumber: e.target.value }))} placeholder="AP/HOS/2024/001" note="Must be unique on the platform" />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Input label="GST Number" value={form.gstNumber} onChange={e => setForm(p => ({ ...p, gstNumber: e.target.value }))} placeholder="37AABCU9603R1ZX" maxLength={15} />
-          <Input label="PAN Number" value={form.panNumber} onChange={e => setForm(p => ({ ...p, panNumber: e.target.value.toUpperCase() }))} placeholder="ABCDE1234F" maxLength={10} />
-          <Input label="License Expiry" type="date" value={form.licenseExpiry} onChange={e => setForm(p => ({ ...p, licenseExpiry: e.target.value }))} />
-          <Input label="Document URL" value={form.documentUrl} onChange={e => setForm(p => ({ ...p, documentUrl: e.target.value }))} placeholder="https://cdn.example.com/license.pdf" />
-        </div>
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="warning" loading={loading} icon={<Key size={14} />} onClick={() => onSubmit({ id: hospital._id, ...form })}>Update Registration</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UpdateHospitalPlatformFeeModal({ open, onClose, hospital, onSubmit, loading }) {
-  const [feeType, setFeeType] = useState("percentage");
-  const [feeValue, setFeeValue] = useState("");
-  const [cycle, setCycle] = useState("monthly");
-  const [clearFee, setClearFee] = useState(false);
-  const [clearCycle, setClearCycle] = useState(false);
-  useEffect(() => { if (hospital) { setFeeType(hospital.platformFee?.type || "percentage"); setFeeValue(hospital.platformFee?.value ?? ""); setCycle(hospital.settlementCycle || "monthly"); setClearFee(!hospital.platformFee); setClearCycle(!hospital.settlementCycle); } }, [hospital]);
-  if (!hospital) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Platform Fee Override" subtitle={hospital.name} icon={DollarSign}>
-      <div className="space-y-4">
-        <InfoBanner variant="info">Override applies only to this hospital. Clear to revert to global default.</InfoBanner>
-        <div>
-          <label className="hm-label mb-2 block">Fee Override</label>
-          <Toggle checked={!clearFee} onChange={v => setClearFee(!v)} label="Enable custom fee" />
-          {!clearFee && (
-            <div className="grid grid-cols-2 gap-3 mt-3">
-              <Select label="Fee Type" value={feeType} onChange={e => setFeeType(e.target.value)}>
-                <option value="fixed">Fixed (₹)</option>
-                <option value="percentage">Percentage (%)</option>
-              </Select>
-              <Input label={feeType === "fixed" ? "Amount (₹)" : "Percentage (%)"} type="number" min={0} max={feeType === "percentage" ? 100 : undefined} value={feeValue} onChange={e => setFeeValue(+e.target.value)} placeholder={feeType === "fixed" ? "200" : "8"} />
-            </div>
-          )}
-        </div>
-        <div>
-          <label className="hm-label mb-2 block">Settlement Cycle</label>
-          <Toggle checked={!clearCycle} onChange={v => setClearCycle(!v)} label="Enable custom cycle" />
-          {!clearCycle && (
-            <Select className="mt-3" value={cycle} onChange={e => setCycle(e.target.value)}>
-              {SETTLEMENT_OPTS.map(o => <option key={o} value={o}>{o.charAt(0).toUpperCase() + o.slice(1)}</option>)}
-            </Select>
-          )}
-        </div>
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="warning" loading={loading} icon={<DollarSign size={14} />} onClick={() => onSubmit({ id: hospital._id, platformFee: clearFee ? null : { type: feeType, value: +feeValue }, settlementCycle: clearCycle ? null : cycle })}>Save Fee</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UploadImagesModal({ open, onClose, hospital, onSubmit, loading }) {
-  const [logoFile, setLogoFile] = useState(null);
-  const [imgFiles, setImgFiles] = useState([]);
-  const logoRef = useRef(), imgRef = useRef();
-  if (!hospital) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Upload Images" subtitle={hospital.name} icon={ImagePlus}>
-      <div className="space-y-4">
-        <InfoBanner variant="warning">JPEG, PNG, WebP only. Max 5 MB per file. Gallery max: 20 images.</InfoBanner>
-        <div className="hm-upload-zone" onClick={() => logoRef.current?.click()}>
-          <input ref={logoRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={e => setLogoFile(e.target.files[0])} />
-          <Upload size={20} className="text-base-content/30 mb-2" />
-          <p className="text-xs font-semibold text-base-content/50">{logoFile ? logoFile.name : "Click to upload hospital logo"}</p>
-          <p className="text-[11px] text-base-content/30 mt-1">Recommended: 512×512 px, transparent PNG</p>
-          {hospital.logo && <img src={hospital.logo} alt="logo" className="mt-3 h-10 w-10 rounded-lg object-cover border border-base-300 mx-auto" />}
-        </div>
-        <div className="hm-upload-zone" onClick={() => imgRef.current?.click()}>
-          <input ref={imgRef} type="file" accept="image/jpeg,image/png,image/webp" multiple className="hidden" onChange={e => setImgFiles(Array.from(e.target.files))} />
-          <ImagePlus size={20} className="text-base-content/30 mb-2" />
-          <p className="text-xs font-semibold text-base-content/50">{imgFiles.length > 0 ? `${imgFiles.length} file(s) selected` : "Click to upload gallery images"}</p>
-        </div>
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} icon={<Upload size={14} />} onClick={() => onSubmit({ id: hospital._id, logo: logoFile || undefined, images: imgFiles.length ? imgFiles : undefined })}>Upload</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UpdateLocationModal({ open, onClose, hospital, onSubmit, loading }) {
-  const [lat, setLat] = useState(""); const [lng, setLng] = useState(""); const [mapsUrl, setMapsUrl] = useState("");
-  useEffect(() => { if (hospital?.location?.coordinates) { setLng(hospital.location.coordinates[0]); setLat(hospital.location.coordinates[1]); } if (hospital?.googleMapsUrl) setMapsUrl(hospital.googleMapsUrl); }, [hospital]);
-  if (!hospital) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Update Location" subtitle={hospital.name} icon={MapPin}>
-      <div className="space-y-3">
-        <InfoBanner variant="info">GeoJSON stores coordinates as [longitude, latitude].</InfoBanner>
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Latitude" type="number" step="0.0001" value={lat} onChange={e => setLat(e.target.value)} placeholder="16.5062" note="Range: -90 to 90" />
-          <Input label="Longitude" type="number" step="0.0001" value={lng} onChange={e => setLng(e.target.value)} placeholder="80.6480" note="Range: -180 to 180" />
-        </div>
-        <Input label="Google Maps URL" value={mapsUrl} onChange={e => setMapsUrl(e.target.value)} placeholder="https://maps.google.com/?q=16.5062,80.6480" />
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} icon={<MapPin size={14} />} onClick={() => onSubmit({ id: hospital._id, lat: +lat, lng: +lng, googleMapsUrl: mapsUrl || undefined })}>Update Location</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function LinkDoctorModal({ open, onClose, hospital, doctors, onLink, onUnlink, loadingLink, loadingUnlink }) {
-  const [search, setSearch] = useState("");
-  if (!hospital) return null;
-  const filtered = doctors.filter(d => { const name = d.user?.name || ""; return name.toLowerCase().includes(search.toLowerCase()) || (d.specialization || "").toLowerCase().includes(search.toLowerCase()); });
-  const linked = hospital.linkedDoctors || [];
-  return (
-    <Modal open={open} onClose={onClose} title="Manage Linked Doctors" subtitle={hospital.name} icon={Stethoscope}>
-      <div className="space-y-3">
-        <div className="relative">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/35" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or specialization..." className="hm-input w-full pl-9" />
-        </div>
-        <div className="max-h-52 overflow-y-auto space-y-1 hm-scrollarea">
-          {filtered.slice(0, 12).map(doc => (
-            <div key={doc._id} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg hover:bg-base-200 transition-colors">
-              <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-full bg-secondary/15 flex items-center justify-center"><Stethoscope size={12} className="text-secondary" /></div>
-                <div><p className="text-xs font-semibold text-base-content leading-tight">{doc.user?.name || "—"}</p><p className="text-[11px] text-base-content/45">{doc.specialization}</p></div>
-              </div>
-              <Btn size="xs" variant={linked.includes(doc._id) ? "subtle" : "primary"} loading={loadingLink || loadingUnlink}
-                onClick={() => linked.includes(doc._id) ? onUnlink({ hospitalId: hospital._id, doctorId: doc._id }) : onLink({ hospitalId: hospital._id, doctorId: doc._id })}>
-                {linked.includes(doc._id) ? <><Unlink size={11} /> Unlink</> : <><Link size={11} /> Link</>}
-              </Btn>
-            </div>
-          ))}
-          {filtered.length === 0 && <p className="text-[11px] text-base-content/35 p-6 text-center">No doctors found</p>}
-        </div>
-        {linked.length > 0 && (
-          <div><p className="hm-label mb-1.5">Currently Linked ({linked.length})</p>
-            <div className="flex flex-wrap gap-1.5">
-              {linked.map((id, i) => { const doc = doctors.find(d => d._id === id); return <span key={i} className="hm-badge hm-badge-primary">{doc?.user?.name || id}</span>; })}
-            </div>
-          </div>
-        )}
-      </div>
-      <div className="flex justify-end pt-4 mt-2 border-t border-base-300"><Btn variant="ghost" onClick={onClose}>Close</Btn></div>
-    </Modal>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// DOCTOR FORMS
-// ══════════════════════════════════════════════════════════════════════════════
-
-function CreateDoctorModal({ open, onClose, onSubmit, loading, hospitals }) {
-  const [form, setForm] = useState({ name: "", email: "", phone: "", specialization: "General Physician", experienceYears: 0, registrationNumber: "", registrationCouncil: "", biography: "", languagesSpoken: "", primaryHospital: "", fees: { inPersonFee: 0, videoFee: 0, homeVisitFee: 0, followUpFee: 0 }, consultationTypes: { inPerson: true, video: false, homeVisit: false } });
-  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
-  const setNested = (path, val) => setForm(prev => { const [k1, k2] = path.split("."); return { ...prev, [k1]: { ...prev[k1], [k2]: val } }; });
-  return (
-    <Modal open={open} onClose={onClose} title="Create Doctor Account" subtitle="A user account is auto-created with credentials emailed to the doctor" icon={Stethoscope} maxW="max-w-3xl" accentColor="bg-success/15">
-      <div className="space-y-4">
-        <InfoBanner variant="success">A secure temporary password is emailed to the doctor upon creation.</InfoBanner>
-        <SectionCard title="Identity & Contact" icon={UserRound} collapsible defaultOpen>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1">
-            <Input label="Full Name *" value={form.name} onChange={e => set("name", e.target.value)} placeholder="Dr. Ramesh Kumar" note="Appears on profile and emails" />
-            <Input label="Email *" type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="dr.ramesh@hospital.com" note="Login credentials sent here" />
-            <Input label="Phone" value={form.phone} onChange={e => set("phone", e.target.value)} placeholder="+91 98765 43210" />
-            <Select label="Primary Hospital" value={form.primaryHospital} onChange={e => set("primaryHospital", e.target.value)}>
-              <option value="">— None —</option>
-              {hospitals.map(h => <option key={h._id} value={h._id}>{h.name}</option>)}
-            </Select>
-          </div>
-        </SectionCard>
-        <SectionCard title="Professional Details" icon={Stethoscope} collapsible>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1">
-            <Select label="Specialization *" value={form.specialization} onChange={e => set("specialization", e.target.value)}>{SPECIALIZATIONS.map(s => <option key={s}>{s}</option>)}</Select>
-            <Input label="Experience (Years) *" type="number" min={0} max={70} value={form.experienceYears} onChange={e => set("experienceYears", +e.target.value)} placeholder="10" />
-            <Input label="Registration Number" value={form.registrationNumber} onChange={e => set("registrationNumber", e.target.value)} placeholder="AP-12345/2015" note="Must be unique" />
-            <Input label="Registration Council" value={form.registrationCouncil} onChange={e => set("registrationCouncil", e.target.value)} placeholder="AP Medical Council" />
-            <Input label="Languages Spoken" className="md:col-span-2" value={form.languagesSpoken} onChange={e => set("languagesSpoken", e.target.value)} placeholder="Telugu, Hindi, English" note="Comma-separated" />
-            <Textarea label="Biography" className="md:col-span-2" value={form.biography} onChange={e => set("biography", e.target.value)} placeholder="Professional bio..." maxLength={1000} />
-          </div>
-        </SectionCard>
-        <SectionCard title="Fees & Consultation Types" icon={DollarSign} collapsible>
-          <div className="mt-1 space-y-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <Input label="In-Person (₹)" type="number" min={0} value={form.fees.inPersonFee} onChange={e => setNested("fees.inPersonFee", +e.target.value)} placeholder="500" />
-              <Input label="Video (₹)" type="number" min={0} value={form.fees.videoFee} onChange={e => setNested("fees.videoFee", +e.target.value)} placeholder="300" />
-              <Input label="Home Visit (₹)" type="number" min={0} value={form.fees.homeVisitFee} onChange={e => setNested("fees.homeVisitFee", +e.target.value)} placeholder="1000" />
-              <Input label="Follow-Up (₹)" type="number" min={0} value={form.fees.followUpFee} onChange={e => setNested("fees.followUpFee", +e.target.value)} placeholder="200" />
-            </div>
-            <div className="flex flex-wrap gap-4">
-              {[{ k: "inPerson", l: "In-Person" }, { k: "video", l: "Video" }, { k: "homeVisit", l: "Home Visit" }].map(({ k, l }) => (
-                <Toggle key={k} checked={form.consultationTypes[k]} onChange={v => setNested(`consultationTypes.${k}`, v)} label={l} />
-              ))}
-            </div>
-          </div>
-        </SectionCard>
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="success" loading={loading} icon={<Plus size={14} />} onClick={() => onSubmit({ ...form, languagesSpoken: form.languagesSpoken.split(",").map(s => s.trim()).filter(Boolean) })}>Create Doctor</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UpdateDoctorProfileModal({ open, onClose, doctor, hospitals, onSubmit, loading }) {
-  const [form, setForm] = useState({ specialization: "General Physician", experienceYears: 0, biography: "", languagesSpoken: "", achievements: "", fees: { inPersonFee: 0, videoFee: 0, homeVisitFee: 0, followUpFee: 0 }, consultationTypes: { inPerson: true, video: false, homeVisit: false }, primaryHospital: "", notifPrefs: { sms: true, email: true, push: true, whatsapp: true } });
-  useEffect(() => { if (doctor) setForm({ specialization: doctor.specialization || "General Physician", experienceYears: doctor.experienceYears || 0, biography: doctor.biography || "", languagesSpoken: (doctor.languagesSpoken || []).join(", "), achievements: (doctor.achievements || []).join(", "), fees: { ...doctor.fees } || {}, consultationTypes: { ...doctor.consultationTypes } || {}, primaryHospital: doctor.primaryHospital?._id || doctor.primaryHospital || "", notifPrefs: { ...doctor.notifPrefs } || {} }); }, [doctor]);
-  const setNested = (path, val) => setForm(prev => { const [k1, k2] = path.split("."); return { ...prev, [k1]: { ...prev[k1], [k2]: val } }; });
-  if (!doctor) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Edit Doctor Profile" subtitle={doctor.user?.name} icon={Edit3} maxW="max-w-3xl">
-      <div className="space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Select label="Specialization" value={form.specialization} onChange={e => setForm(p => ({ ...p, specialization: e.target.value }))}>{SPECIALIZATIONS.map(s => <option key={s}>{s}</option>)}</Select>
-          <Input label="Experience (Years)" type="number" min={0} max={70} value={form.experienceYears} onChange={e => setForm(p => ({ ...p, experienceYears: +e.target.value }))} />
-          <Select label="Primary Hospital" value={form.primaryHospital} onChange={e => setForm(p => ({ ...p, primaryHospital: e.target.value }))}><option value="">— None —</option>{hospitals.map(h => <option key={h._id} value={h._id}>{h.name}</option>)}</Select>
-          <Input label="Languages Spoken" value={form.languagesSpoken} onChange={e => setForm(p => ({ ...p, languagesSpoken: e.target.value }))} placeholder="Telugu, Hindi, English" note="Comma-separated" />
-          <Input label="Achievements" className="md:col-span-2" value={form.achievements} onChange={e => setForm(p => ({ ...p, achievements: e.target.value }))} placeholder="Best Cardiologist 2022, AIIMS Fellowship" note="Comma-separated" />
-          <Textarea label="Biography" className="md:col-span-2" value={form.biography} onChange={e => setForm(p => ({ ...p, biography: e.target.value }))} maxLength={1000} />
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Input label="In-Person (₹)" type="number" min={0} value={form.fees.inPersonFee} onChange={e => setNested("fees.inPersonFee", +e.target.value)} />
-          <Input label="Video (₹)" type="number" min={0} value={form.fees.videoFee} onChange={e => setNested("fees.videoFee", +e.target.value)} />
-          <Input label="Home Visit (₹)" type="number" min={0} value={form.fees.homeVisitFee} onChange={e => setNested("fees.homeVisitFee", +e.target.value)} />
-          <Input label="Follow-Up (₹)" type="number" min={0} value={form.fees.followUpFee} onChange={e => setNested("fees.followUpFee", +e.target.value)} />
-        </div>
-        <div className="flex flex-wrap gap-4">
-          {[{ k: "inPerson", l: "In-Person" }, { k: "video", l: "Video" }, { k: "homeVisit", l: "Home Visit" }].map(({ k, l }) => (
-            <Toggle key={k} checked={form.consultationTypes[k]} onChange={v => setNested(`consultationTypes.${k}`, v)} label={l} />
-          ))}
-        </div>
-        <div><p className="hm-label mb-2">Notifications</p>
-          <div className="flex flex-wrap gap-4">
-            {["sms", "email", "push", "whatsapp"].map(ch => <Toggle key={ch} checked={form.notifPrefs?.[ch] ?? true} onChange={v => setNested(`notifPrefs.${ch}`, v)} label={ch.charAt(0).toUpperCase() + ch.slice(1)} />)}
-          </div>
-        </div>
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} icon={<Edit3 size={14} />} onClick={() => onSubmit({ id: doctor._id, ...form, languagesSpoken: form.languagesSpoken.split(",").map(s => s.trim()).filter(Boolean), achievements: form.achievements.split(",").map(s => s.trim()).filter(Boolean) })}>Update</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UpdateDoctorKycModal({ open, onClose, doctor, onSubmit, loading }) {
-  const [form, setForm] = useState({ aadhaarNumber: "", aadhaarFrontUrl: "", aadhaarBackUrl: "", panNumber: "", panCardUrl: "" });
-  useEffect(() => { if (doctor?.kyc) { const k = doctor.kyc; setForm({ aadhaarNumber: "", aadhaarFrontUrl: k.aadhaarFrontUrl || "", aadhaarBackUrl: k.aadhaarBackUrl || "", panNumber: "", panCardUrl: k.panCardUrl || "" }); } }, [doctor]);
-  if (!doctor) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="KYC Documents" subtitle={doctor.user?.name} icon={ShieldCheck}>
-      <InfoBanner variant="warning">Aadhaar & PAN numbers stored with select:false — never returned in API responses.</InfoBanner>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-        <Input label="Aadhaar Number" type="password" value={form.aadhaarNumber} onChange={e => setForm(p => ({ ...p, aadhaarNumber: e.target.value }))} placeholder="XXXX XXXX XXXX" maxLength={12} note="Stored encrypted" />
-        <Input label="PAN Number" type="password" value={form.panNumber} onChange={e => setForm(p => ({ ...p, panNumber: e.target.value.toUpperCase() }))} placeholder="ABCDE1234F" maxLength={10} note="Stored encrypted" />
-        <Input label="Aadhaar Front URL" value={form.aadhaarFrontUrl} onChange={e => setForm(p => ({ ...p, aadhaarFrontUrl: e.target.value }))} placeholder="https://cdn.example.com/aadhaar_front.jpg" />
-        <Input label="Aadhaar Back URL" value={form.aadhaarBackUrl} onChange={e => setForm(p => ({ ...p, aadhaarBackUrl: e.target.value }))} placeholder="https://cdn.example.com/aadhaar_back.jpg" />
-        <Input label="PAN Card URL" className="md:col-span-2" value={form.panCardUrl} onChange={e => setForm(p => ({ ...p, panCardUrl: e.target.value }))} placeholder="https://cdn.example.com/pan_card.jpg" />
-      </div>
-      <div className="flex items-center gap-2 p-2.5 bg-base-200 rounded-lg mt-1">
-        <span className="hm-label">KYC Status:</span>
-        <StatusBadge variant={doctor.kycStatus === "verified" ? "success" : doctor.kycStatus === "rejected" ? "error" : "warning"}>{doctor.kycStatus}</StatusBadge>
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} icon={<ShieldCheck size={14} />} onClick={() => onSubmit({ id: doctor._id, ...form })}>Submit KYC</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function VerifyDoctorKycModal({ open, onClose, doctor, onSubmit, loading }) {
-  const [action, setAction] = useState("approve");
-  const [reason, setReason] = useState("");
-  if (!doctor) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="KYC Review" subtitle={doctor.user?.name} icon={ShieldCheck}>
-      <div className="flex gap-2.5">
-        {["approve", "reject"].map(a => (
-          <button key={a} type="button" onClick={() => setAction(a)}
-            className={`flex-1 py-3 rounded-xl text-xs font-bold border transition-all duration-200 flex items-center justify-center gap-1.5 ${action === a ? (a === "approve" ? "bg-success/15 text-success border-success/40" : "bg-error/15 text-error border-error/40") : "border-base-300 text-base-content/40 hover:border-base-300/80"}`}>
-            {a === "approve" ? <><BadgeCheck size={14} /> Approve</> : <><BadgeX size={14} /> Reject</>}
+    <Field label={label} note={note}>
+      <div className="flex flex-wrap gap-1.5 p-2.5 bg-base-200 border border-base-300 rounded-xl">
+        {options.map((o) => (
+          <button
+            key={o}
+            type="button"
+            onClick={() => toggle(o)}
+            className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all duration-150 ${
+              selected.includes(o)
+                ? 'bg-primary text-primary-content border-primary'
+                : 'bg-base-100 text-base-content/60 border-base-300 hover:border-primary/50'
+            }`}
+          >
+            {o}
           </button>
         ))}
       </div>
-      {action === "reject" && <Textarea label="Rejection Reason *" value={reason} onChange={e => setReason(e.target.value)} placeholder="Explain why KYC is being rejected so the doctor can resubmit correctly..." />}
-      <InfoBanner variant={action === "approve" ? "success" : "error"}>
-        {action === "approve" ? "Approving sets kycStatus to 'verified' and activates the doctor account." : "Rejecting sets kycStatus to 'rejected'. Doctor must resubmit documents."}
-      </InfoBanner>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant={action === "approve" ? "success" : "danger"} loading={loading} icon={action === "approve" ? <BadgeCheck size={14} /> : <BadgeX size={14} />} onClick={() => onSubmit({ id: doctor._id, action, rejectionReason: reason })}>
-          {action === "approve" ? "Approve KYC" : "Reject KYC"}
-        </Btn>
-      </div>
-    </Modal>
+    </Field>
   );
-}
+};
 
-function UpdateDoctorBankModal({ open, onClose, doctor, onSubmit, loading }) {
-  const [form, setForm] = useState({ accountHolderName: "", accountNumber: "", ifscCode: "", bankName: "", branchName: "", upiId: "", gstNumber: "", cancelledChequeUrl: "" });
-  useEffect(() => { if (doctor?.bankDetails) { const b = doctor.bankDetails; setForm({ accountHolderName: b.accountHolderName || "", accountNumber: "", ifscCode: b.ifscCode || "", bankName: b.bankName || "", branchName: b.branchName || "", upiId: b.upiId || "", gstNumber: b.gstNumber || "", cancelledChequeUrl: b.cancelledChequeUrl || "" }); } }, [doctor]);
-  if (!doctor) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Bank Details" subtitle={doctor.user?.name} icon={CreditCard}>
-      <InfoBanner variant="warning">Account number stored with select:false. Last-4 digits shown publicly. Submitting triggers admin re-verification.</InfoBanner>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-        <Input label="Account Holder Name" value={form.accountHolderName} onChange={e => setForm(p => ({ ...p, accountHolderName: e.target.value }))} placeholder="Dr. Ramesh Kumar" note="Exactly as in passbook" />
-        <Input label="Account Number" type="password" value={form.accountNumber} onChange={e => setForm(p => ({ ...p, accountNumber: e.target.value }))} placeholder="XXXXXXXXXXXXXXXX" note="Stored encrypted" />
-        <Input label="IFSC Code" value={form.ifscCode} onChange={e => setForm(p => ({ ...p, ifscCode: e.target.value.toUpperCase() }))} placeholder="SBIN0001234" maxLength={11} />
-        <Input label="Bank Name" value={form.bankName} onChange={e => setForm(p => ({ ...p, bankName: e.target.value }))} placeholder="State Bank of India" />
-        <Input label="Branch Name" value={form.branchName} onChange={e => setForm(p => ({ ...p, branchName: e.target.value }))} placeholder="Benz Circle, Vijayawada" />
-        <Input label="UPI ID" value={form.upiId} onChange={e => setForm(p => ({ ...p, upiId: e.target.value }))} placeholder="drramesh@oksbi" />
-        <Input label="GST Number" value={form.gstNumber} onChange={e => setForm(p => ({ ...p, gstNumber: e.target.value }))} placeholder="37AABCD1234E1Z1" />
-        <Input label="Cancelled Cheque URL" value={form.cancelledChequeUrl} onChange={e => setForm(p => ({ ...p, cancelledChequeUrl: e.target.value }))} placeholder="https://cdn.example.com/cheque.jpg" />
+const ConfirmDialog = ({ message, onConfirm, onCancel }) => (
+  <motion.div
+    initial={{ opacity: 0 }}
+    animate={{ opacity: 1 }}
+    exit={{ opacity: 0 }}
+    className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+  >
+    <motion.div
+      initial={{ scale: 0.9, opacity: 0 }}
+      animate={{ scale: 1, opacity: 1 }}
+      exit={{ scale: 0.9, opacity: 0 }}
+      className="bg-base-100 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4 border border-base-300"
+    >
+      <div className="flex items-start gap-3 mb-5">
+        <AlertTriangle size={20} className="text-warning mt-0.5 shrink-0" />
+        <p className="text-sm text-base-content leading-relaxed">{message}</p>
       </div>
-      {doctor.bankDetails?.accountLast4 && <p className="text-[11px] text-base-content/40 mt-1">On file: ****{doctor.bankDetails.accountLast4} | Verified: {doctor.bankDetails.isBankVerified ? "✅" : "❌ Pending"}</p>}
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="warning" loading={loading} icon={<CreditCard size={14} />} onClick={() => onSubmit({ id: doctor._id, ...form })}>Update Bank</Btn>
+      <div className="flex gap-3 justify-end">
+        <button onClick={onCancel} className="btn-secondary text-xs px-4 py-2">
+          Cancel
+        </button>
+        <button
+          onClick={onConfirm}
+          className="btn btn-error text-xs px-4 py-2"
+        >
+          Confirm
+        </button>
       </div>
-    </Modal>
-  );
-}
+    </motion.div>
+  </motion.div>
+);
 
-function UpdateDoctorSecurityModal({ open, onClose, doctor, onSubmit, loading }) {
-  const [form, setForm] = useState({ registrationNumber: "", registrationCouncil: "", contractUrl: "", adminNotes: "" });
-  useEffect(() => { if (doctor) setForm({ registrationNumber: doctor.registrationNumber || "", registrationCouncil: doctor.registrationCouncil || "", contractUrl: doctor.contractUrl || "", adminNotes: "" }); }, [doctor]);
-  if (!doctor) return null;
+// ─────────────────────────────────────────────────────────────────────────────
+//  DUAL UPLOAD FIELD  (file picker + URL paste)
+// ─────────────────────────────────────────────────────────────────────────────
+const DualUploadField = ({
+  label, note, url, onUrlChange, onFileChange, file,
+  accept = 'image/jpeg,image/png,image/webp', multiple = false,
+}) => {
+  const ref = useRef();
   return (
-    <Modal open={open} onClose={onClose} title="Security Details" subtitle={doctor.user?.name} icon={Lock}>
-      <div className="space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Input label="Registration Number" value={form.registrationNumber} onChange={e => setForm(p => ({ ...p, registrationNumber: e.target.value }))} placeholder="AP-12345/2015" note="Must be globally unique" />
-          <Input label="Registration Council" value={form.registrationCouncil} onChange={e => setForm(p => ({ ...p, registrationCouncil: e.target.value }))} placeholder="AP Medical Council" />
-          <Input label="Contract URL" className="md:col-span-2" value={form.contractUrl} onChange={e => setForm(p => ({ ...p, contractUrl: e.target.value }))} placeholder="https://cdn.example.com/contract.pdf" note="Signed partner agreement (PDF)" />
-          <Textarea label="Admin Notes (Private)" className="md:col-span-2" value={form.adminNotes} onChange={e => setForm(p => ({ ...p, adminNotes: e.target.value }))} placeholder="Internal notes, never shown to doctor..." />
+    <Field label={label} note={note}>
+      <div className="flex flex-col gap-2 p-3 bg-base-200 border border-base-300 rounded-xl">
+        <div className="flex items-center gap-2">
+          <LinkIcon size={12} className="text-base-content/40 shrink-0" />
+          <input
+            type="url"
+            value={url ?? ''}
+            onChange={(e) => onUrlChange?.(e.target.value)}
+            placeholder="Paste CDN / hosted URL…"
+            className="input-field flex-1 text-xs py-1.5"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex-1 h-px bg-base-300" />
+          <span className="text-[10px] text-base-content/30 font-bold uppercase tracking-widest">or</span>
+          <div className="flex-1 h-px bg-base-300" />
+        </div>
+        <div className="flex items-center gap-2">
+          <Paperclip size={12} className="text-base-content/40 shrink-0" />
+          <button
+            type="button"
+            onClick={() => ref.current?.click()}
+            className="btn-secondary text-[10px] px-3 py-1.5 flex items-center gap-1.5"
+          >
+            <Upload size={11} /> Choose File{multiple ? 's' : ''}
+          </button>
+          {file && (
+            <span className="text-[10px] text-base-content/50 truncate max-w-[140px]">
+              {Array.isArray(file) ? `${file.length} file(s)` : file.name}
+            </span>
+          )}
+          <input
+            ref={ref}
+            type="file"
+            accept={accept}
+            multiple={multiple}
+            className="hidden"
+            onChange={(e) => onFileChange?.(multiple ? Array.from(e.target.files ?? []) : e.target.files?.[0] ?? null)}
+          />
         </div>
       </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="warning" loading={loading} icon={<Lock size={14} />} onClick={() => onSubmit({ id: doctor._id, ...form })}>Save</Btn>
-      </div>
-    </Modal>
+    </Field>
   );
-}
+};
 
-function UpdateDoctorPlatformFeeModal({ open, onClose, doctor, onSubmit, loading }) {
-  const [feeType, setFeeType] = useState("percentage"); const [feeValue, setFeeValue] = useState(""); const [clearFee, setClearFee] = useState(false);
-  useEffect(() => { if (doctor) { setFeeType(doctor.platformFee?.type || "percentage"); setFeeValue(doctor.platformFee?.value ?? ""); setClearFee(!doctor.platformFee); } }, [doctor]);
-  if (!doctor) return null;
+// ─────────────────────────────────────────────────────────────────────────────
+//  HOSPITAL CARD  (left panel)
+// ─────────────────────────────────────────────────────────────────────────────
+const HospitalCard = ({ hospital, isSelected, onClick }) => {
+  const isMgd = MANAGED_TYPES.includes(hospital.hospitalType);
   return (
-    <Modal open={open} onClose={onClose} title="Platform Fee Override" subtitle={doctor.user?.name} icon={DollarSign}>
-      <InfoBanner variant="info">Overrides global doctor platform fee for this doctor only. Clear to use global default.</InfoBanner>
-      <div className="mt-3 space-y-3">
-        <Toggle checked={!clearFee} onChange={v => setClearFee(!v)} label="Enable custom fee override" />
-        {!clearFee && (
-          <div className="grid grid-cols-2 gap-3">
-            <Select label="Fee Type" value={feeType} onChange={e => setFeeType(e.target.value)}><option value="fixed">Fixed (₹)</option><option value="percentage">Percentage (%)</option></Select>
-            <Input label={feeType === "fixed" ? "Amount (₹)" : "Percentage (%)"} type="number" min={0} max={feeType === "percentage" ? 100 : undefined} value={feeValue} onChange={e => setFeeValue(+e.target.value)} />
-          </div>
-        )}
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="warning" loading={loading} icon={<DollarSign size={14} />} onClick={() => onSubmit({ id: doctor._id, platformFee: clearFee ? null : { type: feeType, value: +feeValue } })}>Save</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UpdateDoctorPartnershipModal({ open, onClose, doctor, onSubmit, loading }) {
-  const [form, setForm] = useState({ partnershipStatus: "Pending", partnerSince: "", contractUrl: "", adminNotes: "" });
-  useEffect(() => { if (doctor) setForm({ partnershipStatus: doctor.partnershipStatus || "Pending", partnerSince: doctor.partnerSince ? doctor.partnerSince.split("T")[0] : "", contractUrl: doctor.contractUrl || "", adminNotes: "" }); }, [doctor]);
-  if (!doctor) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Partnership Status" subtitle={doctor.user?.name} icon={BadgeCheck}>
-      <div className="space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Select label="Partnership Status" value={form.partnershipStatus} onChange={e => setForm(p => ({ ...p, partnershipStatus: e.target.value }))} note="'Active' required for public visibility">
-            {PARTNERSHIP_STATUSES.map(s => <option key={s}>{s}</option>)}
-          </Select>
-          <Input label="Partner Since" type="date" value={form.partnerSince} onChange={e => setForm(p => ({ ...p, partnerSince: e.target.value }))} note="Auto-set on first 'Active' status" />
-          <Input label="Contract URL" className="md:col-span-2" value={form.contractUrl} onChange={e => setForm(p => ({ ...p, contractUrl: e.target.value }))} placeholder="https://cdn.example.com/contract.pdf" />
-          <Textarea label="Admin Notes (Private)" className="md:col-span-2" value={form.adminNotes} onChange={e => setForm(p => ({ ...p, adminNotes: e.target.value }))} placeholder="Partnership terms, special conditions..." />
-        </div>
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} icon={<BadgeCheck size={14} />} onClick={() => onSubmit({ id: doctor._id, ...form })}>Update</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UpdateDoctorSettingsModal({ open, onClose, doctor, onSubmit, loading }) {
-  const [form, setForm] = useState({ isOnline: false, settlementCycle: "monthly", onboarding: { step: 1, isComplete: false } });
-  useEffect(() => { if (doctor) setForm({ isOnline: doctor.isOnline || false, settlementCycle: doctor.settlementCycle || "monthly", onboarding: { ...doctor.onboarding } || { step: 1, isComplete: false } }); }, [doctor]);
-  if (!doctor) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Doctor Settings" subtitle={doctor.user?.name} icon={Settings2}>
-      <div className="space-y-4">
-        <Select label="Settlement Cycle" value={form.settlementCycle} onChange={e => setForm(p => ({ ...p, settlementCycle: e.target.value }))} note="Overrides global default for this doctor">
-          {SETTLEMENT_OPTS.map(o => <option key={o} value={o}>{o.charAt(0).toUpperCase() + o.slice(1)}</option>)}
-        </Select>
-        <div className="hm-flag-item"><Activity size={13} className="text-primary/60 shrink-0" /><Toggle checked={form.isOnline} onChange={v => setForm(p => ({ ...p, isOnline: v }))} label="Currently Online (visible for live consultations)" /></div>
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Onboarding Step" type="number" min={1} value={form.onboarding.step} onChange={e => setForm(p => ({ ...p, onboarding: { ...p.onboarding, step: +e.target.value } }))} />
-          <div className="flex flex-col gap-1.5"><label className="hm-label">Onboarding Complete?</label><Toggle checked={form.onboarding.isComplete} onChange={v => setForm(p => ({ ...p, onboarding: { ...p.onboarding, isComplete: v } }))} label="Mark complete" /></div>
-        </div>
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} icon={<Settings2 size={14} />} onClick={() => onSubmit({ id: doctor._id, ...form })}>Save Settings</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UpdateDoctorAvailabilityModal({ open, onClose, doctor, onSubmit, loading }) {
-  const [slots, setSlots] = useState(DAYS.map(day => ({ day, slots: [] })));
-  useEffect(() => { if (doctor?.availability?.length) { const filled = DAYS.map(day => { const found = doctor.availability.find(a => a.day === day); return found || { day, slots: [] }; }); setSlots(filled); } }, [doctor]);
-  const addSlot = di => setSlots(prev => prev.map((d, i) => i === di ? { ...d, slots: [...d.slots, { startTime: "09:00", endTime: "17:00", maxPatients: 10 }] } : d));
-  const removeSlot = (di, si) => setSlots(prev => prev.map((d, i) => i === di ? { ...d, slots: d.slots.filter((_, j) => j !== si) } : d));
-  const updateSlot = (di, si, key, val) => setSlots(prev => prev.map((d, i) => i === di ? { ...d, slots: d.slots.map((s, j) => j === si ? { ...s, [key]: val } : s) } : d));
-  if (!doctor) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Weekly Availability" subtitle={doctor.user?.name} icon={Calendar} maxW="max-w-3xl">
-      <p className="text-[11px] text-base-content/40 mb-3">Configure weekly slots. Multiple time windows per day allowed. 24-hour HH:MM format.</p>
-      <div className="space-y-2">
-        {slots.map((daySlot, di) => (
-          <div key={daySlot.day} className="hm-avail-day">
-            <div className="flex items-center justify-between px-4 py-2.5 bg-base-200/60">
-              <span className="text-xs font-bold text-base-content">{daySlot.day}</span>
-              <Btn size="xs" variant="subtle" onClick={() => addSlot(di)} icon={<Plus size={11} />}>Add Slot</Btn>
+    <motion.div
+      layout
+      whileHover={{ x: 2 }}
+      onClick={onClick}
+      className={`relative cursor-pointer rounded-xl border transition-all duration-200 overflow-hidden group ${
+        isSelected
+          ? 'border-primary bg-primary/5 shadow-md'
+          : 'border-base-300 bg-base-100 hover:border-primary/40 hover:bg-base-200'
+      }`}
+    >
+      {isSelected && <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary rounded-l-xl" />}
+      <div className="px-4 py-3 pl-5">
+        <div className="flex items-start gap-3">
+          {hospital.logo ? (
+            <img src={hospital.logo} alt="" className="w-9 h-9 rounded-lg object-cover shrink-0 border border-base-300" />
+          ) : (
+            <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+              <Building2 size={16} className="text-primary" />
             </div>
-            {daySlot.slots.length > 0 ? (
-              <div className="p-3 space-y-2">
-                {daySlot.slots.map((slot, si) => (
-                  <div key={si} className="flex items-end gap-2">
-                    <Input label="Start" type="time" value={slot.startTime} onChange={e => updateSlot(di, si, "startTime", e.target.value)} />
-                    <Input label="End" type="time" value={slot.endTime} onChange={e => updateSlot(di, si, "endTime", e.target.value)} />
-                    <Input label="Max Patients" type="number" min={1} value={slot.maxPatients} onChange={e => updateSlot(di, si, "maxPatients", +e.target.value)} className="w-24" />
-                    <button onClick={() => removeSlot(di, si)} className="mb-1 p-1.5 text-error/60 hover:text-error hover:bg-error/10 rounded-lg transition-colors"><X size={13} /></button>
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-base-content truncate leading-tight">{hospital.name}</p>
+            <p className="text-[10px] text-base-content/50 truncate mt-0.5">
+              {hospital.address?.city}, {hospital.address?.state}
+            </p>
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              <span className={`badge ${isMgd ? 'badge-primary' : 'badge-info'}`}>
+                {hospital.hospitalType}
+              </span>
+              <span className={`badge ${hospital.isVerified ? 'badge-success' : 'badge-warning'}`}>
+                {hospital.isVerified ? 'Verified' : 'Unverified'}
+              </span>
+              {!hospital.isActive && <span className="badge badge-error">Inactive</span>}
+            </div>
+          </div>
+          <ChevronRight
+            size={14}
+            className={`shrink-0 mt-1 transition-colors ${
+              isSelected ? 'text-primary' : 'text-base-content/30 group-hover:text-base-content/50'
+            }`}
+          />
+        </div>
+        <div className="flex items-center gap-3 mt-2 text-[10px] text-base-content/40">
+          <span className="flex items-center gap-1">
+            <Users size={10} />
+            {hospital.linkedDoctors?.length ?? 0} doctors
+          </span>
+          <span className="flex items-center gap-1">
+            <Bed size={10} />
+            {hospital.bedCount?.total ?? 0} beds
+          </span>
+          <span className="flex items-center gap-1">
+            <Star size={10} />
+            {hospital.rating?.averageRating?.toFixed(1) ?? '0.0'}
+          </span>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CREATE HOSPITAL MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+const STEPS = [
+  { id: 'basic',      label: 'Basic Info',      icon: Building2 },
+  { id: 'contact',    label: 'Contact',         icon: Users     },
+  { id: 'address',    label: 'Address',         icon: MapPin    },
+  { id: 'facilities', label: 'Facilities',      icon: Zap       },
+  { id: 'legal',      label: 'Legal / Reg.',    icon: Lock      },
+  { id: 'media',      label: 'Logo & Images',   icon: Camera    },
+  { id: 'manager',    label: 'Manager Account', icon: Users     },
+];
+
+const CreateHospitalModal = ({ onClose, dispatch, loading }) => {
+  const [step, setStep] = useState(0);
+
+  const [f, setF] = useState({
+    name: '', hospitalType: 'Multi-Specialty', description: '',
+    specialties: [], accreditations: [], nabledLabAvailable: false,
+    'contact.phone': '', 'contact.email': '', 'contact.website': '',
+    'contact.whatsapp': '', 'contact.emergencyPhone': '', 'contact.alternatePhone': '',
+    'address.line1': '', 'address.line2': '', 'address.landmark': '',
+    'address.city': 'Vijayawada', 'address.state': 'Andhra Pradesh', 'address.pincode': '',
+    googleMapsUrl: '',
+    isEmergencyReady: false, hasICU: false, hasBloodBank: false,
+    hasPharmacy: false, hasDiagnostics: false, hasAmbulance: false,
+    hasWheelchairAccess: false, is24x7: false,
+    'bedCount.total': 0, 'bedCount.icu': 0,
+    facilities: [], acceptedSchemes: [],
+    'registrationDetails.licenseNumber': '',
+    'registrationDetails.licenseExpiry': '',
+    'registrationDetails.gstNumber': '',
+    'registrationDetails.panNumber': '',
+    docUrl: '', docFile: null,
+    logoUrl: '', logoFile: null,
+    imageUrls: '', imageFiles: [],
+    managerName: '', managerEmail: '', managerPhone: '',
+    specialization: 'General Physician', experienceYears: 0,
+  });
+
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const isMgd = MANAGED_TYPES.includes(f.hospitalType);
+
+  const stepValid = [
+    () => f.name.trim() && f.hospitalType,
+    () => f['contact.phone'].trim(),
+    () => f['address.line1'].trim() && f['address.pincode'].trim(),
+    () => true,
+    () => f['registrationDetails.licenseNumber'].trim(),
+    () => true,
+    () => f.managerName.trim() && f.managerEmail.trim(),
+  ];
+
+  const handleSubmit = async () => {
+    const payload = {
+      name: f.name.trim(),
+      hospitalType: f.hospitalType,
+      description: f.description,
+      specialties: f.specialties,
+      accreditations: f.accreditations,
+      nabledLabAvailable: f.nabledLabAvailable,
+      contact: {
+        phone: f['contact.phone'],
+        email: f['contact.email'],
+        website: f['contact.website'],
+        whatsapp: f['contact.whatsapp'],
+        emergencyPhone: f['contact.emergencyPhone'],
+        alternatePhone: f['contact.alternatePhone'],
+      },
+      address: {
+        line1: f['address.line1'],
+        line2: f['address.line2'],
+        landmark: f['address.landmark'],
+        city: f['address.city'],
+        state: f['address.state'],
+        pincode: f['address.pincode'],
+      },
+      googleMapsUrl: f.googleMapsUrl,
+      isEmergencyReady: f.isEmergencyReady,
+      hasICU: f.hasICU,
+      hasBloodBank: f.hasBloodBank,
+      hasPharmacy: f.hasPharmacy,
+      hasDiagnostics: f.hasDiagnostics,
+      hasAmbulance: f.hasAmbulance,
+      hasWheelchairAccess: f.hasWheelchairAccess,
+      is24x7: f.is24x7,
+      bedCount: { total: Number(f['bedCount.total']), icu: Number(f['bedCount.icu']) },
+      facilities: f.facilities,
+      acceptedSchemes: f.acceptedSchemes,
+      registrationDetails: {
+        licenseNumber: f['registrationDetails.licenseNumber'],
+        licenseExpiry: f['registrationDetails.licenseExpiry'] || undefined,
+        gstNumber: f['registrationDetails.gstNumber'],
+        panNumber: f['registrationDetails.panNumber'],
+        documentUrl: f.docUrl || undefined,
+      },
+      ...(f.logoUrl ? { logo: f.logoUrl } : {}),
+      managerName: f.managerName.trim(),
+      managerEmail: f.managerEmail.trim(),
+      managerPhone: f.managerPhone || undefined,
+      specialization: f.specialization,
+      experienceYears: Number(f.experienceYears),
+    };
+
+    const result = await dispatch(createHospital(payload));
+    if (!result.error) {
+      const hospitalId = result.payload?.data?.hospital?._id;
+      if (hospitalId) {
+        const hasLogoFile = !!f.logoFile;
+        const hasImgFiles = f.imageFiles?.length > 0;
+        const hasImgUrls = f.imageUrls.trim();
+
+        if (hasLogoFile || hasImgFiles) {
+          await dispatch(
+            uploadHospitalImages({
+              id: hospitalId,
+              logo: f.logoFile || undefined,
+              images: f.imageFiles.length > 0 ? f.imageFiles : undefined,
+            })
+          );
+        }
+        if (hasImgUrls && !hasImgFiles) {
+          const urls = f.imageUrls.split('\n').map((u) => u.trim()).filter(Boolean);
+          if (urls.length > 0) {
+            await dispatch(updateHospitalProfile({ id: hospitalId, images: urls }));
+          }
+        }
+      }
+      onClose();
+    }
+  };
+
+  const canNext = stepValid[step]?.() ?? true;
+  const isLast = step === STEPS.length - 1;
+
+  const facilityFlags = [
+    ['isEmergencyReady', 'Emergency Ready', 'Has 24/7 emergency services'],
+    ['hasICU', 'Has ICU', 'Intensive Care Unit available'],
+    ['hasBloodBank', 'Has Blood Bank', 'On-site blood bank present'],
+    ['hasPharmacy', 'Has Pharmacy', 'In-house pharmacy'],
+    ['hasDiagnostics', 'Has Diagnostics', 'Lab / diagnostic centre on site'],
+    ['hasAmbulance', 'Has Ambulance', 'Ambulance services available'],
+    ['hasWheelchairAccess', 'Wheelchair Access', 'Fully wheelchair accessible'],
+    ['is24x7', 'Open 24×7', 'Round-the-clock operations'],
+    ['nabledLabAvailable', 'NABL Lab', 'NABL-accredited lab on site'],
+  ];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+    >
+      <motion.div
+        initial={{ y: 30, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 30, opacity: 0 }}
+        className="bg-base-100 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col border border-base-300"
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-base-300 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+              <Plus size={15} className="text-primary" />
+            </div>
+            <div>
+              <span className="font-black text-base-content font-montserrat">Create Hospital</span>
+              <p className="text-[10px] text-base-content/40">
+                Step {step + 1} of {STEPS.length} — {STEPS[step].label}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-base-200 rounded-lg transition-colors">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="flex items-center px-6 py-3 gap-1 border-b border-base-300 bg-base-200 shrink-0 overflow-x-auto scrollbar-thin">
+          {STEPS.map(({ id, label, icon: Icon }, i) => (
+            <button
+              key={id}
+              onClick={() => i < step && setStep(i)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold whitespace-nowrap transition-all duration-150 ${
+                i === step
+                  ? 'bg-primary text-primary-content'
+                  : i < step
+                  ? 'bg-primary/10 text-primary cursor-pointer'
+                  : 'text-base-content/30 cursor-default'
+              }`}
+            >
+              <Icon size={10} />
+              <span className="hidden sm:inline">{label}</span>
+              <span className="sm:hidden">{i + 1}</span>
+              {i < step && <Check size={9} />}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 scrollbar-thin">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={step}
+              initial={{ opacity: 0, x: 16 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -16 }}
+              transition={{ duration: 0.18 }}
+            >
+              {step === 0 && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <InputField
+                      label="Hospital Name *"
+                      note="Official registered name of the hospital / clinic."
+                      value={f.name}
+                      onChange={(v) => set('name', v)}
+                      placeholder="e.g. Apollo Hospitals, Vijayawada"
+                      required
+                    />
                   </div>
-                ))}
-              </div>
-            ) : (
-              <p className="px-4 py-2 text-[11px] text-base-content/30">Unavailable this day</p>
+                  <SelectField
+                    label="Hospital Type *"
+                    note="Multi-Specialty / Super-Specialty / Trust / Government → hospital-manager model. Clinic / Nursing Home → doctor-owner model."
+                    value={f.hospitalType}
+                    onChange={(v) => set('hospitalType', v)}
+                    options={HOSPITAL_TYPES}
+                  />
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-semibold text-base-content/70 uppercase tracking-wider">
+                      Management Model
+                    </label>
+                    <div
+                      className={`px-3 py-2.5 rounded-xl text-xs font-bold border ${
+                        isMgd
+                          ? 'bg-primary/10 text-primary border-primary/30'
+                          : 'bg-info/10 text-info border-info/30'
+                      }`}
+                    >
+                      {isMgd ? '🏥 Hospital-Manager' : '👨‍⚕️ Doctor-Owner'}
+                    </div>
+                    <span className="flex items-center gap-1 text-[10px] text-base-content/40">
+                      <Info size={9} />
+                      Auto-derived from Hospital Type. Cannot be set manually.
+                    </span>
+                  </div>
+                  <div className="col-span-2">
+                    <TextareaField
+                      label="Description"
+                      note="Brief description of the hospital — specialties, highlights, patient experience. Max 1000 characters."
+                      value={f.description}
+                      onChange={(v) => set('description', v)}
+                      rows={3}
+                      placeholder="Describe the hospital's services, specialties, and unique features…"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <MultiSelect
+                      label="Specialties"
+                      note="Select all medical specialties offered. Helps patients find the right care."
+                      options={SPECIALTIES_LIST}
+                      selected={f.specialties}
+                      onChange={(v) => set('specialties', v)}
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <MultiSelect
+                      label="Accreditations"
+                      note="National / international certifications held by this hospital."
+                      options={ACCREDITATIONS}
+                      selected={f.accreditations}
+                      onChange={(v) => set('accreditations', v)}
+                    />
+                  </div>
+                  <Toggle
+                    label="NABL Lab Available"
+                    note="Check if an NABL-accredited diagnostics lab is present on site."
+                    checked={f.nabledLabAvailable}
+                    onChange={(v) => set('nabledLabAvailable', v)}
+                  />
+                  {!isMgd && (
+                    <>
+                      <SelectField
+                        label="Doctor Specialization *"
+                        note="Primary specialization of the doctor-owner who will manage this clinic/nursing home."
+                        value={f.specialization}
+                        onChange={(v) => set('specialization', v)}
+                        options={SPECIALIZATIONS}
+                      />
+                      <InputField
+                        label="Doctor Experience (years) *"
+                        note="Years of active medical practice."
+                        type="number"
+                        value={f.experienceYears}
+                        onChange={(v) => set('experienceYears', v)}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
+
+              {step === 1 && (
+                <div className="grid grid-cols-2 gap-4">
+                  <InputField
+                    label="Primary Phone *"
+                    note="Main helpline number. Will be shown to patients. E.g. +91XXXXXXXXXX."
+                    value={f['contact.phone']}
+                    onChange={(v) => set('contact.phone', v)}
+                    placeholder="+91 9876543210"
+                    required
+                  />
+                  <InputField
+                    label="Emergency Phone"
+                    note="Dedicated emergency / casualty number, if different from primary."
+                    value={f['contact.emergencyPhone']}
+                    onChange={(v) => set('contact.emergencyPhone', v)}
+                    placeholder="+91 9876500000"
+                  />
+                  <InputField
+                    label="Alternate Phone"
+                    note="Second helpline or front-desk number."
+                    value={f['contact.alternatePhone']}
+                    onChange={(v) => set('contact.alternatePhone', v)}
+                    placeholder="+91 9876511111"
+                  />
+                  <InputField
+                    label="WhatsApp Number"
+                    note="WhatsApp contact for appointment / queries. Leave blank if same as primary."
+                    value={f['contact.whatsapp']}
+                    onChange={(v) => set('contact.whatsapp', v)}
+                    placeholder="+91 9876543210"
+                  />
+                  <InputField
+                    label="Email Address"
+                    note="Official hospital email for correspondence & notifications."
+                    type="email"
+                    value={f['contact.email']}
+                    onChange={(v) => set('contact.email', v)}
+                    placeholder="hospital@example.com"
+                  />
+                  <InputField
+                    label="Website URL"
+                    note="Hospital's official website. Include https://."
+                    value={f['contact.website']}
+                    onChange={(v) => set('contact.website', v)}
+                    placeholder="https://www.hospital.com"
+                  />
+                </div>
+              )}
+
+              {step === 2 && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <InputField
+                      label="Address Line 1 *"
+                      note="Building name, street name, house/plot number."
+                      value={f['address.line1']}
+                      onChange={(v) => set('address.line1', v)}
+                      placeholder="e.g. 42, Bandar Road, Moghalrajpuram"
+                      required
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <InputField
+                      label="Address Line 2"
+                      note="Additional address details — area, colony, sector."
+                      value={f['address.line2']}
+                      onChange={(v) => set('address.line2', v)}
+                      placeholder="Near Kanaka Durga Temple"
+                    />
+                  </div>
+                  <InputField
+                    label="Landmark"
+                    note="Nearby well-known landmark for easier navigation."
+                    value={f['address.landmark']}
+                    onChange={(v) => set('address.landmark', v)}
+                    placeholder="Opp. RTC Bus Stand"
+                  />
+                  <InputField
+                    label="City"
+                    note="City / town where the hospital is located."
+                    value={f['address.city']}
+                    onChange={(v) => set('address.city', v)}
+                    placeholder="Vijayawada"
+                  />
+                  <SelectField
+                    label="State *"
+                    note="Indian state / union territory."
+                    value={f['address.state']}
+                    onChange={(v) => set('address.state', v)}
+                    options={INDIAN_STATES}
+                  />
+                  <InputField
+                    label="PIN Code *"
+                    note="6-digit Indian postal code. Must not start with 0."
+                    value={f['address.pincode']}
+                    onChange={(v) => set('address.pincode', v)}
+                    placeholder="520001"
+                    required
+                  />
+                  <div className="col-span-2">
+                    <InputField
+                      label="Google Maps URL"
+                      note="Paste the 'Share → Copy link' URL from Google Maps for this hospital."
+                      value={f.googleMapsUrl}
+                      onChange={(v) => set('googleMapsUrl', v)}
+                      placeholder="https://goo.gl/maps/…"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {step === 3 && (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+                    {facilityFlags.map(([key, label, note]) => (
+                      <Toggle key={key} label={label} note={note} checked={f[key]} onChange={(v) => set(key, v)} />
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 pt-4 border-t border-base-300">
+                    <InputField
+                      label="Total Beds"
+                      note="Total number of inpatient beds in this hospital."
+                      type="number"
+                      value={f['bedCount.total']}
+                      onChange={(v) => set('bedCount.total', v)}
+                    />
+                    <InputField
+                      label="ICU Beds"
+                      note="Dedicated ICU bed count. Setting this > 0 auto-enables 'Has ICU'."
+                      type="number"
+                      value={f['bedCount.icu']}
+                      onChange={(v) => set('bedCount.icu', v)}
+                    />
+                  </div>
+                  <MultiSelect
+                    label="Facilities & Amenities"
+                    note="Select all facilities available inside or on-campus."
+                    options={FACILITIES_LIST}
+                    selected={f.facilities}
+                    onChange={(v) => set('facilities', v)}
+                  />
+                  <MultiSelect
+                    label="Accepted Insurance / Schemes"
+                    note="Insurance panels and government health schemes accepted."
+                    options={ACCEPTED_SCHEMES}
+                    selected={f.acceptedSchemes}
+                    onChange={(v) => set('acceptedSchemes', v)}
+                  />
+                </div>
+              )}
+
+              {step === 4 && (
+                <div className="grid grid-cols-2 gap-4">
+                  <InputField
+                    label="License / Registration Number *"
+                    note="Medical Council or State Health Dept registration number. Must be unique across the platform."
+                    value={f['registrationDetails.licenseNumber']}
+                    onChange={(v) => set('registrationDetails.licenseNumber', v)}
+                    placeholder="AP/MED/2024/XXXXX"
+                    required
+                  />
+                  <InputField
+                    label="License Expiry Date"
+                    note="Expiry date of the registration / operating license."
+                    type="date"
+                    value={f['registrationDetails.licenseExpiry']}
+                    onChange={(v) => set('registrationDetails.licenseExpiry', v)}
+                  />
+                  <InputField
+                    label="GST Number"
+                    note="15-digit GSTIN if the hospital is GST-registered."
+                    value={f['registrationDetails.gstNumber']}
+                    onChange={(v) => set('registrationDetails.gstNumber', v)}
+                    placeholder="29AABCU9603R1ZX"
+                  />
+                  <InputField
+                    label="PAN Number"
+                    note="10-character PAN of the hospital entity (for TDS / settlement)."
+                    value={f['registrationDetails.panNumber']}
+                    onChange={(v) => set('registrationDetails.panNumber', v)}
+                    placeholder="AABCU9603R"
+                  />
+                  <div className="col-span-2">
+                    <DualUploadField
+                      label="License / Registration Document"
+                      note="Upload or paste the URL of the scanned license/registration document (PDF or image). The backend stores this as registrationDetails.documentUrl; uploading a raw file here does not auto-attach unless your ImageKit pipeline supports documents — paste a hosted URL for reliability."
+                      url={f.docUrl}
+                      onUrlChange={(v) => set('docUrl', v)}
+                      file={f.docFile}
+                      onFileChange={(v) => set('docFile', v)}
+                      accept="image/jpeg,image/png,image/webp,application/pdf"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {step === 5 && (
+                <div className="space-y-5">
+                  <DualUploadField
+                    label="Hospital Logo"
+                    note="Square or landscape logo. Recommended: 512×512 px, PNG/WebP. Max 5 MB. Paste an ImageKit CDN URL or upload a new file — both work."
+                    url={f.logoUrl}
+                    onUrlChange={(v) => set('logoUrl', v)}
+                    file={f.logoFile}
+                    onFileChange={(v) => set('logoFile', v)}
+                    accept="image/jpeg,image/png,image/webp"
+                  />
+                  {(f.logoUrl || f.logoFile) && (
+                    <div className="flex items-center gap-3 p-3 bg-base-200 rounded-xl border border-base-300">
+                      {f.logoUrl && (
+                        <img src={f.logoUrl} alt="preview" className="w-12 h-12 rounded-lg object-cover border border-base-300" />
+                      )}
+                      <div className="text-xs text-base-content/60">
+                        {f.logoFile ? `📎 ${f.logoFile.name}` : '🔗 CDN URL provided — will be set on creation.'}
+                      </div>
+                    </div>
+                  )}
+                  <div className="border-t border-base-300 pt-4">
+                    <Field
+                      label="Gallery Images (max 20)"
+                      note="Upload multiple images OR paste one URL per line. Files are uploaded to ImageKit after hospital creation. Both methods can be used together."
+                    >
+                      <div className="flex flex-col gap-2 p-3 bg-base-200 border border-base-300 rounded-xl">
+                        <div className="flex items-start gap-2">
+                          <LinkIcon size={12} className="text-base-content/40 shrink-0 mt-2" />
+                          <textarea
+                            value={f.imageUrls}
+                            onChange={(e) => set('imageUrls', e.target.value)}
+                            rows={3}
+                            placeholder={'https://ik.imagekit.io/img1.jpg\nhttps://ik.imagekit.io/img2.jpg'}
+                            className="input-field flex-1 text-xs resize-none"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-px bg-base-300" />
+                          <span className="text-[10px] text-base-content/30 font-bold uppercase tracking-widest">or</span>
+                          <div className="flex-1 h-px bg-base-300" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Paperclip size={12} className="text-base-content/40 shrink-0" />
+                          <label className="btn-secondary text-[10px] px-3 py-1.5 flex items-center gap-1.5 cursor-pointer">
+                            <Upload size={11} /> Choose Files
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              multiple
+                              className="hidden"
+                              onChange={(e) => set('imageFiles', Array.from(e.target.files ?? []))}
+                            />
+                          </label>
+                          {f.imageFiles?.length > 0 && (
+                            <span className="text-[10px] text-base-content/50">{f.imageFiles.length} file(s) selected</span>
+                          )}
+                        </div>
+                      </div>
+                    </Field>
+                  </div>
+                </div>
+              )}
+
+              {step === 6 && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <div
+                      className={`flex items-start gap-3 p-4 rounded-xl border mb-4 ${
+                        isMgd
+                          ? 'bg-primary/10 border-primary/30'
+                          : 'bg-info/10 border-info/30'
+                      }`}
+                    >
+                      <Info size={15} className={`shrink-0 mt-0.5 ${isMgd ? 'text-primary' : 'text-info'}`} />
+                      <div className="text-xs leading-relaxed">
+                        {isMgd ? (
+                          <>
+                            <strong>Hospital-Manager account</strong> will be created with role{' '}
+                            <code className="bg-primary/10 px-1 py-0.5 rounded text-[10px]">hospital</code>. This person
+                            manages consultation pricing and linked doctors for this managed hospital type.
+                          </>
+                        ) : (
+                          <>
+                            <strong>Doctor-Owner account</strong> will be created with role{' '}
+                            <code className="bg-info/10 px-1 py-0.5 rounded text-[10px]">doctor</code>. This doctor owns and
+                            manages the Clinic / Nursing Home and sets their own pricing.
+                          </>
+                        )}
+                        <br />
+                        <span className="text-base-content/50 mt-1 block">
+                          Login credentials will be sent to the email below automatically.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <InputField
+                    label="Manager / Owner Full Name *"
+                    note="Full name of the person who will log in and manage this hospital."
+                    value={f.managerName}
+                    onChange={(v) => set('managerName', v)}
+                    placeholder="Dr. Ravi Kumar"
+                    required
+                  />
+                  <InputField
+                    label="Manager Email Address *"
+                    note="Login email. A temporary password will be emailed here. Must be unique on the platform."
+                    type="email"
+                    value={f.managerEmail}
+                    onChange={(v) => set('managerEmail', v)}
+                    placeholder="manager@hospital.com"
+                    required
+                  />
+                  <InputField
+                    label="Manager Phone"
+                    note="Optional contact phone for the manager user account."
+                    value={f.managerPhone}
+                    onChange={(v) => set('managerPhone', v)}
+                    placeholder="+91 9876543210"
+                  />
+                  <div className="col-span-2 mt-2">
+                    <div className="p-4 bg-base-200 rounded-xl border border-base-300 text-xs space-y-1.5">
+                      <p className="font-bold text-base-content mb-2 flex items-center gap-1.5">
+                        <CheckCircle size={12} className="text-success" /> Summary before creation
+                      </p>
+                      {[
+                        ['Hospital', f.name || '—'],
+                        ['Type', f.hospitalType],
+                        ['Model', isMgd ? 'Hospital-Manager' : 'Doctor-Owner'],
+                        ['City', `${f['address.city']}, ${f['address.state']}`],
+                        ['License No.', f['registrationDetails.licenseNumber'] || '—'],
+                        ['Manager', f.managerName || '—'],
+                        ['Manager Email', f.managerEmail || '—'],
+                      ].map(([k, v]) => (
+                        <div key={k} className="flex gap-2">
+                          <span className="text-base-content/40 w-24 shrink-0">{k}</span>
+                          <span className="font-semibold text-base-content truncate">{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+
+        <div className="shrink-0 flex items-center justify-between px-6 py-4 border-t border-base-300 bg-base-100">
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="btn-secondary text-xs px-4 py-2">
+              Cancel
+            </button>
+            {step > 0 && (
+              <button onClick={() => setStep((s) => s - 1)} className="btn-secondary text-xs px-4 py-2">
+                ← Back
+              </button>
             )}
           </div>
-        ))}
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} icon={<Calendar size={14} />} onClick={() => onSubmit({ id: doctor._id, availability: slots })}>Save Availability</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-function UploadDoctorPhotoModal({ open, onClose, doctor, onSubmit, loading }) {
-  const [file, setFile] = useState(null);
-  const fileRef = useRef();
-  if (!doctor) return null;
-  return (
-    <Modal open={open} onClose={onClose} title="Profile Photo" subtitle={doctor.user?.name} icon={ImagePlus}>
-      <div className="hm-upload-zone" onClick={() => fileRef.current?.click()}>
-        <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={e => setFile(e.target.files[0])} />
-        {doctor.user?.avatar ? <img src={doctor.user.avatar} alt="profile" className="h-16 w-16 rounded-full object-cover border-2 border-primary/30 mb-3 mx-auto" /> : <UserRound size={28} className="text-base-content/20 mb-2" />}
-        <p className="text-xs font-semibold text-base-content/50">{file ? file.name : "Click to upload photo"}</p>
-        <p className="text-[11px] text-base-content/30 mt-1">JPEG/PNG/WebP, max 5 MB, recommended 400×400 px</p>
-      </div>
-      <div className="flex gap-2.5 justify-end pt-4 mt-2 border-t border-base-300">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" loading={loading} disabled={!file} icon={<Upload size={14} />} onClick={() => onSubmit({ id: doctor._id, photo: file })}>Upload</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// TABLE ROWS
-// ══════════════════════════════════════════════════════════════════════════════
-
-function HospitalRow({ hospital, onAction }) {
-  const [expanded, setExpanded] = useState(false);
-  const actions = [
-    { label: "Edit Profile", icon: Edit3, action: "editProfile", variant: "subtle" },
-    { label: "Settings", icon: Settings2, action: "settings", variant: "subtle" },
-    { label: "Registration", icon: Lock, action: "security", variant: "subtle" },
-    { label: "Platform Fee", icon: DollarSign, action: "platformFee", variant: "subtle" },
-    { label: "Images", icon: ImagePlus, action: "uploadImages", variant: "subtle" },
-    { label: "Location", icon: MapPin, action: "location", variant: "subtle" },
-    { label: "Doctors", icon: Stethoscope, action: "linkDoctors", variant: "subtle" },
-    { label: hospital.isVerified ? "Unverify" : "Verify", icon: hospital.isVerified ? BadgeX : BadgeCheck, action: "verify", variant: hospital.isVerified ? "warning" : "success" },
-    { label: hospital.isActive ? "Deactivate" : "Activate", icon: hospital.isActive ? ToggleLeft : ToggleRight, action: "toggle", variant: "ghost" },
-    { label: "Delete", icon: Trash2, action: "delete", variant: "danger" },
-  ];
-  return (
-    <>
-      <motion.tr variants={fadeUp} className={`hm-table-row ${expanded ? "hm-table-row-active" : ""}`} onClick={() => setExpanded(e => !e)}>
-        <td className="px-4 py-3.5">
           <div className="flex items-center gap-3">
-            {hospital.logo ? <img src={hospital.logo} alt="" className="h-9 w-9 rounded-xl object-cover ring-1 ring-base-300" /> : <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0"><Building2 size={15} className="text-primary" /></div>}
-            <div><p className="text-xs font-bold text-base-content leading-tight">{hospital.name}</p><p className="text-[11px] text-base-content/45 mt-0.5">{hospital.hospitalType}</p></div>
-          </div>
-        </td>
-        <td className="px-4 py-3.5 text-[11px] text-base-content/55">{hospital.address?.city}, {hospital.address?.state}</td>
-        <td className="px-4 py-3.5"><StatusBadge variant={hospital.isVerified ? "success" : "warning"}>{hospital.isVerified ? "Verified" : "Unverified"}</StatusBadge></td>
-        <td className="px-4 py-3.5"><StatusBadge variant={hospital.isActive ? "success" : "error"}>{hospital.isActive ? "Active" : "Inactive"}</StatusBadge></td>
-        <td className="px-4 py-3.5 text-[11px] text-base-content/55">{hospital.rating?.averageRating?.toFixed(1) || "—"} ★</td>
-        <td className="px-4 py-3.5 text-right pr-5"><ChevronDown size={14} className={`text-base-content/30 transition-transform duration-300 ${expanded ? "rotate-180" : ""}`} /></td>
-      </motion.tr>
-      <AnimatePresence>
-        {expanded && (
-          <motion.tr key="exp" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
-            <td colSpan={6} className="px-4 pb-4 pt-0">
-              <div className="hm-action-bar">
-                {actions.map(({ label, icon: Icon, action, variant }) => (
-                  <Btn key={action} size="sm" variant={variant} icon={<Icon size={12} />}
-                    onClick={e => { e.stopPropagation(); onAction(action, hospital); }}>
-                    {label}
-                  </Btn>
-                ))}
-              </div>
-            </td>
-          </motion.tr>
-        )}
-      </AnimatePresence>
-    </>
-  );
-}
-
-function DoctorRow({ doctor, onAction }) {
-  const [expanded, setExpanded] = useState(false);
-  const actions = [
-    { label: "Edit", icon: Edit3, action: "editProfile", variant: "subtle" },
-    { label: "Settings", icon: Settings2, action: "settings", variant: "subtle" },
-    { label: "Availability", icon: Calendar, action: "availability", variant: "subtle" },
-    { label: "Bank", icon: CreditCard, action: "bankDetails", variant: "subtle" },
-    { label: "KYC Docs", icon: ShieldCheck, action: "kyc", variant: "subtle" },
-    { label: "Verify KYC", icon: BadgeCheck, action: "verifyKyc", variant: "success" },
-    { label: "Photo", icon: ImagePlus, action: "uploadPhoto", variant: "subtle" },
-    { label: "Security", icon: Lock, action: "security", variant: "subtle" },
-    { label: "Platform Fee", icon: DollarSign, action: "platformFee", variant: "subtle" },
-    { label: "Partnership", icon: BadgeCheck, action: "partnership", variant: "subtle" },
-    { label: doctor.isActive ? "Deactivate" : "Activate", icon: doctor.isActive ? ToggleLeft : ToggleRight, action: "toggle", variant: "ghost" },
-    { label: "Delete", icon: Trash2, action: "delete", variant: "danger" },
-  ];
-  return (
-    <>
-      <motion.tr variants={fadeUp} className={`hm-table-row ${expanded ? "hm-table-row-active" : ""}`} onClick={() => setExpanded(e => !e)}>
-        <td className="px-4 py-3.5">
-          <div className="flex items-center gap-3">
-            {doctor.user?.avatar ? <img src={doctor.user.avatar} alt="" className="h-9 w-9 rounded-full object-cover ring-1 ring-base-300" /> : <div className="h-9 w-9 rounded-full bg-secondary/10 flex items-center justify-center shrink-0"><Stethoscope size={15} className="text-secondary" /></div>}
-            <div><p className="text-xs font-bold text-base-content leading-tight">{doctor.user?.name || "—"}</p><p className="text-[11px] text-base-content/45 mt-0.5">{doctor.specialization}</p></div>
-          </div>
-        </td>
-        <td className="px-4 py-3.5 text-[11px] text-base-content/55">{doctor.experienceYears} yrs</td>
-        <td className="px-4 py-3.5"><StatusBadge variant={doctor.kycStatus === "verified" ? "success" : doctor.kycStatus === "rejected" ? "error" : "warning"}>{doctor.kycStatus}</StatusBadge></td>
-        <td className="px-4 py-3.5"><StatusBadge variant={doctor.partnershipStatus === "Active" ? "success" : doctor.partnershipStatus === "Suspended" ? "error" : "warning"}>{doctor.partnershipStatus}</StatusBadge></td>
-        <td className="px-4 py-3.5"><StatusBadge variant={doctor.isActive ? "success" : "error"}>{doctor.isActive ? "Active" : "Inactive"}</StatusBadge></td>
-        <td className="px-4 py-3.5 text-right pr-5"><ChevronDown size={14} className={`text-base-content/30 transition-transform duration-300 ${expanded ? "rotate-180" : ""}`} /></td>
-      </motion.tr>
-      <AnimatePresence>
-        {expanded && (
-          <motion.tr key="exp" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
-            <td colSpan={6} className="px-4 pb-4 pt-0">
-              <div className="hm-action-bar">
-                {actions.map(({ label, icon: Icon, action, variant }) => (
-                  <Btn key={action} size="sm" variant={variant} icon={<Icon size={12} />}
-                    onClick={e => { e.stopPropagation(); onAction(action, doctor); }}>
-                    {label}
-                  </Btn>
-                ))}
-              </div>
-            </td>
-          </motion.tr>
-        )}
-      </AnimatePresence>
-    </>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// OVERVIEW PANEL
-// ══════════════════════════════════════════════════════════════════════════════
-
-function OverviewPanel({ hospitals, doctors }) {
-  const hospitalTypeData = HOSPITAL_TYPES.map(t => ({ name: t.split("-")[0], count: hospitals.filter(h => h.hospitalType === t).length })).filter(d => d.count > 0);
-  const kycData = KYC_STATUSES.map(s => ({ name: s.replace("-", " "), count: doctors.filter(d => d.kycStatus === s).length })).filter(d => d.count > 0);
-  const partnerData = PARTNERSHIP_STATUSES.map(s => ({ name: s, count: doctors.filter(d => d.partnershipStatus === s).length })).filter(d => d.count > 0);
-  const specializationData = SPECIALIZATIONS.map(s => ({ name: s.split(" ")[0], count: doctors.filter(d => d.specialization === s).length })).filter(d => d.count > 0).slice(0, 8);
-  const verifiedH = hospitals.filter(h => h.isVerified).length;
-  const activeH = hospitals.filter(h => h.isActive).length;
-  const activeD = doctors.filter(d => d.isActive).length;
-  const onlineD = doctors.filter(d => d.isOnline).length;
-
-  const tooltipStyle = { background: "var(--base-200)", border: "1px solid var(--base-300)", borderRadius: 8, fontSize: 11, color: "var(--base-content)" };
-
-  return (
-    <motion.div variants={stagger} initial="hidden" animate="visible" className="space-y-5">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total Hospitals" value={hospitals.length} icon={Building2} color="primary" sublabel="Platform-wide" />
-        <StatCard label="Verified" value={verifiedH} icon={BadgeCheck} color="success" sublabel={`${hospitals.length ? Math.round(verifiedH / hospitals.length * 100) : 0}% of total`} />
-        <StatCard label="Active Doctors" value={activeD} icon={Stethoscope} color="secondary" sublabel={`${doctors.length} total registered`} />
-        <StatCard label="Online Now" value={onlineD} icon={Activity} color="info" sublabel="Live consultation" />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <motion.div variants={fadeUp} className="hm-chart-card">
-          <div className="hm-chart-header"><span className="hm-chart-title">Hospital Types</span><Layers size={14} className="text-base-content/30" /></div>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={hospitalTypeData} margin={{ top: 4, right: 8, bottom: 0, left: -16 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" vertical={false} />
-              <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--base-content)", opacity: 0.5 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: "var(--base-content)", opacity: 0.5 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--primary)", opacity: 0.06 }} />
-              <Bar dataKey="count" fill="var(--color-primary)" radius={[5, 5, 0, 0]} maxBarSize={40} />
-            </BarChart>
-          </ResponsiveContainer>
-        </motion.div>
-
-        <motion.div variants={fadeUp} className="hm-chart-card">
-          <div className="hm-chart-header"><span className="hm-chart-title">Doctor KYC Status</span><ShieldCheck size={14} className="text-base-content/30" /></div>
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie data={kycData} dataKey="count" nameKey="name" cx="50%" cy="50%" outerRadius={75} innerRadius={40} paddingAngle={3}>
-                {kycData.map((_, i) => <Cell key={i} fill={chartPalette[i % chartPalette.length]} />)}
-              </Pie>
-              <Tooltip contentStyle={tooltipStyle} />
-              <Legend wrapperStyle={{ fontSize: 11, color: "var(--base-content)", opacity: 0.6 }} />
-            </PieChart>
-          </ResponsiveContainer>
-        </motion.div>
-
-        <motion.div variants={fadeUp} className="hm-chart-card">
-          <div className="hm-chart-header"><span className="hm-chart-title">Specializations</span><Stethoscope size={14} className="text-base-content/30" /></div>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={specializationData} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 52 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" horizontal={false} />
-              <XAxis type="number" tick={{ fontSize: 10, fill: "var(--base-content)", opacity: 0.5 }} axisLine={false} tickLine={false} />
-              <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: "var(--base-content)", opacity: 0.6 }} width={52} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--secondary)", opacity: 0.06 }} />
-              <Bar dataKey="count" fill="var(--color-secondary)" radius={[0, 5, 5, 0]} maxBarSize={16} />
-            </BarChart>
-          </ResponsiveContainer>
-        </motion.div>
-
-        <motion.div variants={fadeUp} className="hm-chart-card">
-          <div className="hm-chart-header"><span className="hm-chart-title">Partnership Status</span><BadgeCheck size={14} className="text-base-content/30" /></div>
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie data={partnerData} dataKey="count" nameKey="name" cx="50%" cy="50%" outerRadius={75} innerRadius={40} paddingAngle={3}>
-                {partnerData.map((_, i) => <Cell key={i} fill={chartPalette[i % chartPalette.length]} />)}
-              </Pie>
-              <Tooltip contentStyle={tooltipStyle} />
-              <Legend wrapperStyle={{ fontSize: 11, color: "var(--base-content)", opacity: 0.6 }} />
-            </PieChart>
-          </ResponsiveContainer>
-        </motion.div>
-      </div>
-
-      <motion.div variants={fadeUp} className="hm-chart-card">
-        <div className="hm-chart-header"><span className="hm-chart-title">Quick Stats</span><Zap size={14} className="text-base-content/30" /></div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-1">
-          {[
-            { label: "Active Hospitals", value: activeH, color: "text-success" },
-            { label: "KYC Pending", value: doctors.filter(d => d.kycStatus === "pending").length, color: "text-warning" },
-            { label: "KYC Verified", value: doctors.filter(d => d.kycStatus === "verified").length, color: "text-success" },
-            { label: "Active Partners", value: doctors.filter(d => d.partnershipStatus === "Active").length, color: "text-primary" },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="hm-quick-stat">
-              <p className={`text-3xl font-black tabular-nums ${color}`}>{value}</p>
-              <p className="text-[11px] text-base-content/40 mt-1 font-medium">{label}</p>
+            <div className="flex gap-1">
+              {STEPS.map((_, i) => (
+                <span
+                  key={i}
+                  className={`w-1.5 h-1.5 rounded-full transition-all ${
+                    i === step ? 'bg-primary w-3' : i < step ? 'bg-primary/50' : 'bg-base-300'
+                  }`}
+                />
+              ))}
             </div>
-          ))}
+            {!isLast ? (
+              <button
+                onClick={() => setStep((s) => s + 1)}
+                disabled={!canNext}
+                className="btn-primary-cta text-xs px-5 py-2 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:transform-none"
+              >
+                Next → <span className="hidden sm:inline">{STEPS[step + 1]?.label}</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleSubmit}
+                disabled={loading.createHospital || !canNext}
+                className="btn-primary-cta text-xs px-6 py-2 flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:transform-none"
+              >
+                {loading.createHospital ? <Spinner /> : <Plus size={13} />}
+                Create & Send Credentials
+              </button>
+            )}
+          </div>
         </div>
       </motion.div>
     </motion.div>
   );
-}
+};
 
-// ══════════════════════════════════════════════════════════════════════════════
-// SIDE NAVIGATION
-// ══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+//  CREATE DOCTOR MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+const CreateDoctorModal = ({ hospitalId, onClose, dispatch, loading }) => {
+  const [form, setForm] = useState({
+    name: '', email: '', phone: '',
+    specialization: 'General Physician', experienceYears: 0,
+    registrationNumber: '', registrationCouncil: '', biography: '',
+    'fees.inPersonFee': 0, 'fees.videoFee': 0, 'fees.homeVisitFee': 0,
+    primaryHospital: hospitalId ?? '',
+    'consultationTypes.inPerson': true,
+    'consultationTypes.video': false,
+    'consultationTypes.homeVisit': false,
+  });
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
-const NAV_ITEMS = [
-  { id: "overview", label: "Overview", icon: LayoutDashboard, badge: null },
-  { id: "hospitals", label: "Hospitals", icon: Building2, badge: "hospitalTotal" },
-  { id: "doctors", label: "Doctors", icon: Stethoscope, badge: "doctorTotal" },
-];
-
-// ══════════════════════════════════════════════════════════════════════════════
-// MAIN COMPONENT
-// ══════════════════════════════════════════════════════════════════════════════
-
-export default function HospitalManagement() {
-  const dispatch = useDispatch();
-  const hospitals = useSelector(selectHospitals) || [];
-  const doctors = useSelector(selectDoctors) || [];
-  const loading = useSelector(selectHospitalLoading) || {};
-  const error = useSelector(selectHospitalError);
-  const hospitalTotal = useSelector(selectHospitalTotal) || 0;
-  const doctorTotal = useSelector(selectDoctorTotal) || 0;
-
-  const [tab, setTab] = useState("overview");
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [modals, setModals] = useState({});
-  const [active, setActive] = useState(null);
-  const [confirm, setConfirm] = useState({ open: false, message: "", onConfirm: null });
-
-  const openModal = (key, entity = null) => { setActive(entity); setModals(m => ({ ...m, [key]: true })); };
-  const closeModal = key => setModals(m => ({ ...m, [key]: false }));
-  const askConfirm = (message, fn) => setConfirm({ open: true, message, onConfirm: fn });
-  const cancelConfirm = () => setConfirm({ open: false, message: "", onConfirm: null });
-
-  useEffect(() => {
-    dispatch(fetchAllHospitals({ page, limit: 20 }));
-    dispatch(fetchAllDoctors({ page: 1, limit: 50 }));
-  }, [dispatch, page]);
-
-  useEffect(() => {
-    if (error) { const t = setTimeout(() => dispatch(clearError()), 5000); return () => clearTimeout(t); }
-  }, [error, dispatch]);
-
-  const handleHospitalAction = (action, hospital) => {
-    const map = {
-      editProfile: () => openModal("editHospitalProfile", hospital),
-      settings: () => openModal("editHospitalSettings", hospital),
-      security: () => openModal("editHospitalSecurity", hospital),
-      platformFee: () => openModal("editHospitalFee", hospital),
-      uploadImages: () => openModal("uploadHospitalImages", hospital),
-      location: () => openModal("editHospitalLocation", hospital),
-      linkDoctors: () => openModal("linkDoctors", hospital),
-      verify: () => askConfirm(`${hospital.isVerified ? "Unverify" : "Verify"} "${hospital.name}"?`, () => { dispatch(verifyHospital({ id: hospital._id, isVerified: !hospital.isVerified })); cancelConfirm(); }),
-      toggle: () => askConfirm(`${hospital.isActive ? "Deactivate" : "Activate"} "${hospital.name}"?`, () => { dispatch(toggleHospitalActive(hospital._id)); cancelConfirm(); }),
-      delete: () => askConfirm(`Permanently delete "${hospital.name}"? This cannot be undone.`, () => { dispatch(deleteHospital(hospital._id)); cancelConfirm(); }),
-    };
-    map[action]?.();
+  const handleSubmit = () => {
+    dispatch(
+      createDoctorProfile({
+        name: form.name,
+        email: form.email,
+        phone: form.phone,
+        specialization: form.specialization,
+        experienceYears: Number(form.experienceYears),
+        registrationNumber: form.registrationNumber,
+        registrationCouncil: form.registrationCouncil,
+        biography: form.biography,
+        fees: {
+          inPersonFee: Number(form['fees.inPersonFee']),
+          videoFee: Number(form['fees.videoFee']),
+          homeVisitFee: Number(form['fees.homeVisitFee']),
+        },
+        consultationTypes: {
+          inPerson: form['consultationTypes.inPerson'],
+          video: form['consultationTypes.video'],
+          homeVisit: form['consultationTypes.homeVisit'],
+        },
+        primaryHospital: form.primaryHospital,
+      })
+    ).then((r) => {
+      if (!r.error) onClose();
+    });
   };
 
-  const handleDoctorAction = (action, doctor) => {
-    const map = {
-      editProfile: () => openModal("editDoctorProfile", doctor),
-      settings: () => openModal("editDoctorSettings", doctor),
-      availability: () => openModal("editDoctorAvailability", doctor),
-      bankDetails: () => openModal("editDoctorBank", doctor),
-      kyc: () => openModal("editDoctorKyc", doctor),
-      verifyKyc: () => openModal("verifyDoctorKyc", doctor),
-      uploadPhoto: () => openModal("uploadDoctorPhoto", doctor),
-      security: () => openModal("editDoctorSecurity", doctor),
-      platformFee: () => openModal("editDoctorFee", doctor),
-      partnership: () => openModal("editDoctorPartnership", doctor),
-      toggle: () => askConfirm(`${doctor.isActive ? "Deactivate" : "Activate"} Dr. ${doctor.user?.name}?`, () => { dispatch(toggleDoctorActive(doctor._id)); cancelConfirm(); }),
-      delete: () => askConfirm(`Permanently delete Dr. ${doctor.user?.name}? This cannot be undone.`, () => { dispatch(deleteDoctorProfile(doctor._id)); cancelConfirm(); }),
-    };
-    map[action]?.();
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+    >
+      <motion.div
+        initial={{ y: 30, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 30, opacity: 0 }}
+        className="bg-base-100 rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto border border-base-300"
+      >
+        <div className="sticky top-0 bg-base-100 flex items-center justify-between px-6 py-4 border-b border-base-300 z-10">
+          <span className="font-black text-base-content font-montserrat">Add Doctor</span>
+          <button onClick={onClose} className="p-1.5 hover:bg-base-200 rounded-lg">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-6 grid grid-cols-2 gap-4">
+          <InputField label="Full Name *" note="Doctor's full legal name." value={form.name} onChange={(v) => set('name', v)} required />
+          <InputField
+            label="Email *"
+            note="Login email — credentials sent here."
+            type="email"
+            value={form.email}
+            onChange={(v) => set('email', v)}
+            required
+          />
+          <InputField label="Phone" note="Contact number with country code." value={form.phone} onChange={(v) => set('phone', v)} />
+          <SelectField
+            label="Specialization *"
+            note="Primary medical specialty."
+            value={form.specialization}
+            onChange={(v) => set('specialization', v)}
+            options={SPECIALIZATIONS}
+          />
+          <InputField
+            label="Experience (years) *"
+            note="Years of active clinical practice."
+            type="number"
+            value={form.experienceYears}
+            onChange={(v) => set('experienceYears', v)}
+          />
+          <InputField
+            label="Reg. Number"
+            note="MCI / State Medical Council registration ID."
+            value={form.registrationNumber}
+            onChange={(v) => set('registrationNumber', v)}
+          />
+          <InputField
+            label="Registration Council"
+            note="e.g. Andhra Pradesh Medical Council."
+            value={form.registrationCouncil}
+            onChange={(v) => set('registrationCouncil', v)}
+          />
+          <div />
+          <div className="col-span-2">
+            <p className="text-xs font-bold text-primary uppercase tracking-wider mb-3">Consultation Types</p>
+            <div className="flex gap-4">
+              {[['inPerson', 'In-Person'], ['video', 'Video'], ['homeVisit', 'Home Visit']].map(([k, l]) => (
+                <Toggle
+                  key={k}
+                  label={l}
+                  note=""
+                  checked={form[`consultationTypes.${k}`]}
+                  onChange={(v) => set(`consultationTypes.${k}`, v)}
+                />
+              ))}
+            </div>
+          </div>
+          <InputField
+            label="In-Person Fee (₹)"
+            note="Charged per in-person consultation."
+            type="number"
+            value={form['fees.inPersonFee']}
+            onChange={(v) => set('fees.inPersonFee', v)}
+          />
+          <InputField
+            label="Video Fee (₹)"
+            note="Charged per video/telemedicine call."
+            type="number"
+            value={form['fees.videoFee']}
+            onChange={(v) => set('fees.videoFee', v)}
+          />
+          <InputField
+            label="Home Visit Fee (₹)"
+            note="Charged per home visit appointment."
+            type="number"
+            value={form['fees.homeVisitFee']}
+            onChange={(v) => set('fees.homeVisitFee', v)}
+          />
+          <div />
+          <div className="col-span-2">
+            <TextareaField
+              label="Biography"
+              note="Doctor's professional summary shown to patients. Max 1000 chars."
+              value={form.biography}
+              onChange={(v) => set('biography', v)}
+              rows={3}
+              placeholder="Brief professional bio…"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-base-300">
+          <button onClick={onClose} className="btn-secondary text-sm px-5 py-2.5">
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={loading.createDoctorProfile}
+            className="btn-primary-cta text-sm px-5 py-2.5 flex items-center gap-2"
+          >
+            {loading.createDoctorProfile ? <Spinner /> : <Plus size={14} />} Create Doctor
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  LINK DOCTOR MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+const LinkDoctorModal = ({ hospitalId, onClose, dispatch, loading, allDoctors }) => {
+  const [doctorId, setDoctorId] = useState('');
+  const [q, setQ] = useState('');
+  const filtered = (allDoctors || []).filter((d) => !q || d.user?.name?.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+    >
+      <motion.div
+        initial={{ y: 30, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        className="bg-base-100 rounded-2xl shadow-2xl w-full max-w-md border border-base-300"
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-base-300">
+          <span className="font-black text-base-content font-montserrat">Link Existing Doctor</span>
+          <button onClick={onClose} className="p-1.5 hover:bg-base-200 rounded-lg">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-5">
+          <p className="text-xs text-base-content/50 mb-3">
+            Select a doctor already registered on the platform to link to this hospital.
+          </p>
+          <div className="relative mb-3">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search by name…"
+              className="input-field w-full pl-8 text-sm"
+            />
+          </div>
+          <div className="max-h-52 overflow-y-auto space-y-1 border border-base-300 rounded-xl p-2 scrollbar-thin">
+            {filtered.map((d) => (
+              <div
+                key={d._id}
+                onClick={() => setDoctorId(d._id)}
+                className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${
+                  doctorId === d._id ? 'bg-primary/10 border border-primary/30' : 'hover:bg-base-200'
+                }`}
+              >
+                {d.profilePhotoUrl || d.user?.avatar ? (
+                  <img src={d.profilePhotoUrl || d.user?.avatar} alt="" className="w-7 h-7 rounded-full object-cover" />
+                ) : (
+                  <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center">
+                    <Stethoscope size={12} className="text-primary" />
+                  </div>
+                )}
+                <div>
+                  <p className="text-xs font-semibold">{d.user?.name ?? 'Doctor'}</p>
+                  <p className="text-[10px] text-base-content/40">{d.specialization}</p>
+                </div>
+                {doctorId === d._id && <Check size={13} className="ml-auto text-primary" />}
+              </div>
+            ))}
+            {filtered.length === 0 && <p className="text-xs text-center text-base-content/40 py-4">No doctors found</p>}
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-base-300">
+          <button onClick={onClose} className="btn-secondary text-sm px-4 py-2">
+            Cancel
+          </button>
+          <button
+            onClick={() => {
+              if (doctorId) {
+                dispatch(linkDoctorToHospital({ hospitalId, doctorId })).then((r) => {
+                  if (!r.error) onClose();
+                });
+              }
+            }}
+            disabled={!doctorId || loading.linkDoctorToHospital}
+            className="btn-primary-cta text-sm px-4 py-2 flex items-center gap-2"
+          >
+            {loading.linkDoctorToHospital ? <Spinner /> : <Link size={13} />} Link Doctor
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  OVERVIEW TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const OverviewTab = ({ hospital }) => {
+  const doctors = hospital.linkedDoctors ?? [];
+  const specCount = {};
+  doctors.forEach((d) => {
+    const s = d.specialization ?? 'Other';
+    specCount[s] = (specCount[s] ?? 0) + 1;
+  });
+  const specData = Object.entries(specCount).map(([name, value]) => ({ name, value }));
+
+  const facilityData = [
+    { name: 'ICU', active: hospital.hasICU },
+    { name: 'Blood Bank', active: hospital.hasBloodBank },
+    { name: 'Pharmacy', active: hospital.hasPharmacy },
+    { name: 'Ambulance', active: hospital.hasAmbulance },
+    { name: 'Emergency', active: hospital.isEmergencyReady },
+    { name: '24×7', active: hospital.is24x7 },
+    { name: 'Diagnostics', active: hospital.hasDiagnostics },
+    { name: 'Wheelchair', active: hospital.hasWheelchairAccess },
+    { name: 'NABL Lab', active: hospital.nabledLabAvailable },
+  ];
+
+  const statsItems = [
+    { label: 'Total Doctors', value: hospital.linkedDoctors?.length ?? 0, icon: Users, color: 'text-primary' },
+    { label: 'Total Beds', value: hospital.bedCount?.total ?? 0, icon: Bed, color: 'text-info' },
+    { label: 'ICU Beds', value: hospital.bedCount?.icu ?? 0, icon: Activity, color: 'text-error' },
+    { label: 'Avg Rating', value: (hospital.rating?.averageRating ?? 0).toFixed(1), icon: Star, color: 'text-warning' },
+    { label: 'Total Ratings', value: hospital.rating?.totalRatings ?? 0, icon: TrendingUp, color: 'text-success' },
+    { label: 'Specialties', value: hospital.specialties?.length ?? 0, icon: Layers, color: 'text-secondary' },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-3 gap-3">
+        {statsItems.map(({ label, value, icon: Icon, color }) => (
+          <motion.div
+            key={label}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-base-200 rounded-xl p-3.5 border border-base-300"
+          >
+            <Icon size={16} className={`${color} mb-2`} />
+            <p className="text-xl font-black text-base-content font-montserrat">{value}</p>
+            <p className="text-[10px] text-base-content/50 font-medium mt-0.5">{label}</p>
+          </motion.div>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        {specData.length > 0 && (
+          <SectionCard title="Doctor Specializations" icon={Stethoscope}>
+            <ResponsiveContainer width="100%" height={160}>
+              <PieChart>
+                <Pie data={specData} cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={3} dataKey="value">
+                  {specData.map((_, i) => (
+                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: 10 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </SectionCard>
+        )}
+        <SectionCard title="Facilities" icon={Zap}>
+          <div className="grid grid-cols-2 gap-2">
+            {facilityData.map(({ name, active }) => (
+              <div
+                key={name}
+                className={`flex items-center gap-2 p-2 rounded-lg text-xs font-semibold ${
+                  active
+                    ? 'bg-success/10 text-success'
+                    : 'bg-base-200 text-base-content/40'
+                }`}
+              >
+                {active ? <CheckCircle size={12} /> : <XCircle size={12} />} {name}
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      </div>
+      <SectionCard title="Hospital Info" icon={Building2}>
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          {[
+            ['Type', hospital.hospitalType],
+            ['Model', hospital.managementModel],
+            ['Status', hospital.isActive ? 'Active' : 'Inactive'],
+            ['Verified', hospital.isVerified ? 'Yes' : 'No'],
+            ['City', hospital.address?.city],
+            ['Pincode', hospital.address?.pincode],
+            ['Phone', hospital.contact?.phone],
+            ['Email', hospital.contact?.email],
+            ['License', hospital.registrationDetails?.licenseNumber],
+            ['GST', hospital.registrationDetails?.gstNumber ?? '—'],
+            ['Specialties', hospital.specialties?.join(', ') || '—'],
+            ['Accreditations', hospital.accreditations?.join(', ') || '—'],
+          ].map(([k, v]) => (
+            <div key={k} className="bg-base-200 rounded-lg px-3 py-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-base-content/40 block">{k}</span>
+              <span className="text-xs font-semibold text-base-content truncate block">{v ?? '—'}</span>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PROFILE TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const ProfileTab = ({ hospital, dispatch, loading }) => {
+  const [form, setForm] = useState({
+    name: hospital.name ?? '',
+    description: hospital.description ?? '',
+    hospitalType: hospital.hospitalType ?? '',
+    'contact.phone': hospital.contact?.phone ?? '',
+    'contact.email': hospital.contact?.email ?? '',
+    'contact.website': hospital.contact?.website ?? '',
+    'contact.whatsapp': hospital.contact?.whatsapp ?? '',
+    'contact.emergencyPhone': hospital.contact?.emergencyPhone ?? '',
+    'contact.alternatePhone': hospital.contact?.alternatePhone ?? '',
+    'address.line1': hospital.address?.line1 ?? '',
+    'address.line2': hospital.address?.line2 ?? '',
+    'address.landmark': hospital.address?.landmark ?? '',
+    'address.city': hospital.address?.city ?? '',
+    'address.state': hospital.address?.state ?? '',
+    'address.pincode': hospital.address?.pincode ?? '',
+    googleMapsUrl: hospital.googleMapsUrl ?? '',
+    specialties: hospital.specialties ?? [],
+    accreditations: hospital.accreditations ?? [],
+  });
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  const handleSave = () =>
+    dispatch(
+      updateHospitalProfile({
+        id: hospital._id,
+        name: form.name,
+        description: form.description,
+        hospitalType: form.hospitalType,
+        contact: {
+          phone: form['contact.phone'],
+          email: form['contact.email'],
+          website: form['contact.website'],
+          whatsapp: form['contact.whatsapp'],
+          emergencyPhone: form['contact.emergencyPhone'],
+          alternatePhone: form['contact.alternatePhone'],
+        },
+        address: {
+          line1: form['address.line1'],
+          line2: form['address.line2'],
+          landmark: form['address.landmark'],
+          city: form['address.city'],
+          state: form['address.state'],
+          pincode: form['address.pincode'],
+        },
+        googleMapsUrl: form.googleMapsUrl,
+        specialties: form.specialties,
+        accreditations: form.accreditations,
+      })
+    );
+
+  return (
+    <SectionCard
+      title="Edit Profile"
+      icon={Edit3}
+      action={
+        <button onClick={handleSave} disabled={loading.updateHospitalProfile} className="btn-primary-cta text-xs px-4 py-2 flex items-center gap-1.5">
+          {loading.updateHospitalProfile ? <Spinner /> : <Check size={12} />} Save
+        </button>
+      }
+    >
+      <div className="grid grid-cols-2 gap-4">
+        <InputField label="Hospital Name" note="Official registered name." value={form.name} onChange={(v) => set('name', v)} />
+        <SelectField
+          label="Hospital Type"
+          note="Changing type will change the management model."
+          value={form.hospitalType}
+          onChange={(v) => set('hospitalType', v)}
+          options={HOSPITAL_TYPES}
+        />
+        <div className="col-span-2">
+          <TextareaField
+            label="Description"
+            note="Max 1000 characters."
+            value={form.description}
+            onChange={(v) => set('description', v)}
+            rows={2}
+          />
+        </div>
+        <InputField label="Primary Phone" note="Main helpline." value={form['contact.phone']} onChange={(v) => set('contact.phone', v)} />
+        <InputField
+          label="Emergency Phone"
+          note="Casualty / emergency line."
+          value={form['contact.emergencyPhone']}
+          onChange={(v) => set('contact.emergencyPhone', v)}
+        />
+        <InputField
+          label="Alternate Phone"
+          note="Second front-desk number."
+          value={form['contact.alternatePhone']}
+          onChange={(v) => set('contact.alternatePhone', v)}
+        />
+        <InputField label="WhatsApp" note="WhatsApp chat number." value={form['contact.whatsapp']} onChange={(v) => set('contact.whatsapp', v)} />
+        <InputField label="Email" type="email" note="Official email." value={form['contact.email']} onChange={(v) => set('contact.email', v)} />
+        <InputField label="Website" note="Include https://." value={form['contact.website']} onChange={(v) => set('contact.website', v)} />
+        <div className="col-span-2">
+          <InputField label="Address Line 1" note="Street / building number." value={form['address.line1']} onChange={(v) => set('address.line1', v)} />
+        </div>
+        <InputField label="Address Line 2" note="Area / colony." value={form['address.line2']} onChange={(v) => set('address.line2', v)} />
+        <InputField label="Landmark" note="Nearby landmark." value={form['address.landmark']} onChange={(v) => set('address.landmark', v)} />
+        <InputField label="City" note="City or town." value={form['address.city']} onChange={(v) => set('address.city', v)} />
+        <SelectField label="State" note="Indian state / UT." value={form['address.state']} onChange={(v) => set('address.state', v)} options={INDIAN_STATES} />
+        <InputField label="Pincode" note="6-digit Indian PIN." value={form['address.pincode']} onChange={(v) => set('address.pincode', v)} />
+        <div className="col-span-2">
+          <InputField label="Google Maps URL" note="Share link from Google Maps." value={form.googleMapsUrl} onChange={(v) => set('googleMapsUrl', v)} />
+        </div>
+        <div className="col-span-2">
+          <MultiSelect
+            label="Specialties"
+            note="Select all offered medical specialties."
+            options={SPECIALTIES_LIST}
+            selected={form.specialties}
+            onChange={(v) => set('specialties', v)}
+          />
+        </div>
+        <div className="col-span-2">
+          <MultiSelect
+            label="Accreditations"
+            note="Active certifications held."
+            options={ACCREDITATIONS}
+            selected={form.accreditations}
+            onChange={(v) => set('accreditations', v)}
+          />
+        </div>
+      </div>
+    </SectionCard>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SETTINGS TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const SettingsTab = ({ hospital, dispatch, loading }) => {
+  const [form, setForm] = useState({
+    isEmergencyReady: hospital.isEmergencyReady ?? false,
+    hasICU: hospital.hasICU ?? false,
+    hasBloodBank: hospital.hasBloodBank ?? false,
+    hasPharmacy: hospital.hasPharmacy ?? false,
+    hasDiagnostics: hospital.hasDiagnostics ?? false,
+    hasAmbulance: hospital.hasAmbulance ?? false,
+    hasWheelchairAccess: hospital.hasWheelchairAccess ?? false,
+    is24x7: hospital.is24x7 ?? false,
+    nabledLabAvailable: hospital.nabledLabAvailable ?? false,
+    'bedCount.total': hospital.bedCount?.total ?? 0,
+    'bedCount.icu': hospital.bedCount?.icu ?? 0,
+    facilities: hospital.facilities ?? [],
+    acceptedSchemes: hospital.acceptedSchemes ?? [],
+  });
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  const handleSave = () =>
+    dispatch(
+      updateHospitalSettings({
+        id: hospital._id,
+        isEmergencyReady: form.isEmergencyReady,
+        hasICU: form.hasICU,
+        hasBloodBank: form.hasBloodBank,
+        hasPharmacy: form.hasPharmacy,
+        hasDiagnostics: form.hasDiagnostics,
+        hasAmbulance: form.hasAmbulance,
+        hasWheelchairAccess: form.hasWheelchairAccess,
+        is24x7: form.is24x7,
+        nabledLabAvailable: form.nabledLabAvailable,
+        bedCount: { total: Number(form['bedCount.total']), icu: Number(form['bedCount.icu']) },
+        facilities: form.facilities,
+        acceptedSchemes: form.acceptedSchemes,
+      })
+    );
+
+  const flags = [
+    ['isEmergencyReady', 'Emergency Ready', 'Has 24/7 emergency / casualty services.'],
+    ['hasICU', 'Has ICU', 'ICU beds > 0 auto-enables this.'],
+    ['hasBloodBank', 'Has Blood Bank', 'On-site blood bank.'],
+    ['hasPharmacy', 'Has Pharmacy', 'In-house pharmacy.'],
+    ['hasDiagnostics', 'Has Diagnostics', 'Lab / diagnostic centre on campus.'],
+    ['hasAmbulance', 'Has Ambulance', 'Ambulance fleet operated by hospital.'],
+    ['hasWheelchairAccess', 'Wheelchair Access', 'Ramps, lifts, and accessible restrooms.'],
+    ['is24x7', 'Open 24×7', 'Round-the-clock operations (OPD, Emergency, etc).'],
+    ['nabledLabAvailable', 'NABL Lab', 'NABL-accredited lab present on site.'],
+  ];
+
+  return (
+    <SectionCard
+      title="Facility Settings"
+      icon={Settings}
+      action={
+        <button onClick={handleSave} disabled={loading.updateHospitalSettings} className="btn-primary-cta text-xs px-4 py-2 flex items-center gap-1.5">
+          {loading.updateHospitalSettings ? <Spinner /> : <Check size={12} />} Save
+        </button>
+      }
+    >
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3 mb-5">
+        {flags.map(([key, label, note]) => (
+          <Toggle key={key} label={label} note={note} checked={form[key]} onChange={(v) => set(key, v)} />
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-4 pt-4 border-t border-base-300">
+        <InputField label="Total Beds" note="All inpatient beds combined." type="number" value={form['bedCount.total']} onChange={(v) => set('bedCount.total', v)} />
+        <InputField label="ICU Beds" note="Setting > 0 auto-enables Has ICU flag." type="number" value={form['bedCount.icu']} onChange={(v) => set('bedCount.icu', v)} />
+      </div>
+      <div className="mt-4 space-y-4">
+        <MultiSelect label="Facilities & Amenities" note="Select all on-campus facilities." options={FACILITIES_LIST} selected={form.facilities} onChange={(v) => set('facilities', v)} />
+        <MultiSelect label="Accepted Insurance / Schemes" note="All insurance/govt schemes accepted." options={ACCEPTED_SCHEMES} selected={form.acceptedSchemes} onChange={(v) => set('acceptedSchemes', v)} />
+      </div>
+    </SectionCard>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SECURITY TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const SecurityTab = ({ hospital, dispatch, loading }) => {
+  const [docUrl, setDocUrl] = useState(hospital.registrationDetails?.documentUrl ?? '');
+  const [docFile, setDocFile] = useState(null);
+  const [form, setForm] = useState({
+    licenseNumber: hospital.registrationDetails?.licenseNumber ?? '',
+    gstNumber: hospital.registrationDetails?.gstNumber ?? '',
+    panNumber: hospital.registrationDetails?.panNumber ?? '',
+    licenseExpiry: hospital.registrationDetails?.licenseExpiry?.slice?.(0, 10) ?? '',
+  });
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  const handleSave = () =>
+    dispatch(
+      updateHospitalSecurity({
+        id: hospital._id,
+        ...form,
+        documentUrl: docUrl || undefined,
+      })
+    );
+
+  return (
+    <div className="space-y-4">
+      <SectionCard
+        title="Registration Details"
+        icon={Lock}
+        action={
+          <button onClick={handleSave} disabled={loading.updateHospitalSecurity} className="btn-primary-cta text-xs px-4 py-2 flex items-center gap-1.5">
+            {loading.updateHospitalSecurity ? <Spinner /> : <Check size={12} />} Save
+          </button>
+        }
+      >
+        <div className="grid grid-cols-2 gap-4">
+          <InputField label="License Number" note="Must be unique. Changing requires admin approval." value={form.licenseNumber} onChange={(v) => set('licenseNumber', v)} />
+          <InputField label="License Expiry" note="Expiry date of the operating license." type="date" value={form.licenseExpiry} onChange={(v) => set('licenseExpiry', v)} />
+          <InputField label="GST Number" note="15-digit GSTIN (optional)." value={form.gstNumber} onChange={(v) => set('gstNumber', v)} />
+          <InputField label="PAN Number" note="10-char PAN for TDS and settlement." value={form.panNumber} onChange={(v) => set('panNumber', v)} />
+          <div className="col-span-2">
+            <DualUploadField
+              label="Registration Document"
+              note="License scan, certificate, or registration letter. Paste an ImageKit/hosted URL — saved directly as registrationDetails.documentUrl."
+              url={docUrl}
+              onUrlChange={setDocUrl}
+              file={docFile}
+              onFileChange={setDocFile}
+              accept="image/jpeg,image/png,image/webp,application/pdf"
+            />
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Manager Credentials" icon={Send}>
+        <p className="text-xs text-base-content/60 mb-4">
+          Generate a new password and resend login credentials to the hospital manager.
+        </p>
+        <button
+          onClick={() => dispatch(resendHospitalManagerCredentials(hospital._id))}
+          disabled={loading.resendHospitalManagerCredentials}
+          className="btn-primary-cta text-sm px-5 py-2.5 flex items-center gap-2"
+        >
+          {loading.resendHospitalManagerCredentials ? <Spinner /> : <Send size={13} />} Resend Credentials
+        </button>
+      </SectionCard>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PLATFORM FEE SECTION
+// ─────────────────────────────────────────────────────────────────────────────
+const PlatformFeeSection = ({ doctor, dispatch, loading }) => {
+  const current = doctor?.platformFee;
+  const [type, setType] = useState(current?.type ?? 'percentage');
+  const [value, setValue] = useState(current?.value ?? '');
+  const [clear, setClear] = useState(false);
+
+  const handleSave = () => {
+    const pf = clear ? null : { type, value: Number(value) };
+    dispatch(updateDoctorPlatformFee({ id: doctor._id, platformFee: pf }));
   };
 
-  const filteredHospitals = hospitals.filter(h =>
-    h.name?.toLowerCase().includes(search.toLowerCase()) ||
-    h.address?.city?.toLowerCase().includes(search.toLowerCase()) ||
-    h.hospitalType?.toLowerCase().includes(search.toLowerCase())
+  return (
+    <div className="space-y-3">
+      <Toggle
+        label="Clear override (revert to global default)"
+        note="Global platform pricing config applies when cleared."
+        checked={clear}
+        onChange={setClear}
+      />
+      {!clear && (
+        <div className="grid grid-cols-2 gap-3">
+          <SelectField
+            label="Fee Type"
+            note="Fixed = flat ₹ amount. Percentage = % of consultation fee."
+            value={type}
+            onChange={setType}
+            options={[{ value: 'fixed', label: 'Fixed (₹)' }, { value: 'percentage', label: 'Percentage (%)' }]}
+          />
+          <InputField
+            label={type === 'fixed' ? 'Amount (₹)' : 'Percent (%)'}
+            note={type === 'percentage' ? 'Must be between 0–100.' : 'Flat rupee amount charged per booking.'}
+            type="number"
+            value={value}
+            onChange={setValue}
+          />
+        </div>
+      )}
+      <div className="flex items-center gap-3">
+        <button onClick={handleSave} disabled={loading.updateDoctorPlatformFee} className="btn-primary-cta text-xs px-4 py-2 flex items-center gap-1.5">
+          {loading.updateDoctorPlatformFee ? <Spinner /> : <Check size={12} />}
+          {clear ? 'Clear Override' : 'Set Override'}
+        </button>
+        {current && <p className="text-xs text-base-content/40">Current: {current.type} = {current.value}</p>}
+      </div>
+    </div>
   );
-  const filteredDoctors = doctors.filter(d =>
-    (d.user?.name || "").toLowerCase().includes(search.toLowerCase()) ||
-    d.specialization?.toLowerCase().includes(search.toLowerCase())
-  );
+};
 
-  const tabCounts = { hospitals: hospitalTotal, doctors: doctorTotal };
+// ─────────────────────────────────────────────────────────────────────────────
+//  PRICING TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const PricingTab = ({ hospital, dispatch, loading }) => {
+  const isMgd = MANAGED_TYPES.includes(hospital.hospitalType);
+  const cp = hospital.consultationPricing ?? {};
+
+  const [form, setForm] = useState({
+    inPersonFee: cp.inPersonFee ?? 600,
+    videoFee: cp.videoFee ?? 500,
+    homeVisitFee: cp.homeVisitFee ?? 1000,
+    inPersonHonorarium: cp.inPersonHonorarium ?? 400,
+    videoHonorarium: cp.videoHonorarium ?? 350,
+    homeVisitHonorarium: cp.homeVisitHonorarium ?? 700,
+    followUpFee: cp.followUpFee ?? 0,
+    followUpDiscountPercent: cp.followUpDiscountPercent ?? 20,
+    followUpValidDays: cp.followUpValidDays ?? 7,
+    'ct.inPerson': cp.consultationTypes?.inPerson ?? true,
+    'ct.video': cp.consultationTypes?.video ?? false,
+    'ct.homeVisit': cp.consultationTypes?.homeVisit ?? false,
+  });
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  const handleSave = () =>
+    dispatch(
+      updateHospitalConsultationPricing({
+        id: hospital._id,
+        inPersonFee: Number(form.inPersonFee),
+        videoFee: Number(form.videoFee),
+        homeVisitFee: Number(form.homeVisitFee),
+        inPersonHonorarium: Number(form.inPersonHonorarium),
+        videoHonorarium: Number(form.videoHonorarium),
+        homeVisitHonorarium: Number(form.homeVisitHonorarium),
+        followUpFee: Number(form.followUpFee),
+        followUpDiscountPercent: Number(form.followUpDiscountPercent),
+        followUpValidDays: Number(form.followUpValidDays),
+        consultationTypes: { inPerson: form['ct.inPerson'], video: form['ct.video'], homeVisit: form['ct.homeVisit'] },
+      })
+    );
+
+  if (!isMgd) {
+    return (
+      <SectionCard title="Pricing" icon={DollarSign}>
+        <div className="flex items-start gap-3 p-4 bg-warning/10 rounded-xl border border-warning/30">
+          <AlertTriangle size={16} className="text-warning mt-0.5 shrink-0" />
+          <p className="text-xs text-warning">
+            This is a <strong>doctor-owner</strong> hospital (Clinic / Nursing Home). Pricing is managed at the individual{' '}
+            <strong>doctor profile level</strong>. Use the Doctors tab to update fees per doctor.
+          </p>
+        </div>
+      </SectionCard>
+    );
+  }
+
+  return (
+    <SectionCard
+      title="Consultation Pricing"
+      icon={DollarSign}
+      action={
+        <button
+          onClick={handleSave}
+          disabled={loading.updateHospitalConsultationPricing}
+          className="btn-primary-cta text-xs px-4 py-2 flex items-center gap-1.5"
+        >
+          {loading.updateHospitalConsultationPricing ? <Spinner /> : <Check size={12} />} Save
+        </button>
+      }
+    >
+      <div className="mb-5 space-y-2">
+        <p className="text-xs font-bold text-base-content/60 uppercase tracking-wider">Consultation Types Offered</p>
+        <div className="flex flex-wrap gap-5">
+          <Toggle label="In-Person" note="OPD / walk-in consultations." checked={form['ct.inPerson']} onChange={(v) => set('ct.inPerson', v)} />
+          <Toggle label="Video" note="Telemedicine / online consultations." checked={form['ct.video']} onChange={(v) => set('ct.video', v)} />
+          <Toggle label="Home Visit" note="Doctor visits patient at home." checked={form['ct.homeVisit']} onChange={(v) => set('ct.homeVisit', v)} />
+        </div>
+      </div>
+      <div className="space-y-3">
+        <p className="text-xs font-bold text-base-content/60 uppercase tracking-wider">Fees Charged to Patient & Doctor Honorarium</p>
+        {[
+          ['In-Person Fee (₹)', 'inPersonFee', 'Amount charged to patient for in-person visit.', 'In-Person Honorarium (₹)', 'inPersonHonorarium', 'Amount paid to the doctor per in-person consultation.'],
+          ['Video Fee (₹)', 'videoFee', 'Amount charged to patient for video call.', 'Video Honorarium (₹)', 'videoHonorarium', 'Amount paid to the doctor per video consultation.'],
+          ['Home Visit Fee (₹)', 'homeVisitFee', 'Amount charged to patient for home visit.', 'Home Visit Honorarium (₹)', 'homeVisitHonorarium', 'Amount paid to the doctor per home visit.'],
+        ].map(([l1, k1, n1, l2, k2, n2]) => (
+          <div key={k1} className="grid grid-cols-2 gap-3">
+            <InputField label={l1} note={n1} type="number" value={form[k1]} onChange={(v) => set(k1, v)} />
+            <InputField label={l2} note={n2} type="number" value={form[k2]} onChange={(v) => set(k2, v)} />
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-3 gap-3 pt-4 mt-3 border-t border-base-300">
+        <InputField label="Follow-up Fee (₹)" note="Set 0 for free follow-ups." type="number" value={form.followUpFee} onChange={(v) => set('followUpFee', v)} />
+        <InputField label="Follow-up Discount %" note="% discount on full fee for follow-up visits. 0–100." type="number" value={form.followUpDiscountPercent} onChange={(v) => set('followUpDiscountPercent', v)} />
+        <InputField label="Follow-up Valid Days" note="Days after first visit during which follow-up pricing applies. 1–90." type="number" value={form.followUpValidDays} onChange={(v) => set('followUpValidDays', v)} />
+      </div>
+    </SectionCard>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  IMAGES TAB  (dual upload)
+// ─────────────────────────────────────────────────────────────────────────────
+const ImagesTab = ({ hospital, dispatch, loading }) => {
+  const [logoUrl, setLogoUrl] = useState('');
+  const [logoFile, setLogoFile] = useState(null);
+  const [imgUrls, setImgUrls] = useState('');
+  const [imgFiles, setImgFiles] = useState([]);
+  const [confirm, setConfirm] = useState(null);
+
+  const handleUpload = async () => {
+    if (logoFile || imgFiles.length > 0) {
+      await dispatch(
+        uploadHospitalImages({
+          id: hospital._id,
+          logo: logoFile || undefined,
+          images: imgFiles.length > 0 ? imgFiles : undefined,
+        })
+      );
+      setLogoFile(null);
+      setImgFiles([]);
+    }
+    if (logoUrl || imgUrls) {
+      const newUrls = imgUrls.split('\n').map((u) => u.trim()).filter(Boolean);
+      await dispatch(
+        updateHospitalProfile({
+          id: hospital._id,
+          ...(logoUrl ? { logo: logoUrl } : {}),
+          ...(newUrls.length > 0 ? { images: [...(hospital.images ?? []), ...newUrls] } : {}),
+        })
+      );
+      setLogoUrl('');
+      setImgUrls('');
+    }
+  };
 
   return (
     <>
-      {/* ─── Scoped Styles ─────────────────────────────────────────────────── */}
-      <style>{`
-        /* ── Layout ── */
-        .hm-root { display: flex; min-height: 100vh; background: var(--base-100); font-family: var(--font-family-poppins, ui-sans-serif, system-ui, sans-serif); }
-        .hm-sidebar { width: 220px; shrink: 0; border-right: 1px solid var(--base-300); background: var(--base-100); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
-        .hm-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-        .hm-topbar { position: sticky; top: 0; z-index: 50; background: color-mix(in oklch, var(--base-100) 85%, transparent); backdrop-filter: blur(16px); border-bottom: 1px solid var(--base-300); padding: 0 1.5rem; height: 56px; display: flex; align-items: center; gap: 1rem; }
-        .hm-main { flex: 1; padding: 1.5rem; max-width: 1200px; margin: 0 auto; width: 100%; }
-
-        /* ── Sidebar ── */
-        .hm-logo { padding: 1rem 1.25rem; border-bottom: 1px solid var(--base-300); display: flex; align-items: center; gap: 0.625rem; }
-        .hm-logo-icon { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, var(--color-primary), var(--color-secondary)); display: flex; align-items: center; justify-content: center; }
-        .hm-logo-text { font-size: 0.8rem; font-weight: 800; color: var(--base-content); line-height: 1.2; letter-spacing: -0.01em; }
-        .hm-logo-sub { font-size: 0.6rem; color: color-mix(in oklch, var(--base-content) 40%, transparent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
-        .hm-nav { padding: 0.75rem 0.75rem; display: flex; flex-direction: column; gap: 2px; flex: 1; }
-        .hm-nav-item { display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.75rem; border-radius: 8px; font-size: 0.78rem; font-weight: 600; color: color-mix(in oklch, var(--base-content) 55%, transparent); cursor: pointer; border: none; background: none; width: 100%; transition: all 0.18s; position: relative; }
-        .hm-nav-item:hover { background: var(--base-200); color: var(--base-content); }
-        .hm-nav-item.active { background: color-mix(in oklch, var(--color-primary) 10%, transparent); color: var(--color-primary); }
-        .hm-nav-item.active::before { content: ''; position: absolute; left: 0; top: 20%; bottom: 20%; width: 3px; border-radius: 0 2px 2px 0; background: var(--color-primary); }
-        .hm-nav-count { margin-left: auto; font-size: 0.65rem; font-weight: 700; background: var(--base-300); padding: 1px 6px; border-radius: 9999px; color: var(--base-content); opacity: 0.7; }
-        .hm-nav-section { padding: 0.75rem 1rem 0.25rem; font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: color-mix(in oklch, var(--base-content) 30%, transparent); }
-        .hm-sidebar-bottom { padding: 0.75rem; border-top: 1px solid var(--base-300); }
-
-        /* ── Topbar ── */
-        .hm-topbar-title { font-size: 0.82rem; font-weight: 700; color: var(--base-content); flex: 1; }
-        .hm-search-wrap { position: relative; }
-        .hm-search-wrap svg { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: color-mix(in oklch, var(--base-content) 35%, transparent); pointer-events: none; }
-        .hm-search { background: var(--base-200); border: 1px solid var(--base-300); border-radius: 8px; padding: 0.375rem 0.75rem 0.375rem 2.125rem; font-size: 0.78rem; color: var(--base-content); outline: none; width: 220px; transition: border-color 0.2s, box-shadow 0.2s; }
-        .hm-search:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 15%, transparent); }
-        .hm-search::placeholder { color: color-mix(in oklch, var(--base-content) 35%, transparent); }
-        .hm-count-badge { font-size: 0.65rem; font-weight: 700; color: color-mix(in oklch, var(--base-content) 40%, transparent); }
-
-        /* ── Form Primitives ── */
-        .hm-label { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: color-mix(in oklch, var(--base-content) 55%, transparent); }
-        .hm-note { font-size: 0.67rem; color: color-mix(in oklch, var(--base-content) 38%, transparent); line-height: 1.4; }
-        .hm-input { background: var(--base-200); border: 1px solid var(--base-300); border-radius: 8px; padding: 0.5rem 0.75rem; font-size: 0.78rem; color: var(--base-content); outline: none; width: 100%; font-family: inherit; transition: border-color 0.2s, box-shadow 0.2s, background 0.2s; }
-        .hm-input:hover { border-color: color-mix(in oklch, var(--color-primary) 50%, var(--base-300)); }
-        .hm-input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 12%, transparent); background: var(--base-100); }
-        .hm-input::placeholder { color: color-mix(in oklch, var(--base-content) 30%, transparent); }
-
-        /* ── Buttons ── */
-        .hm-btn-primary { background: var(--color-primary); color: var(--color-primary-content); }
-        .hm-btn-primary:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 4px 12px color-mix(in oklch, var(--color-primary) 40%, transparent); }
-        .hm-btn-primary:active:not(:disabled) { transform: translateY(0); }
-        .hm-btn-secondary { background: transparent; color: var(--color-primary); border: 1.5px solid var(--color-primary); }
-        .hm-btn-secondary:hover:not(:disabled) { background: color-mix(in oklch, var(--color-primary) 10%, transparent); }
-        .hm-btn-success { background: var(--color-success); color: var(--color-success-content); }
-        .hm-btn-success:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
-        .hm-btn-danger { background: color-mix(in oklch, var(--color-error) 15%, transparent); color: var(--color-error); border: 1px solid color-mix(in oklch, var(--color-error) 30%, transparent); }
-        .hm-btn-danger:hover:not(:disabled) { background: var(--color-error); color: var(--color-error-content); }
-        .hm-btn-ghost { background: var(--base-200); color: var(--base-content); border: 1px solid var(--base-300); }
-        .hm-btn-ghost:hover:not(:disabled) { background: var(--base-300); }
-        .hm-btn-warning { background: color-mix(in oklch, var(--color-warning) 15%, transparent); color: var(--color-warning); border: 1px solid color-mix(in oklch, var(--color-warning) 30%, transparent); }
-        .hm-btn-warning:hover:not(:disabled) { background: var(--color-warning); color: var(--color-warning-content); }
-        .hm-btn-subtle { background: var(--base-200); color: color-mix(in oklch, var(--base-content) 70%, transparent); border: 1px solid var(--base-300); }
-        .hm-btn-subtle:hover:not(:disabled) { background: color-mix(in oklch, var(--color-primary) 8%, var(--base-200)); color: var(--color-primary); border-color: color-mix(in oklch, var(--color-primary) 35%, transparent); }
-
-        /* ── Badges ── */
-        .hm-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; border: 1px solid; }
-        .hm-badge-success { background: color-mix(in oklch, var(--color-success) 12%, transparent); color: var(--color-success); border-color: color-mix(in oklch, var(--color-success) 30%, transparent); }
-        .hm-badge-warning { background: color-mix(in oklch, var(--color-warning) 12%, transparent); color: var(--color-warning); border-color: color-mix(in oklch, var(--color-warning) 30%, transparent); }
-        .hm-badge-error   { background: color-mix(in oklch, var(--color-error) 12%, transparent); color: var(--color-error); border-color: color-mix(in oklch, var(--color-error) 30%, transparent); }
-        .hm-badge-info    { background: color-mix(in oklch, var(--color-info) 12%, transparent); color: var(--color-info); border-color: color-mix(in oklch, var(--color-info) 30%, transparent); }
-        .hm-badge-primary { background: color-mix(in oklch, var(--color-primary) 12%, transparent); color: var(--color-primary); border-color: color-mix(in oklch, var(--color-primary) 30%, transparent); }
-
-        /* ── Cards & Sections ── */
-        .hm-section-card { background: var(--base-100); border: 1px solid var(--base-300); border-radius: 12px; overflow: hidden; }
-        .hm-section-title { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em; color: color-mix(in oklch, var(--base-content) 60%, transparent); }
-        .hm-stat-card { background: var(--base-100); border: 1px solid var(--base-300); border-radius: 14px; padding: 1.25rem; transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s; }
-        .hm-stat-card:hover { border-color: color-mix(in oklch, var(--color-primary) 40%, transparent); box-shadow: 0 4px 20px color-mix(in oklch, var(--color-primary) 8%, transparent); transform: translateY(-2px); }
-        .hm-stat-value { font-size: 1.75rem; font-weight: 900; color: var(--base-content); line-height: 1; letter-spacing: -0.03em; font-family: var(--font-family-montserrat, ui-sans-serif); }
-        .hm-stat-label { font-size: 0.68rem; font-weight: 600; color: color-mix(in oklch, var(--base-content) 45%, transparent); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.25rem; }
-        .hm-chart-card { background: var(--base-100); border: 1px solid var(--base-300); border-radius: 14px; padding: 1.125rem 1.25rem 1.25rem; }
-        .hm-chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
-        .hm-chart-title { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em; color: color-mix(in oklch, var(--base-content) 55%, transparent); }
-        .hm-quick-stat { background: var(--base-200); border-radius: 10px; padding: 1rem; text-align: center; }
-
-        /* ── Table ── */
-        .hm-table-wrap { background: var(--base-100); border: 1px solid var(--base-300); border-radius: 14px; overflow: hidden; }
-        .hm-table-row { transition: background 0.15s; cursor: pointer; }
-        .hm-table-row:hover { background: color-mix(in oklch, var(--base-content) 3%, transparent); }
-        .hm-table-row-active { background: color-mix(in oklch, var(--color-primary) 4%, transparent) !important; }
-        .hm-action-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 0 4px; background: color-mix(in oklch, var(--base-content) 2%, transparent); border-radius: 10px; padding: 10px; }
-        .hm-pagination { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; border-top: 1px solid var(--base-300); background: var(--base-200); }
-
-        /* ── Modal ── */
-        .hm-modal-surface { background: var(--base-100); border: 1px solid var(--base-300); border-radius: 16px; overflow: hidden; box-shadow: 0 24px 64px rgba(0,0,0,0.2); }
-        .hm-modal-header { display: flex; align-items: center; gap: 0.75rem; padding: 0.875rem 1.25rem; background: var(--base-200); border-bottom: 1px solid var(--base-300); }
-
-        /* ── Misc ── */
-        .hm-flags-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
-        .hm-flag-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--base-300); background: var(--base-200); }
-        .hm-upload-zone { border: 1.5px dashed var(--base-300); border-radius: 12px; padding: 1.5rem; text-align: center; cursor: pointer; transition: border-color 0.2s, background 0.2s; }
-        .hm-upload-zone:hover { border-color: var(--color-primary); background: color-mix(in oklch, var(--color-primary) 4%, transparent); }
-        .hm-avail-day { border: 1px solid var(--base-300); border-radius: 10px; overflow: hidden; }
-        .hm-scrollarea { border: 1px solid var(--base-300); border-radius: 10px; padding: 4px; }
-        .hm-error-banner { padding: 0.75rem 1rem; background: color-mix(in oklch, var(--color-error) 10%, transparent); border: 1px solid color-mix(in oklch, var(--color-error) 25%, transparent); border-radius: 10px; color: var(--color-error); font-size: 0.78rem; display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
-        .hm-empty { padding: 3rem; text-align: center; font-size: 0.8rem; color: color-mix(in oklch, var(--base-content) 35%, transparent); }
-
-        @keyframes hm-spin { to { transform: rotate(360deg); } }
-        .hm-spinner { display: inline-block; width: 28px; height: 28px; border-radius: 50%; border: 3px solid color-mix(in oklch, var(--color-primary) 25%, transparent); border-top-color: var(--color-primary); animation: hm-spin 0.7s linear infinite; }
-      `}</style>
-
-      <div className="hm-root">
-        {/* ── Sidebar ── */}
-        <aside className="hm-sidebar">
-          <div className="hm-logo">
-            <div className="hm-logo-icon">
-              <Hospital size={16} color="white" />
-            </div>
-            <div>
-              <div className="hm-logo-text">MedAdmin</div>
-              <div className="hm-logo-sub">Superadmin</div>
+      <AnimatePresence>{confirm && <ConfirmDialog {...confirm} onCancel={() => setConfirm(null)} />}</AnimatePresence>
+      <div className="space-y-4">
+        <SectionCard title="Logo" icon={Camera}>
+          <div className="flex items-start gap-4">
+            {hospital.logo && <img src={hospital.logo} alt="logo" className="w-16 h-16 rounded-xl object-cover border border-base-300 shrink-0" />}
+            <div className="flex-1">
+              <DualUploadField
+                label="Hospital Logo"
+                note="512×512 px recommended. PNG/WebP. Max 5 MB. Paste a CDN URL or choose a file — both supported."
+                url={logoUrl}
+                onUrlChange={setLogoUrl}
+                file={logoFile}
+                onFileChange={setLogoFile}
+                accept="image/jpeg,image/png,image/webp"
+              />
             </div>
           </div>
+        </SectionCard>
 
-          <nav className="hm-nav">
-            <div className="hm-nav-section">Manage</div>
-            {NAV_ITEMS.map(({ id, label, icon: Icon, badge }) => (
-              <button key={id} className={`hm-nav-item ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
-                <Icon size={15} />
-                {label}
-                {badge && tabCounts[badge] > 0 && <span className="hm-nav-count">{tabCounts[badge]}</span>}
-              </button>
-            ))}
-          </nav>
+        <SectionCard title="Gallery Images" icon={Image}>
+          <DualUploadField
+            label={`Gallery Images (max 20 total — currently ${hospital.images?.length ?? 0})`}
+            note="Paste one URL per line OR select multiple files. Both methods can be combined."
+            url={imgUrls}
+            onUrlChange={setImgUrls}
+            file={imgFiles}
+            onFileChange={setImgFiles}
+            accept="image/jpeg,image/png,image/webp"
+            multiple
+          />
+          <button
+            onClick={handleUpload}
+            disabled={loading.uploadHospitalImages || loading.updateHospitalProfile || (!logoFile && !imgFiles.length && !logoUrl && !imgUrls)}
+            className="btn-primary-cta text-xs px-5 py-2.5 flex items-center gap-2 mt-4"
+          >
+            {loading.uploadHospitalImages || loading.updateHospitalProfile ? <Spinner /> : <Upload size={13} />} Upload / Save All
+          </button>
 
-          <div className="hm-sidebar-bottom">
-            <button
-              className="hm-nav-item w-full"
-              onClick={() => { dispatch(fetchAllHospitals({ page, limit: 20 })); dispatch(fetchAllDoctors({ page: 1, limit: 50 })); }}>
-              <RefreshCw size={14} />
-              Refresh Data
+          {hospital.images?.length > 0 && (
+            <div className="mt-5">
+              <p className="text-xs font-bold text-base-content/50 uppercase tracking-wider mb-2">
+                Current Gallery ({hospital.images.length}/20)
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {hospital.images.map((url, idx) => (
+                  <div key={idx} className="relative group rounded-lg overflow-hidden border border-base-300 aspect-video bg-base-200">
+                    <img src={url} alt={`gallery-${idx}`} className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <button
+                        onClick={() =>
+                          setConfirm({
+                            message: 'Delete this gallery image permanently?',
+                            onConfirm: () => {
+                              dispatch(deleteHospitalImage({ id: hospital._id, imageIndex: idx }));
+                              setConfirm(null);
+                            },
+                          })
+                        }
+                        className="btn btn-error btn-xs rounded-lg px-2 py-1.5 flex items-center justify-center"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                    <span className="absolute bottom-1 left-1 text-[9px] text-white/70 bg-black/40 px-1 rounded">#{idx + 1}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </SectionCard>
+      </div>
+    </>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  LOCATION TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const LocationTab = ({ hospital, dispatch, loading }) => {
+  const coords = hospital.location?.coordinates ?? [80.648, 16.506];
+  const [lat, setLat] = useState(coords[1]);
+  const [lng, setLng] = useState(coords[0]);
+  const [mapsUrl, setMapsUrl] = useState(hospital.googleMapsUrl ?? '');
+
+  const handleSave = () =>
+    dispatch(
+      updateHospitalLocation({
+        id: hospital._id,
+        lat: Number(lat),
+        lng: Number(lng),
+        googleMapsUrl: mapsUrl || undefined,
+      })
+    );
+
+  return (
+    <SectionCard
+      title="Hospital Location"
+      icon={MapPin}
+      action={
+        <button onClick={handleSave} disabled={loading.updateHospitalLocation} className="btn-primary-cta text-xs px-4 py-2 flex items-center gap-1.5">
+          {loading.updateHospitalLocation ? <Spinner /> : <Check size={12} />} Save
+        </button>
+      }
+    >
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <InputField
+          label="Latitude"
+          note="Decimal latitude (e.g. 16.506 for Vijayawada). Obtained from Google Maps → right-click the pin."
+          type="number"
+          value={lat}
+          onChange={setLat}
+          placeholder="16.506"
+        />
+        <InputField
+          label="Longitude"
+          note="Decimal longitude (e.g. 80.648 for Vijayawada)."
+          type="number"
+          value={lng}
+          onChange={setLng}
+          placeholder="80.648"
+        />
+        <div className="col-span-2">
+          <InputField
+            label="Google Maps URL"
+            note="Paste the share link from Google Maps for quick patient navigation."
+            value={mapsUrl}
+            onChange={setMapsUrl}
+            placeholder="https://goo.gl/maps/…"
+          />
+        </div>
+      </div>
+      <div className="p-3 bg-base-200 rounded-xl border border-base-300">
+        <p className="text-xs text-base-content/50 mb-1 font-semibold">Current Stored Coordinates</p>
+        <p className="text-xs font-mono text-base-content">
+          [lng: {coords[0]}, lat: {coords[1]}]
+        </p>
+      </div>
+    </SectionCard>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DOCTORS TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const DoctorsTab = ({ hospital, dispatch, loading, allDoctors }) => {
+  const hospitalDoctors = useSelector(selectHospitalDoctors);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showLink, setShowLink] = useState(false);
+  const [confirm, setConfirm] = useState(null);
+  const [expandedDoctor, setExpandedDoctor] = useState(null);
+
+  useEffect(() => {
+    dispatch(fetchDoctorsByHospital({ hospitalId: hospital._id }));
+  }, [hospital._id, dispatch]);
+
+  const handleUnlink = (doctorId) =>
+    setConfirm({
+      message: 'Unlink this doctor from the hospital?',
+      onConfirm: () => {
+        dispatch(unlinkDoctorFromHospital({ hospitalId: hospital._id, doctorId }));
+        setConfirm(null);
+      },
+    });
+
+  const handleDeleteDoctor = (doctorId) =>
+    setConfirm({
+      message: 'Permanently delete this doctor profile? This cannot be undone.',
+      onConfirm: () => {
+        dispatch(deleteDoctorProfile(doctorId));
+        setConfirm(null);
+      },
+    });
+
+  return (
+    <>
+      <AnimatePresence>
+        {showCreate && <CreateDoctorModal hospitalId={hospital._id} onClose={() => setShowCreate(false)} dispatch={dispatch} loading={loading} />}
+        {showLink && (
+          <LinkDoctorModal hospitalId={hospital._id} onClose={() => setShowLink(false)} dispatch={dispatch} loading={loading} allDoctors={allDoctors} />
+        )}
+        {confirm && <ConfirmDialog {...confirm} onCancel={() => setConfirm(null)} />}
+      </AnimatePresence>
+
+      <SectionCard
+        title={`Doctors (${hospitalDoctors.length})`}
+        icon={Stethoscope}
+        action={
+          <div className="flex gap-2">
+            <button onClick={() => setShowLink(true)} className="btn-secondary text-[11px] px-3 py-1.5 flex items-center gap-1.5">
+              <Link size={11} /> Link Existing
+            </button>
+            <button onClick={() => setShowCreate(true)} className="btn-primary-cta text-[11px] px-3 py-1.5 flex items-center gap-1.5">
+              <Plus size={11} /> Create New
             </button>
           </div>
-        </aside>
+        }
+      >
+        {hospitalDoctors.length === 0 ? (
+          <div className="text-center py-8 text-base-content/40">
+            <Stethoscope size={28} className="mx-auto mb-2 opacity-30" />
+            <p className="text-sm">No doctors linked yet.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {hospitalDoctors.map((doc) => (
+              <DoctorRow
+                key={doc._id}
+                doc={doc}
+                dispatch={dispatch}
+                loading={loading}
+                expanded={expandedDoctor === doc._id}
+                onExpand={() => setExpandedDoctor(expandedDoctor === doc._id ? null : doc._id)}
+                onUnlink={() => handleUnlink(doc._id)}
+                onDelete={() => handleDeleteDoctor(doc._id)}
+              />
+            ))}
+          </div>
+        )}
+      </SectionCard>
+    </>
+  );
+};
 
-        {/* ── Main Content ── */}
-        <div className="hm-content">
-          {/* Topbar */}
-          <header className="hm-topbar">
-            <div className="flex items-center gap-2 flex-1">
-              <span className="hm-topbar-title">
-                {tab === "overview" && "Analytics Overview"}
-                {tab === "hospitals" && "Hospital Management"}
-                {tab === "doctors" && "Doctor Management"}
-              </span>
-            </div>
+// Doctor Row (expandable)
+const DoctorRow = ({ doc, dispatch, loading, expanded, onExpand, onUnlink, onDelete }) => {
+  const [tab, setTab] = useState('profile');
+  const [dForm, setDForm] = useState({
+    specialization: doc.specialization ?? '',
+    experienceYears: doc.experienceYears ?? 0,
+    biography: doc.biography ?? '',
+    'fees.inPersonFee': doc.fees?.inPersonFee ?? 0,
+    'fees.videoFee': doc.fees?.videoFee ?? 0,
+    'fees.homeVisitFee': doc.fees?.homeVisitFee ?? 0,
+    partnershipStatus: doc.partnershipStatus ?? 'Pending',
+    adminNotes: '',
+    kycRejectionReason: '',
+    isOnline: doc.isOnline ?? false,
+    photoUrl: '',
+    regNum: doc.registrationNumber ?? '',
+    regCouncil: doc.registrationCouncil ?? '',
+  });
+  const set = (k, v) => setDForm((p) => ({ ...p, [k]: v }));
 
-            {tab !== "overview" && (
-              <div className="hm-search-wrap">
-                <Search size={13} />
-                <input
-                  value={search} onChange={e => setSearch(e.target.value)}
-                  placeholder={tab === "hospitals" ? "Search hospitals…" : "Search doctors…"}
-                  className="hm-search" />
-              </div>
-            )}
+  const DOCTOR_TABS = ['profile', 'partnership', 'kyc', 'platform-fee', 'resend'];
+  
+  const kycClass = {
+    'not-submitted': 'bg-base-300 text-base-content',
+    'pending': 'badge-warning',
+    'under-review': 'badge-info',
+    'verified': 'badge-success',
+    'rejected': 'badge-error'
+  }[doc.kycStatus] ?? 'bg-base-300 text-base-content';
 
-            {tab !== "overview" && (
-              <span className="hm-count-badge">
-                {tab === "hospitals" ? `${filteredHospitals.length} / ${hospitalTotal}` : `${filteredDoctors.length} / ${doctorTotal}`}
-              </span>
-            )}
+  const partClass = {
+    'Pending': 'badge-warning',
+    'Active': 'badge-success',
+    'Inactive': 'bg-base-300 text-base-content',
+    'Suspended': 'badge-error'
+  }[doc.partnershipStatus] ?? 'bg-base-300 text-base-content';
 
-            {tab === "hospitals" && (
-              <Btn variant="primary" size="sm" icon={<Plus size={13} />} onClick={() => openModal("createHospital")}>New Hospital</Btn>
-            )}
-            {tab === "doctors" && (
-              <Btn variant="success" size="sm" icon={<Plus size={13} />} onClick={() => openModal("createDoctor")}>New Doctor</Btn>
-            )}
-          </header>
-
-          {/* Main */}
-          <main className="hm-main">
-            <AnimatePresence>
-              {error && (
-                <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="hm-error-banner">
-                  <AlertTriangle size={15} /> {error}
-                  <button onClick={() => dispatch(clearError())} className="ml-auto opacity-60 hover:opacity-100"><X size={13} /></button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Overview Tab */}
-            {tab === "overview" && <OverviewPanel hospitals={hospitals} doctors={doctors} />}
-
-            {/* Hospitals Tab */}
-            {tab === "hospitals" && (
-              <motion.div variants={stagger} initial="hidden" animate="visible">
-                <div className="hm-table-wrap">
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr style={{ borderBottom: "1px solid var(--base-300)", background: "var(--base-200)" }}>
-                        {["Hospital", "Location", "Verified", "Status", "Rating", ""].map(h => (
-                          <th key={h} style={{ padding: "0.625rem 1rem", textAlign: "left", fontSize: "0.62rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.07em", color: "color-mix(in oklch, var(--base-content) 40%, transparent)", whiteSpace: "nowrap" }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {loading.fetchAllHospitals ? (
-                        <tr><td colSpan={6} className="hm-empty"><div className="hm-spinner" style={{ margin: "0 auto" }} /></td></tr>
-                      ) : filteredHospitals.length === 0 ? (
-                        <tr><td colSpan={6} className="hm-empty">No hospitals found.</td></tr>
-                      ) : (
-                        filteredHospitals.map(h => <HospitalRow key={h._id} hospital={h} onAction={handleHospitalAction} />)
-                      )}
-                    </tbody>
-                  </table>
-                  {hospitalTotal > 20 && (
-                    <div className="hm-pagination">
-                      <Btn size="sm" variant="ghost" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>← Prev</Btn>
-                      <span style={{ fontSize: "0.72rem", color: "color-mix(in oklch, var(--base-content) 40%, transparent)" }}>Page {page}</span>
-                      <Btn size="sm" variant="ghost" disabled={hospitals.length < 20} onClick={() => setPage(p => p + 1)}>Next →</Btn>
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            )}
-
-            {/* Doctors Tab */}
-            {tab === "doctors" && (
-              <motion.div variants={stagger} initial="hidden" animate="visible">
-                <div className="hm-table-wrap">
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr style={{ borderBottom: "1px solid var(--base-300)", background: "var(--base-200)" }}>
-                        {["Doctor", "Experience", "KYC", "Partnership", "Status", ""].map(h => (
-                          <th key={h} style={{ padding: "0.625rem 1rem", textAlign: "left", fontSize: "0.62rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.07em", color: "color-mix(in oklch, var(--base-content) 40%, transparent)", whiteSpace: "nowrap" }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {loading.fetchAllDoctors ? (
-                        <tr><td colSpan={6} className="hm-empty"><div className="hm-spinner" style={{ margin: "0 auto" }} /></td></tr>
-                      ) : filteredDoctors.length === 0 ? (
-                        <tr><td colSpan={6} className="hm-empty">No doctors found.</td></tr>
-                      ) : (
-                        filteredDoctors.map(d => <DoctorRow key={d._id} doctor={d} onAction={handleDoctorAction} />)
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </motion.div>
-            )}
-          </main>
+  return (
+    <motion.div layout className="border border-base-300 rounded-xl overflow-hidden">
+      <div className="flex items-center gap-3 px-3.5 py-2.5 bg-base-200 cursor-pointer" onClick={onExpand}>
+        {doc.profilePhotoUrl || doc.user?.avatar ? (
+          <img src={doc.profilePhotoUrl || doc.user?.avatar} alt="" className="w-8 h-8 rounded-full object-cover border border-base-300 shrink-0" />
+        ) : (
+          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+            <Stethoscope size={13} className="text-primary" />
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-bold truncate">{doc.user?.name ?? 'Doctor'}</p>
+          <p className="text-[10px] text-base-content/40">{doc.specialization}</p>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className={`badge ${kycClass}`}>{doc.kycStatus}</span>
+          <span className={`badge ${partClass}`}>{doc.partnershipStatus}</span>
+          <ChevronDown size={13} className={`transition-transform ${expanded ? 'rotate-180' : ''} text-base-content/40`} />
         </div>
       </div>
 
-      {/* ════ MODALS ════ */}
-      <CreateHospitalModal open={!!modals.createHospital} onClose={() => closeModal("createHospital")} loading={loading.createHospital} onSubmit={body => dispatch(createHospital(body)).unwrap().then(() => closeModal("createHospital"))} />
-      <UpdateHospitalProfileModal open={!!modals.editHospitalProfile} onClose={() => closeModal("editHospitalProfile")} hospital={active} loading={loading.updateHospitalProfile} onSubmit={body => dispatch(updateHospitalProfile(body)).unwrap().then(() => closeModal("editHospitalProfile"))} />
-      <UpdateHospitalSettingsModal open={!!modals.editHospitalSettings} onClose={() => closeModal("editHospitalSettings")} hospital={active} loading={loading.updateHospitalSettings} onSubmit={body => dispatch(updateHospitalSettings(body)).unwrap().then(() => closeModal("editHospitalSettings"))} />
-      <UpdateHospitalSecurityModal open={!!modals.editHospitalSecurity} onClose={() => closeModal("editHospitalSecurity")} hospital={active} loading={loading.updateHospitalSecurity} onSubmit={body => dispatch(updateHospitalSecurity(body)).unwrap().then(() => closeModal("editHospitalSecurity"))} />
-      <UpdateHospitalPlatformFeeModal open={!!modals.editHospitalFee} onClose={() => closeModal("editHospitalFee")} hospital={active} loading={loading.updateHospitalPlatformFee} onSubmit={body => dispatch(updateHospitalPlatformFee(body)).unwrap().then(() => closeModal("editHospitalFee"))} />
-      <UploadImagesModal open={!!modals.uploadHospitalImages} onClose={() => closeModal("uploadHospitalImages")} hospital={active} loading={loading.uploadHospitalImages} onSubmit={body => dispatch(uploadHospitalImages(body)).unwrap().then(() => closeModal("uploadHospitalImages"))} />
-      <UpdateLocationModal open={!!modals.editHospitalLocation} onClose={() => closeModal("editHospitalLocation")} hospital={active} loading={loading.updateHospitalLocation} onSubmit={body => dispatch(updateHospitalLocation(body)).unwrap().then(() => closeModal("editHospitalLocation"))} />
-      <LinkDoctorModal open={!!modals.linkDoctors} onClose={() => closeModal("linkDoctors")} hospital={active} doctors={doctors} onLink={body => dispatch(linkDoctorToHospital(body))} onUnlink={body => dispatch(unlinkDoctorFromHospital(body))} loadingLink={loading.linkDoctorToHospital} loadingUnlink={loading.unlinkDoctorFromHospital} />
-      <CreateDoctorModal open={!!modals.createDoctor} onClose={() => closeModal("createDoctor")} hospitals={hospitals} loading={loading.createDoctorProfile} onSubmit={body => dispatch(createDoctorProfile(body)).unwrap().then(() => closeModal("createDoctor"))} />
-      <UpdateDoctorProfileModal open={!!modals.editDoctorProfile} onClose={() => closeModal("editDoctorProfile")} doctor={active} hospitals={hospitals} loading={loading.updateDoctorProfile} onSubmit={body => dispatch(updateDoctorProfile(body)).unwrap().then(() => closeModal("editDoctorProfile"))} />
-      <UpdateDoctorSettingsModal open={!!modals.editDoctorSettings} onClose={() => closeModal("editDoctorSettings")} doctor={active} loading={loading.updateDoctorSettings} onSubmit={body => dispatch(updateDoctorSettings(body)).unwrap().then(() => closeModal("editDoctorSettings"))} />
-      <UpdateDoctorAvailabilityModal open={!!modals.editDoctorAvailability} onClose={() => closeModal("editDoctorAvailability")} doctor={active} loading={loading.updateDoctorAvailability} onSubmit={body => dispatch(updateDoctorAvailability(body)).unwrap().then(() => closeModal("editDoctorAvailability"))} />
-      <UpdateDoctorBankModal open={!!modals.editDoctorBank} onClose={() => closeModal("editDoctorBank")} doctor={active} loading={loading.updateDoctorBankDetails} onSubmit={body => dispatch(updateDoctorBankDetails(body)).unwrap().then(() => closeModal("editDoctorBank"))} />
-      <UpdateDoctorKycModal open={!!modals.editDoctorKyc} onClose={() => closeModal("editDoctorKyc")} doctor={active} loading={loading.updateDoctorKyc} onSubmit={body => dispatch(updateDoctorKyc(body)).unwrap().then(() => closeModal("editDoctorKyc"))} />
-      <VerifyDoctorKycModal open={!!modals.verifyDoctorKyc} onClose={() => closeModal("verifyDoctorKyc")} doctor={active} loading={loading.verifyDoctorKyc} onSubmit={body => dispatch(verifyDoctorKyc(body)).unwrap().then(() => closeModal("verifyDoctorKyc"))} />
-      <UploadDoctorPhotoModal open={!!modals.uploadDoctorPhoto} onClose={() => closeModal("uploadDoctorPhoto")} doctor={active} loading={loading.uploadDoctorPhoto} onSubmit={body => dispatch(uploadDoctorPhoto(body)).unwrap().then(() => closeModal("uploadDoctorPhoto"))} />
-      <UpdateDoctorSecurityModal open={!!modals.editDoctorSecurity} onClose={() => closeModal("editDoctorSecurity")} doctor={active} loading={loading.updateDoctorSecurity} onSubmit={body => dispatch(updateDoctorSecurity(body)).unwrap().then(() => closeModal("editDoctorSecurity"))} />
-      <UpdateDoctorPlatformFeeModal open={!!modals.editDoctorFee} onClose={() => closeModal("editDoctorFee")} doctor={active} loading={loading.updateDoctorPlatformFee} onSubmit={body => dispatch(updateDoctorPlatformFee(body)).unwrap().then(() => closeModal("editDoctorFee"))} />
-      <UpdateDoctorPartnershipModal open={!!modals.editDoctorPartnership} onClose={() => closeModal("editDoctorPartnership")} doctor={active} loading={loading.updateDoctorPartnership} onSubmit={body => dispatch(updateDoctorPartnership(body)).unwrap().then(() => closeModal("editDoctorPartnership"))} />
-      <ConfirmDialog open={confirm.open} message={confirm.message} onConfirm={confirm.onConfirm} onCancel={cancelConfirm} />
+      <AnimatePresence>
+        {expanded && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+            <div className="flex gap-0 border-b border-base-300 bg-base-100">
+              {DOCTOR_TABS.map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setTab(t)}
+                  className={`text-[10px] font-bold uppercase tracking-wider px-3 py-2 transition-colors border-b-2 ${
+                    tab === t ? 'border-primary text-primary' : 'border-transparent text-base-content/40 hover:text-base-content/70'
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+              <div className="ml-auto flex items-center gap-1 pr-2">
+                <button onClick={onUnlink} title="Unlink" className="p-1.5 hover:bg-warning/10 rounded text-warning">
+                  <Unlink size={11} />
+                </button>
+                <button onClick={onDelete} title="Delete" className="p-1.5 hover:bg-error/10 rounded text-error">
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4">
+              {tab === 'profile' && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <SelectField label="Specialization" note="Primary specialty." value={dForm.specialization} onChange={(v) => set('specialization', v)} options={SPECIALIZATIONS} />
+                    <InputField label="Experience (yrs)" note="Years of practice." type="number" value={dForm.experienceYears} onChange={(v) => set('experienceYears', v)} />
+                    <InputField label="In-Person Fee (₹)" note="Only for doctor-owner hospitals." type="number" value={dForm['fees.inPersonFee']} onChange={(v) => set('fees.inPersonFee', v)} />
+                    <InputField label="Video Fee (₹)" note="Only for doctor-owner hospitals." type="number" value={dForm['fees.videoFee']} onChange={(v) => set('fees.videoFee', v)} />
+                    <InputField label="Home Visit Fee (₹)" note="Only for doctor-owner hospitals." type="number" value={dForm['fees.homeVisitFee']} onChange={(v) => set('fees.homeVisitFee', v)} />
+                    <InputField label="Reg. Number" note="MCI / State Council registration ID." value={dForm.regNum} onChange={(v) => set('regNum', v)} />
+                    <div className="col-span-2">
+                      <InputField label="Registration Council" note="e.g. Andhra Pradesh Medical Council." value={dForm.regCouncil} onChange={(v) => set('regCouncil', v)} />
+                    </div>
+                  </div>
+                  <TextareaField label="Biography" note="Shown on doctor's public profile. Max 1000 chars." value={dForm.biography} onChange={(v) => set('biography', v)} rows={2} />
+                  <Toggle
+                    label="Online Status"
+                    note="Marks doctor as currently available online."
+                    checked={dForm.isOnline}
+                    onChange={(v) => {
+                      set('isOnline', v);
+                      dispatch(updateDoctorSettings({ id: doc._id, isOnline: v }));
+                    }}
+                  />
+                  <InputField
+                    label="Profile Photo URL"
+                    note="Paste an ImageKit CDN URL to update the doctor's photo directly."
+                    value={dForm.photoUrl}
+                    onChange={(v) => set('photoUrl', v)}
+                    placeholder="https://ik.imagekit.io/…"
+                  />
+                  {dForm.photoUrl && (
+                    <button
+                      onClick={() => dispatch(updateDoctorProfile({ id: doc._id, profilePhotoUrl: dForm.photoUrl }))}
+                      className="btn-secondary text-[10px] px-3 py-1.5"
+                    >
+                      Set Photo URL
+                    </button>
+                  )}
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() =>
+                        dispatch(
+                          updateDoctorProfile({
+                            id: doc._id,
+                            specialization: dForm.specialization,
+                            experienceYears: Number(dForm.experienceYears),
+                            biography: dForm.biography,
+                            fees: {
+                              inPersonFee: Number(dForm['fees.inPersonFee']),
+                              videoFee: Number(dForm['fees.videoFee']),
+                              homeVisitFee: Number(dForm['fees.homeVisitFee']),
+                            },
+                            registrationNumber: dForm.regNum,
+                            registrationCouncil: dForm.regCouncil,
+                          })
+                        )
+                      }
+                      disabled={loading.updateDoctorProfile}
+                      className="btn-primary-cta text-[10px] px-4 py-2 flex items-center gap-1"
+                    >
+                      {loading.updateDoctorProfile ? <Spinner /> : <Check size={11} />} Save Profile
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {tab === 'partnership' && (
+                <div className="space-y-3">
+                  <SelectField label="Partnership Status" note="Controls if doctor is bookable via Likeson." value={dForm.partnershipStatus} onChange={(v) => set('partnershipStatus', v)} options={PARTNERSHIP_STATUSES} />
+                  <TextareaField label="Admin Notes" note="Internal notes. Not visible to doctor or patients." value={dForm.adminNotes} onChange={(v) => set('adminNotes', v)} rows={2} />
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() =>
+                        dispatch(
+                          updateDoctorPartnership({
+                            id: doc._id,
+                            partnershipStatus: dForm.partnershipStatus,
+                            adminNotes: dForm.adminNotes || undefined,
+                          })
+                        )
+                      }
+                      disabled={loading.updateDoctorPartnership}
+                      className="btn-primary-cta text-[10px] px-4 py-2 flex items-center gap-1"
+                    >
+                      {loading.updateDoctorPartnership ? <Spinner /> : <Check size={11} />} Save
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {tab === 'kyc' && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-base-content/60">Status:</span>
+                    <span className={`badge ${kycClass}`}>{doc.kycStatus}</span>
+                    {doc.kycVerifiedAt && (
+                      <span className="text-[10px] text-base-content/40">
+                        Verified {new Date(doc.kycVerifiedAt).toLocaleDateString()}
+                      </span>
+                    )}
+                  </div>
+                  {doc.kycRejectionReason && (
+                    <p className="text-xs text-error bg-error/10 px-3 py-2 rounded-lg">Reason: {doc.kycRejectionReason}</p>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => dispatch(verifyDoctorKyc({ id: doc._id, action: 'approve' }))}
+                      disabled={loading.verifyDoctorKyc}
+                      className="btn btn-success text-white text-xs px-4 py-2 rounded-lg flex items-center justify-center gap-1.5"
+                    >
+                      {loading.verifyDoctorKyc ? <Spinner /> : <CheckCircle size={12} />} Approve KYC
+                    </button>
+                    <div className="space-y-1">
+                      <input
+                        value={dForm.kycRejectionReason}
+                        onChange={(e) => set('kycRejectionReason', e.target.value)}
+                        placeholder="Rejection reason (required)…"
+                        className="input-field w-full text-xs"
+                      />
+                      <button
+                        onClick={() => dispatch(verifyDoctorKyc({ id: doc._id, action: 'reject', rejectionReason: dForm.kycRejectionReason }))}
+                        disabled={loading.verifyDoctorKyc || !dForm.kycRejectionReason}
+                        className="btn btn-error text-white text-xs px-4 py-2 rounded-lg w-full flex items-center justify-center gap-1.5"
+                      >
+                        <XCircle size={12} /> Reject KYC
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 pt-2 border-t border-base-300">
+                    <Toggle
+                      label="Active Status"
+                      note="Inactive doctors are hidden from public listing."
+                      checked={doc.isActive ?? true}
+                      onChange={() => dispatch(toggleDoctorActive(doc._id))}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {tab === 'platform-fee' && <PlatformFeeSection doctor={doc} dispatch={dispatch} loading={loading} />}
+
+              {tab === 'resend' && (
+                <div className="space-y-3">
+                  <p className="text-xs text-base-content/60">
+                    Generate a new password and resend login credentials to <strong>{doc.user?.email}</strong>.
+                  </p>
+                  <button
+                    onClick={() => dispatch(resendDoctorCredentials(doc._id))}
+                    disabled={loading.resendDoctorCredentials}
+                    className="btn-primary-cta text-xs px-5 py-2.5 flex items-center gap-2"
+                  >
+                    {loading.resendDoctorCredentials ? <Spinner /> : <Send size={13} />} Resend Credentials
+                  </button>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VERIFICATION TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const VerificationTab = ({ hospital, dispatch, loading }) => {
+  const [confirm, setConfirm] = useState(null);
+
+  return (
+    <>
+      <AnimatePresence>{confirm && <ConfirmDialog {...confirm} onCancel={() => setConfirm(null)} />}</AnimatePresence>
+      <div className="space-y-4">
+        <SectionCard title="Verification Status" icon={Shield}>
+          <div className="flex items-center gap-4 mb-4">
+            <div
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold ${
+                hospital.isVerified
+                  ? 'bg-success/10 text-success'
+                  : 'bg-warning/10 text-warning'
+              }`}
+            >
+              {hospital.isVerified ? <CheckCircle size={15} /> : <AlertTriangle size={15} />}
+              {hospital.isVerified ? 'Verified' : 'Not Verified'}
+            </div>
+            {hospital.verifiedAt && (
+              <p className="text-xs text-base-content/40">Since {new Date(hospital.verifiedAt).toLocaleDateString()}</p>
+            )}
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={() =>
+                setConfirm({
+                  message: 'Verify this hospital?',
+                  onConfirm: () => {
+                    dispatch(verifyHospital({ id: hospital._id, isVerified: true }));
+                    setConfirm(null);
+                  },
+                })
+              }
+              disabled={hospital.isVerified || loading.verifyHospital}
+              className="btn btn-success text-white text-sm px-5 py-2.5 rounded-lg flex items-center gap-2"
+            >
+              {loading.verifyHospital ? <Spinner /> : <CheckCircle size={14} />} Verify
+            </button>
+            <button
+              onClick={() =>
+                setConfirm({
+                  message: 'Unverify this hospital?',
+                  onConfirm: () => {
+                    dispatch(verifyHospital({ id: hospital._id, isVerified: false }));
+                    setConfirm(null);
+                  },
+                })
+              }
+              disabled={!hospital.isVerified || loading.verifyHospital}
+              className="btn btn-warning text-warning-content text-sm px-5 py-2.5 rounded-lg flex items-center gap-2"
+            >
+              <XCircle size={14} /> Unverify
+            </button>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Active Status" icon={ToggleRight}>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-bold text-base-content">{hospital.isActive ? 'Hospital is Active' : 'Hospital is Inactive'}</p>
+              <p className="text-xs text-base-content/50 mt-0.5">
+                {hospital.isActive ? 'Visible to patients and bookable.' : 'Hidden from public listing and booking.'}
+              </p>
+            </div>
+            <button
+              onClick={() =>
+                setConfirm({
+                  message: `${hospital.isActive ? 'Deactivate' : 'Activate'} this hospital?`,
+                  onConfirm: () => {
+                    dispatch(toggleHospitalActive(hospital._id));
+                    setConfirm(null);
+                  },
+                })
+              }
+              disabled={loading.toggleHospitalActive}
+              className={`flex items-center gap-2 text-sm px-5 py-2.5 rounded-lg font-bold transition-colors ${
+                hospital.isActive ? 'bg-warning/10 text-warning hover:bg-warning/20' : 'bg-success/10 text-success hover:bg-success/20'
+              }`}
+            >
+              {loading.toggleHospitalActive ? <Spinner /> : hospital.isActive ? <ToggleLeft size={15} /> : <ToggleRight size={15} />}
+              {hospital.isActive ? 'Deactivate' : 'Activate'}
+            </button>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Danger Zone" icon={AlertTriangle}>
+          <div className="p-4 border border-error/30 rounded-xl bg-error/10">
+            <p className="text-sm font-bold text-error mb-1">Delete Hospital Permanently</p>
+            <p className="text-xs text-error/70 mb-4">This will remove the hospital, unlink all doctors, and cannot be reversed.</p>
+            <button
+              onClick={() =>
+                setConfirm({
+                  message: 'PERMANENTLY delete this hospital and unlink all doctors?',
+                  onConfirm: () => {
+                    dispatch(deleteHospital(hospital._id));
+                    setConfirm(null);
+                  },
+                })
+              }
+              disabled={loading.deleteHospital}
+              className="btn btn-error text-error-content text-sm px-5 py-2.5 rounded-lg flex items-center gap-2"
+            >
+              {loading.deleteHospital ? <Spinner /> : <Trash2 size={13} />} Delete Permanently
+            </button>
+          </div>
+        </SectionCard>
+      </div>
+    </>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  MAIN PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+export default function HospitalManagementPage() {
+  const dispatch = useDispatch();
+  const user = useSelector((s) => s.user?.user) ?? null;
+  const hospitals = useSelector(selectHospitals);
+  const selectedHosp = useSelector(selectSelectedHospital);
+  const loading = useSelector(selectHospitalLoading);
+  const error = useSelector(selectHospitalError);
+  const total = useSelector(selectHospitalTotal);
+  const pages = useSelector(selectHospitalPages);
+  const allDoctors = useSelector(selectDoctors);
+
+  const [activeTab, setActiveTab] = useState('overview');
+  const [searchQ, setSearchQ] = useState('');
+  const [filterType, setFilterType] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    // verified: 'false' tells the controller to NOT restrict to isVerified=true,
+    // so admins see both verified and unverified hospitals in this dashboard.
+    dispatch(fetchAllHospitals({ verified: 'false', page: currentPage, limit: 20 }));
+    dispatch(fetchAllDoctors({ page: 1, limit: 100 }));
+  }, [dispatch, currentPage]);
+
+  useEffect(() => {
+    if (selectedHosp?._id) dispatch(fetchHospitalEffectivePricing(selectedHosp._id));
+  }, [selectedHosp?._id, dispatch]);
+
+  const handleSelectHospital = useCallback(
+    (h) => {
+      dispatch(fetchHospitalById(h._id));
+      setActiveTab('overview');
+      dispatch(clearHospitalDoctors());
+    },
+    [dispatch]
+  );
+
+  const displayedHospitals = (hospitals || []).filter((h) => {
+    const matchQ =
+      !searchQ || h.name?.toLowerCase().includes(searchQ.toLowerCase()) || h.address?.city?.toLowerCase().includes(searchQ.toLowerCase());
+    const matchType = !filterType || h.hospitalType === filterType;
+    const matchStat =
+      !filterStatus ||
+      (filterStatus === 'verified' && h.isVerified) ||
+      (filterStatus === 'unverified' && !h.isVerified) ||
+      (filterStatus === 'active' && h.isActive) ||
+      (filterStatus === 'inactive' && !h.isActive);
+    return matchQ && matchType && matchStat;
+  });
+
+  const tabContent = () => {
+    if (!selectedHosp) return null;
+    switch (activeTab) {
+      case 'overview':
+        return <OverviewTab hospital={selectedHosp} />;
+      case 'profile':
+        return <ProfileTab hospital={selectedHosp} dispatch={dispatch} loading={loading} />;
+      case 'settings':
+        return <SettingsTab hospital={selectedHosp} dispatch={dispatch} loading={loading} />;
+      case 'security':
+        return <SecurityTab hospital={selectedHosp} dispatch={dispatch} loading={loading} />;
+      case 'pricing':
+        return <PricingTab hospital={selectedHosp} dispatch={dispatch} loading={loading} />;
+      case 'images':
+        return <ImagesTab hospital={selectedHosp} dispatch={dispatch} loading={loading} />;
+      case 'location':
+        return <LocationTab hospital={selectedHosp} dispatch={dispatch} loading={loading} />;
+      case 'doctors':
+        return <DoctorsTab hospital={selectedHosp} dispatch={dispatch} loading={loading} allDoctors={allDoctors} />;
+      case 'verification':
+        return <VerificationTab hospital={selectedHosp} dispatch={dispatch} loading={loading} />;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <>
+      <AnimatePresence>{showCreate && <CreateHospitalModal onClose={() => setShowCreate(false)} dispatch={dispatch} loading={loading} />}</AnimatePresence>
+
+      <div className="flex h-[calc(100vh-64px)] bg-base-200 overflow-hidden font-poppins">
+        {/* LEFT PANEL */}
+        <motion.aside
+          initial={{ x: -20, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          className="w-[320px] shrink-0 flex flex-col bg-base-100 border-r border-base-300"
+        >
+          <div className="px-4 py-4 border-b border-base-300">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h1 className="text-base font-black text-base-content font-montserrat leading-tight">Hospital Management</h1>
+                <p className="text-[10px] text-base-content/40 mt-0.5">{total} hospitals total</p>
+              </div>
+              <button onClick={() => setShowCreate(true)} className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center hover:opacity-80 transition-opacity">
+                <Plus size={15} className="text-primary-content" />
+              </button>
+            </div>
+            <div className="relative mb-2">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+              <input
+                value={searchQ}
+                onChange={(e) => setSearchQ(e.target.value)}
+                placeholder="Search hospitals…"
+                className="input-field w-full pl-8 py-2 text-xs"
+              />
+              {searchQ && (
+                <button onClick={() => setSearchQ('')} className="absolute right-2.5 top-1/2 -translate-y-1/2">
+                  <X size={12} className="text-base-content/40" />
+                </button>
+              )}
+            </div>
+            <div className="flex gap-1.5">
+              <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="input-field flex-1 py-1.5 text-[10px]">
+                <option value="">All Types</option>
+                {HOSPITAL_TYPES.map((t) => (
+                  <option key={t}>{t}</option>
+                ))}
+              </select>
+              <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="input-field flex-1 py-1.5 text-[10px]">
+                <option value="">All Status</option>
+                <option value="verified">Verified</option>
+                <option value="unverified">Unverified</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-thin">
+            {loading.fetchAllHospitals && hospitals.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-3">
+                <Spinner size="md" />
+                <p className="text-xs text-base-content/40">Loading hospitals…</p>
+              </div>
+            ) : displayedHospitals.length === 0 ? (
+              <div className="text-center py-12 text-base-content/40">
+                <Building2 size={28} className="mx-auto mb-2 opacity-30" />
+                <p className="text-xs">No hospitals match your filters.</p>
+              </div>
+            ) : (
+              displayedHospitals.map((h) => (
+                <HospitalCard key={h._id} hospital={h} isSelected={selectedHosp?._id === h._id} onClick={() => handleSelectHospital(h)} />
+              ))
+            )}
+          </div>
+
+          {pages > 1 && (
+            <div className="px-4 py-3 border-t border-base-300 flex items-center justify-between">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="text-xs px-3 py-1.5 rounded-lg border border-base-300 hover:bg-base-200 disabled:opacity-40 transition-colors"
+              >
+                Prev
+              </button>
+              <span className="text-[10px] text-base-content/50">
+                {currentPage} / {pages}
+              </span>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(pages, p + 1))}
+                disabled={currentPage >= pages}
+                className="text-xs px-3 py-1.5 rounded-lg border border-base-300 hover:bg-base-200 disabled:opacity-40 transition-colors"
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </motion.aside>
+
+        {/* RIGHT PANEL */}
+        <main className="flex-1 flex flex-col overflow-hidden">
+          {!selectedHosp ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-base-content/30">
+              <motion.div animate={{ y: [0, -8, 0] }} transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}>
+                <Hospital size={52} className="opacity-20 mb-4" />
+              </motion.div>
+              <p className="text-sm font-semibold">Select a hospital to manage</p>
+              <p className="text-xs mt-1 opacity-60">All admin controls will appear here.</p>
+            </div>
+          ) : (
+            <>
+              <motion.div
+                key={selectedHosp._id}
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-base-100 border-b border-base-300 px-6 py-4 flex items-center gap-4 shrink-0"
+              >
+                {selectedHosp.logo ? (
+                  <img src={selectedHosp.logo} alt="" className="w-12 h-12 rounded-xl object-cover border border-base-300 shrink-0" />
+                ) : (
+                  <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+                    <Building2 size={20} className="text-primary" />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-base font-black text-base-content font-montserrat truncate">{selectedHosp.name}</h2>
+                    <span className={`badge ${MANAGED_TYPES.includes(selectedHosp.hospitalType) ? 'badge-primary' : 'badge-info'}`}>
+                      {selectedHosp.hospitalType}
+                    </span>
+                    <span className={`badge ${selectedHosp.isVerified ? 'badge-success' : 'badge-warning'}`}>
+                      {selectedHosp.isVerified ? 'Verified' : 'Unverified'}
+                    </span>
+                    {!selectedHosp.isActive && <span className="badge badge-error">Inactive</span>}
+                  </div>
+                  <p className="text-xs text-base-content/50 mt-0.5 flex items-center gap-1">
+                    <MapPin size={10} />
+                    {selectedHosp.address?.line1}, {selectedHosp.address?.city} — {selectedHosp.managementModel}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button onClick={() => dispatch(fetchHospitalById(selectedHosp._id))} className="p-2 hover:bg-base-200 rounded-lg transition-colors" title="Refresh">
+                    <RefreshCw size={14} className={loading.fetchHospitalById ? 'animate-spin text-primary' : 'text-base-content/50'} />
+                  </button>
+                  <button onClick={() => dispatch(clearSelectedHospital())} className="p-2 hover:bg-base-200 rounded-lg transition-colors">
+                    <X size={14} className="text-base-content/50" />
+                  </button>
+                </div>
+              </motion.div>
+
+              <div className="bg-base-100 border-b border-base-300 px-6 flex gap-0 overflow-x-auto shrink-0 scrollbar-thin">
+                {SECTION_TABS.map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setActiveTab(id)}
+                    className={`flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-4 py-3 whitespace-nowrap border-b-2 transition-colors ${
+                      activeTab === id ? 'border-primary text-primary' : 'border-transparent text-base-content/40 hover:text-base-content/70'
+                    }`}
+                  >
+                    <Icon size={12} /> {label}
+                  </button>
+                ))}
+              </div>
+
+              <AnimatePresence>
+                {error && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="bg-error/10 border-b border-error/30 px-6 py-2 flex items-center gap-2"
+                  >
+                    <AlertTriangle size={13} className="text-error shrink-0" />
+                    <p className="text-xs text-error">{error}</p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div className="flex-1 overflow-y-auto p-5 scrollbar-thin">
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={activeTab + selectedHosp._id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.18 }}
+                  >
+                    {tabContent()}
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+            </>
+          )}
+        </main>
+      </div>
     </>
   );
 }

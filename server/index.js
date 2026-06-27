@@ -1,6 +1,12 @@
-import express from "express";
+// ─────────────────────────────────────────────
+// 0. ENVIRONMENT SETUP (Must be at the very top!)
+// ─────────────────────────────────────────────
 import dotenv from "dotenv";
+dotenv.config();
+
+import express from "express";
 import { Server } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -10,6 +16,7 @@ import rateLimit from "express-rate-limit";
 import passport from "passport";
 import session from "express-session";
 import { createServer } from "http";
+import { createClient } from "redis";
 
 // Config & Services
 import connectDB from "./config/DB.js";
@@ -17,12 +24,12 @@ import "./config/passport.js";
 import redisClient from "./config/redis.js";
 
 // Socket Imports
- import { attachChatSocket } from "./services/chatSocketService.js";
 import { initBookingSocket } from './services/bookingSocketService.js';
-import { 
-  registerConsultationSocket, 
-  setConsultationNamespace 
-} from "./sockets/consultationSocket.js"; 
+import {
+  registerConsultationSocket,
+  setConsultationNamespace
+} from "./sockets/consultationSocket.js";
+import { initSupportSocket } from './sockets/support.socket.js';
 
 // Route Imports
 import userRouter               from "./routes/userRoutes.js";
@@ -39,7 +46,7 @@ import userManagerRoutes        from "./routes/super-admin/userManagementRoutes.
 import medicinesRoutes          from "./routes/medicineRoutes.js";
 import faqsRoutes               from "./routes/faqROutes.js";
 import couponsRoutes            from "./routes/couponRoutes.js";
-import chatRoutes               from "./routes/chatRoutes.js";
+// import chatRoutes               from "./routes/chatRoutes.js";
 import orderPharmacyRoutes      from "./routes/orderRoutes.js";
 import pharmacyRoutes           from "./routes/pharmacyRoutes.js";
 import walletRoutes             from "./routes/walletRoutes.js";
@@ -67,13 +74,15 @@ import prescriptionCareRouter   from './routes/prescriptionCareRouter.js';
 import bloodBankRouter          from './routes/bloodbankRouter.js';
 import adminAnalyticsRouter     from './routes/super-admin/adminanalyticsRouter.js';
 import consultationRouter       from './routes/consultationrouter.js';
-import { protect , authorize }  from "./middleware/authMiddleware.js";
+import { protect, authorize }   from "./middleware/authMiddleware.js";
 import labPartnerRoutes         from './routes/labpartnerbookingRoutes.js';
-import cookieConsentRoutes      from './routes/cookieConsentRoutes.js';
-import payoutRouter from './routes/payoutRouter.js';
-import bookingPayAtServiceRouter from './routes/bookingPayAtServiceRouter.js'
-import accountingRouter from './routes/accountingRouter.js'
-dotenv.config();
+ 
+import payoutRouter             from './routes/payoutRouter.js';
+import bookingPayAtServiceRouter from './routes/bookingPayAtServiceRouter.js';
+import accountingRouter         from './routes/accountingRouter.js';
+
+// Support System
+import supportRouter            from './routes/support/index.js';
 
 // ─────────────────────────────────────────────
 // 1. CORE CONFIGURATION
@@ -81,7 +90,7 @@ dotenv.config();
 const app = express();
 const server = createServer(app);
 
-const PORT = process.env.PORT || 5050;
+const PORT    = process.env.PORT    || 5050;
 const NODE_ENV = process.env.NODE_ENV || "development";
 
 app.set("trust proxy", 1);
@@ -160,7 +169,17 @@ app.use(
 );
 
 // ─────────────────────────────────────────────
-// 5. ROUTES
+// 5. io → req BRIDGE
+// Inject io into every request so route files can emit socket events.
+// Must be declared before routes.
+// ─────────────────────────────────────────────
+app.use((req, _res, next) => {
+  req.io = app.get("io");
+  next();
+});
+
+// ─────────────────────────────────────────────
+// 6. ROUTES
 // ─────────────────────────────────────────────
 app.use("/api/users",              userRouter);
 app.use("/api/notifications",      notificationRouter);
@@ -175,7 +194,7 @@ app.use("/api/user-management",    userManagerRoutes);
 app.use("/api/medicines",          medicinesRoutes);
 app.use("/api/faqs",               faqsRoutes);
 app.use("/api/coupons",            couponsRoutes);
-app.use("/api/chat",               chatRoutes);
+// app.use("/api/chat",               chatRoutes);
 app.use("/api/user/pharmacy",      orderPharmacyRoutes);
 app.use("/api/pharmacy",           pharmacyRoutes);
 app.use("/api/wallet",             walletRoutes);
@@ -202,22 +221,22 @@ app.use("/api/blood-banks",        bloodBankRouter);
 app.use("/api/admin/analytics",    adminAnalyticsRouter);
 app.use("/api/consultations",      consultationRouter);
 app.use('/api/lab-partner/bookings', protect, authorize('lab_partner'), labPartnerRoutes);
-app.use('/api/cookie-consent', cookieConsentRoutes);
+ 
 
 // ⚠️ Warning: Three separate routers mounted to the exact same path
 // Consider combining these into a single router file in the future to avoid unexpected routing conflicts.
-app.use("/api/bookings", bookingRoutes);
-app.use("/api/bookings", customerBookingRouter);
-app.use("/api/bookings", booking1Routes);
-app.use('/api/bookings', bookingPayAtServiceRouter)
-app.use('/api/accounting', accountingRouter)
+app.use("/api/bookings",           bookingRoutes);
+app.use("/api/bookings",           customerBookingRouter);
+app.use("/api/bookings",           booking1Routes);
+app.use('/api/bookings',           bookingPayAtServiceRouter);
+app.use('/api/accounting',         accountingRouter);
+app.use('/api/payouts',            payoutRouter);
 
- 
- 
-app.use('/api/payouts', payoutRouter);
+// ── Support Ticket System ─────────────────────────────────────────────────────
+app.use('/api/support',            supportRouter);
 
 // ─────────────────────────────────────────────
-// 6. HEALTH CHECK & ERROR HANDLING
+// 7. HEALTH CHECK & ERROR HANDLING
 // ─────────────────────────────────────────────
 app.get("/", (_req, res) => {
   res.status(200).json({
@@ -238,33 +257,52 @@ app.use((err, req, res, next) => {
 });
 
 // ─────────────────────────────────────────────
-// 7. SERVER BOOTSTRAP
+// 8. SERVER BOOTSTRAP
 // ─────────────────────────────────────────────
 async function startServer() {
   try {
     await connectDB();
 
-   
+    // ── Redis pub/sub clients for Socket.IO adapter ───────────────────────
+    // Separate clients required — one pub, one sub.
+    // FIXED: Strict check for "redis://" or "rediss://" 
+    const redisUrl = process.env.REDIS_URL.startsWith("redis://") || process.env.REDIS_URL.startsWith("rediss://")
+      ? process.env.REDIS_URL
+      : `redis://${process.env.REDIS_URL}`;
+
+    const pubClient = createClient({ url: redisUrl });
+    const subClient = pubClient.duplicate();
+
+    await Promise.all([pubClient.connect(), subClient.connect()]);
+
+    // ── Socket.IO server ──────────────────────────────────────────────────
     const io = new Server(server, {
       cors: {
         origin: allowedOrigins,
         methods: ["GET", "POST"],
         credentials: true,
       },
+      transports: ['websocket', 'polling'],
     });
-    attachChatSocket(io)
-    initBookingSocket(io);           
-    
-    // Register the Consultation Socket Namespace
+
+    // Apply Redis adapter — enables horizontal scaling across multiple nodes
+    io.adapter(createAdapter(pubClient, subClient));
+
+    // ── Register socket namespaces ────────────────────────────────────────
+    initBookingSocket(io);
+
     const consultationNs = registerConsultationSocket(io);
     setConsultationNamespace(consultationNs);
-    
-    // Attach io to Express app so routers (like Announcement) can emit events
+
+    initSupportSocket(io);   // → mounts on /support namespace
+
+    // ── Attach io to app (req.io bridge middleware reads this) ────────────
     app.set("io", io);
 
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`🌍 Mode: ${NODE_ENV}`);
+      console.log(`🎫 Support socket active on /support namespace`);
     });
   } catch (error) {
     console.error("Startup failed:", error);
@@ -274,10 +312,8 @@ async function startServer() {
 
 startServer();
 
-
-
 // ─────────────────────────────────────────────
-// 8. GRACEFUL SHUTDOWN
+// 9. GRACEFUL SHUTDOWN
 // ─────────────────────────────────────────────
 process.on("SIGTERM", async () => {
   console.log("SIGTERM received");

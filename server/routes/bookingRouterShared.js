@@ -1,56 +1,77 @@
- 
+import crypto from "crypto";
+import axios from "axios";
+import Razorpay from "razorpay";
 
-import crypto   from 'crypto';
-import axios    from 'axios';
-import Razorpay from 'razorpay';
-
-import sendEmailUtil from '../utils/sendEmail.js';
-import { transactionalTemplate as _transactionalTemplate, otpTemplate as _otpTemplate }
-  from '../utils/emailTemplates.js';
+import sendEmailUtil from "../utils/sendEmail.js";
+import {
+  transactionalTemplate as _transactionalTemplate,
+  otpTemplate as _otpTemplate,
+} from "../utils/emailTemplates.js";
 
 // ── Model imports ─────────────────────────────────────────────────────────────
-import Booking               from '../models/Booking.js';
-import Ride                  from '../models/Ride.js';
-import RideTracking          from '../models/RideTracking.js';
-import User                  from '../models/User.js';
-import Driver                from '../models/Driver.js';
-import SoloDriverPartner     from '../models/SoloDriverPartner.js';
-import TransportPartner      from '../models/TransportPartner.js';
-import CareAssistantProfile  from '../models/CareAssistantProfile.js';
-import DoctorProfile         from '../models/DoctorProfile.js';
-import Hospital              from '../models/Hospital.js';
-import LabPartnerProfile     from '../models/LabPartnerProfile.js';
-import Notification          from '../models/Notification.js';
-import SystemLog             from '../models/SystemLog.js';
-import OutPatientRecord      from '../models/OutPatientRecord.js';
-import UserSubscription      from '../models/UserSubscription.js';
-import SubscriptionPlan      from '../models/SubscriptionPlan.js';
-import Wallet                from '../models/Wallet.js';
-import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
+import Booking from "../models/Booking.js";
+import Ride from "../models/Ride.js";
+import RideTracking from "../models/RideTracking.js";
+import User from "../models/User.js";
+import Driver from "../models/Driver.js";
+import SoloDriverPartner from "../models/SoloDriverPartner.js";
+import TransportPartner from "../models/TransportPartner.js";
+import CareAssistantProfile from "../models/CareAssistantProfile.js";
+import DoctorProfile from "../models/DoctorProfile.js";
+import Hospital from "../models/Hospital.js";
+import LabPartnerProfile from "../models/LabPartnerProfile.js";
+import Notification from "../models/Notification.js";
+import SystemLog from "../models/SystemLog.js";
+import OutPatientRecord from "../models/OutPatientRecord.js";
+import UserSubscription from "../models/UserSubscription.js";
+import SubscriptionPlan from "../models/SubscriptionPlan.js";
+import Wallet from "../models/Wallet.js";
+import PlatformPricingConfig from "../models/PlatformPricingConfig.js";
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 export {
-  Booking, Ride, RideTracking, User, Driver, SoloDriverPartner,
-  TransportPartner, CareAssistantProfile, DoctorProfile, Hospital,
-  LabPartnerProfile, Notification, SystemLog, OutPatientRecord,
-  UserSubscription, SubscriptionPlan, Wallet, PlatformPricingConfig,
+  Booking,
+  Ride,
+  RideTracking,
+  User,
+  Driver,
+  SoloDriverPartner,
+  TransportPartner,
+  CareAssistantProfile,
+  DoctorProfile,
+  Hospital,
+  LabPartnerProfile,
+  Notification,
+  SystemLog,
+  OutPatientRecord,
+  UserSubscription,
+  SubscriptionPlan,
+  Wallet,
+  PlatformPricingConfig,
 };
 
-export { default as sendEmail }           from '../utils/sendEmail.js';
-export { default as sendSms }             from '../services/Sendsms.js';
-export { generateBookingInvoicePdf }      from '../utils/bookingInvoiceGenerator.js';
-export { getBookingSocketService }        from '../services/bookingSocketService.js';
-export { transactionalTemplate, otpTemplate } from '../utils/emailTemplates.js';
+export { default as sendEmail } from "../utils/sendEmail.js";
+export { default as sendSms } from "../services/Sendsms.js";
+export { generateBookingInvoicePdf } from "../utils/bookingInvoiceGenerator.js";
+export { getBookingSocketService } from "../services/bookingSocketService.js";
+export { transactionalTemplate, otpTemplate } from "../utils/emailTemplates.js";
 export {
-  rideBookedSms, driverAssignedSms, rideStartedSms, rideCompletedSms,
-  rideCancelledSms, careAssistantAssignedSms, appointmentConfirmedSms,
-  otpSms, paymentSuccessfulSms, newCareRequestToAssistantSms,
-} from '../utils/Smstemplates.js';
-export { protect, authorize } from '../middleware/authMiddleware.js';
+  rideBookedSms,
+  driverAssignedSms,
+  rideStartedSms,
+  rideCompletedSms,
+  rideCancelledSms,
+  careAssistantAssignedSms,
+  appointmentConfirmedSms,
+  otpSms,
+  paymentSuccessfulSms,
+  newCareRequestToAssistantSms,
+} from "../utils/Smstemplates.js";
+export { protect, authorize } from "../middleware/authMiddleware.js";
 
 // ── Razorpay ──────────────────────────────────────────────────────────────────
 export const razorpay = new Razorpay({
-  key_id:     process.env.RAZORPAY_KEY_ID,
+  key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
@@ -61,18 +82,29 @@ export const razorpay = new Razorpay({
 export const DEFAULT_KM_RATE = 21;
 
 export const RIDE_STATUSES_ACTIVE = [
-  'driver_assigned', 'driver_accepted', 'driver_en_route',
-  'driver_arrived',  'otp_verified',    'in_progress', 'at_stop',
+  "driver_assigned",
+  "driver_accepted",
+  "driver_en_route",
+  "driver_arrived",
+  "otp_verified",
+  "in_progress",
+  "at_stop",
 ];
 
-export const RADIUS_METERS      = 100_000;
-export const CARE_RIDE_RADIUS_M =  30_000;
+export const RADIUS_METERS = 100_000;
+export const CARE_RIDE_RADIUS_M = 30_000;
 export const TRANSPORT_RADIUS_M = 100_000;
 
 export const CUSTOMER_BOOKING_TYPES = [
-  'full_care_ride', 'doctor_consultation', 'doctor_online',
-  'physiotherapist', 'care_assistant', 'diagnostic_center',
-  'diagnostic_home', 'patient_transport', 'follow_up',
+  "full_care_ride",
+  "doctor_consultation",
+  "doctor_online",
+  "physiotherapist",
+  "care_assistant",
+  "diagnostic_center",
+  "diagnostic_home",
+  "patient_transport",
+  "follow_up",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,23 +117,24 @@ export const CUSTOMER_BOOKING_TYPES = [
 const findActiveSub = async (userId) => {
   // 1. Primary holder check
   const primarySub = await UserSubscription.findOne({
-    user:       userId,
-    status:     { $in: ['Active', 'Trial'] },
+    user: userId,
+    status: { $in: ["Active", "Trial"] },
     expiryDate: { $gt: new Date() },
   }).lean();
   if (primarySub) return primarySub;
 
   // 2. Family member fallback — look up user's email then query members array
-  const user = await User.findById(userId).select('email').lean();
+  const user = await User.findById(userId).select("email").lean();
   if (!user?.email) return null;
 
-  const email        = user.email.toLowerCase().trim();
-  const localStripped = email.split('@')[0].replace(/\./g, '') + '@' + email.split('@')[1];
+  const email = user.email.toLowerCase().trim();
+  const localStripped =
+    email.split("@")[0].replace(/\./g, "") + "@" + email.split("@")[1];
 
   return UserSubscription.findOne({
-    'members.memberEmail': { $in: [email, localStripped] },
-    status:                { $in: ['Active', 'Trial'] },
-    expiryDate:            { $gt: new Date() },
+    "members.memberEmail": { $in: [email, localStripped] },
+    status: { $in: ["Active", "Trial"] },
+    expiryDate: { $gt: new Date() },
   }).lean();
 };
 
@@ -110,57 +143,88 @@ const findActiveSub = async (userId) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const sendBookingConfirmationEmail = async ({
-  user, booking, consultationFee, isCoveredBySubscription,
-  opNumber, doctorName, hospitalName, scheduledAt,
+  user,
+  booking,
+  consultationFee,
+  isCoveredBySubscription,
+  opNumber,
+  doctorName,
+  hospitalName,
+  scheduledAt,
 }) => {
   try {
-    const u = await User.findById(user).select('email name').lean();
-    if (!u) { console.warn('[sendBookingConfirmationEmail] User not found:', user); return; }
-    if (!u.email) { console.warn('[sendBookingConfirmationEmail] No email for user:', u._id); return; }
+    const u = await User.findById(user).select("email name").lean();
+    if (!u) {
+      console.warn("[sendBookingConfirmationEmail] User not found:", user);
+      return;
+    }
+    if (!u.email) {
+      console.warn("[sendBookingConfirmationEmail] No email for user:", u._id);
+      return;
+    }
 
     const fmtDate = (d) =>
-      new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+      new Date(d).toLocaleString("en-IN", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
     const fmtRs = (n) =>
-      `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+      `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
     const html = _transactionalTemplate({
-      header: 'BOOKING CONFIRMED',
-      title:  `Appointment Confirmed — ${opNumber || booking.bookingCode}`,
+      header: "BOOKING CONFIRMED",
+      title: `Appointment Confirmed — ${opNumber || booking.bookingCode}`,
       body: `
         <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#374151;">
           <tr><td style="padding:6px 0;color:#6b7280;">Booking Code</td>
               <td style="text-align:right;font-weight:700;font-family:monospace;">#${booking.bookingCode}</td></tr>
-          ${opNumber ? `<tr><td style="padding:6px 0;color:#6b7280;">OP Number</td>
-              <td style="text-align:right;font-weight:700;font-family:monospace;">${opNumber}</td></tr>` : ''}
-          ${doctorName ? `<tr><td style="padding:6px 0;color:#6b7280;">Doctor</td>
-              <td style="text-align:right;font-weight:600;">${doctorName}</td></tr>` : ''}
-          ${hospitalName ? `<tr><td style="padding:6px 0;color:#6b7280;">Hospital</td>
-              <td style="text-align:right;font-weight:600;">${hospitalName}</td></tr>` : ''}
+          ${
+            opNumber
+              ? `<tr><td style="padding:6px 0;color:#6b7280;">OP Number</td>
+              <td style="text-align:right;font-weight:700;font-family:monospace;">${opNumber}</td></tr>`
+              : ""
+          }
+          ${
+            doctorName
+              ? `<tr><td style="padding:6px 0;color:#6b7280;">Doctor</td>
+              <td style="text-align:right;font-weight:600;">${doctorName}</td></tr>`
+              : ""
+          }
+          ${
+            hospitalName
+              ? `<tr><td style="padding:6px 0;color:#6b7280;">Hospital</td>
+              <td style="text-align:right;font-weight:600;">${hospitalName}</td></tr>`
+              : ""
+          }
           <tr><td style="padding:6px 0;color:#6b7280;">Scheduled At</td>
               <td style="text-align:right;font-weight:600;">${fmtDate(scheduledAt)}</td></tr>
           <tr><td style="padding:6px 0;border-top:1px solid #f1f5f9;color:#6b7280;">Consultation Fee</td>
-              <td style="text-align:right;font-weight:800;color:${isCoveredBySubscription ? '#15803d' : '#0f3460'};">
-                ${isCoveredBySubscription ? 'FREE (Subscription)' : fmtRs(consultationFee)}
+              <td style="text-align:right;font-weight:800;color:${isCoveredBySubscription ? "#15803d" : "#0f3460"};">
+                ${isCoveredBySubscription ? "FREE (Subscription)" : fmtRs(consultationFee)}
               </td></tr>
         </table>
-        ${isCoveredBySubscription ? `
+        ${
+          isCoveredBySubscription
+            ? `
         <div style="margin-top:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;">
           <p style="margin:0;font-size:12px;color:#15803d;font-weight:600;">
             ✓ This consultation is covered by your subscription plan.
           </p>
-        </div>` : ''}
+        </div>`
+            : ""
+        }
       `,
-      buttonLink: `${process.env.FRONTEND_URL || 'https://likeson.in'}/my-bookings/${booking._id}`,
-      buttonText: 'View Booking',
+      buttonLink: `${process.env.FRONTEND_URL || "https://likeson.in"}/my-bookings/${booking._id}`,
+      buttonText: "View Booking",
     });
 
     await sendEmailUtil({
-      email:   u.email,
+      email: u.email,
       subject: `Booking Confirmed — ${booking.bookingCode}`,
       html,
     });
   } catch (err) {
-    console.error('[sendBookingConfirmationEmail] ❌ failed:', err.message);
+    console.error("[sendBookingConfirmationEmail] ❌ failed:", err.message);
   }
 };
 
@@ -174,7 +238,7 @@ export const findNearestHospital = async (coordinates) => {
     const hospitals = await Hospital.find({
       location: {
         $near: {
-          $geometry: { type: 'Point', coordinates },
+          $geometry: { type: "Point", coordinates },
           $maxDistance: 30000,
         },
       },
@@ -184,7 +248,7 @@ export const findNearestHospital = async (coordinates) => {
 
     if (!hospitals.length) return null;
 
-    const hospital   = hospitals[0];
+    const hospital = hospitals[0];
     const distanceKm = haversineKm(coordinates, hospital.location.coordinates);
 
     return {
@@ -193,7 +257,7 @@ export const findNearestHospital = async (coordinates) => {
       etaMinutes: calculateEtaMinutes(distanceKm),
     };
   } catch (err) {
-    console.error('[findNearestHospital]', err.message);
+    console.error("[findNearestHospital]", err.message);
     return null;
   }
 };
@@ -206,62 +270,80 @@ export const genOtp = () => crypto.randomInt(100_000, 999_999).toString();
 
 export const hashOtp = (otp) =>
   crypto
-    .createHmac('sha256', process.env.OTP_SECRET || 'likeson-otp-secret')
+    .createHmac("sha256", process.env.OTP_SECRET || "likeson-otp-secret")
     .update(String(otp).trim())
-    .digest('hex');
+    .digest("hex");
 
 export const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
-  const R    = 6371;
+  const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a    =
+  const a =
     Math.sin(dLat / 2) ** 2 +
     Math.cos((lat1 * Math.PI) / 180) *
-    Math.cos((lat2 * Math.PI) / 180) *
-    Math.sin(dLng / 2) ** 2;
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
 export const createNotification = async ({
-  recipient, title, body, type, bookingId,
-  priority = 'Medium', otp = undefined,
-  actionUrl = undefined, deepLink = undefined,
+  recipient,
+  title,
+  body,
+  type,
+  bookingId,
+  priority = "Medium",
+  otp = undefined,
+  actionUrl = undefined,
+  deepLink = undefined,
 }) => {
   try {
     await Notification.create({
-      recipient, title, body, type, priority,
-      ...(otp       ? { otp }       : {}),
+      recipient,
+      title,
+      body,
+      type,
+      priority,
+      ...(otp ? { otp } : {}),
       ...(actionUrl ? { actionUrl } : {}),
-      ...(deepLink  ? { deepLink }  : {}),
-      relatedEntityType: 'Booking',
-      relatedEntityId:   bookingId,
-      channels: [{ channel: 'InApp' }, { channel: 'Push' }],
+      ...(deepLink ? { deepLink } : {}),
+      relatedEntityType: "Booking",
+      relatedEntityId: bookingId,
+      channels: [{ channel: "InApp" }, { channel: "Push" }],
     });
-  } catch (e) { console.error('[createNotification]', e.message); }
+  } catch (e) {
+    console.error("[createNotification]", e.message);
+  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BOOKING STATUS SYNC
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const syncBookingStatusFromRide = async (bookingId, rideStatus, updatedBy) => {
+export const syncBookingStatusFromRide = async (
+  bookingId,
+  rideStatus,
+  updatedBy,
+) => {
   const MAP = {
-    driver_assigned: 'confirmed',
-    driver_accepted: 'confirmed',
-    driver_en_route: 'confirmed',
-    driver_arrived:  'confirmed',
-    otp_verified:    'in_progress',
-    in_progress:     'in_progress',
-    at_stop:         'in_progress',
-    completed:       'completed',
+    driver_assigned: "confirmed",
+    driver_accepted: "confirmed",
+    driver_en_route: "confirmed",
+    driver_arrived: "confirmed",
+    otp_verified: "in_progress",
+    in_progress: "in_progress",
+    at_stop: "in_progress",
+    completed: "completed",
   };
   const newStatus = MAP[rideStatus];
   if (!newStatus) return null;
   return Booking.findByIdAndUpdate(
     bookingId,
     { $set: { status: newStatus, updatedBy } },
-    { new: true }
-  ).select('_id status bookingCode').lean();
+    { new: true },
+  )
+    .select("_id status bookingCode")
+    .lean();
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -271,36 +353,50 @@ export const syncBookingStatusFromRide = async (bookingId, rideStatus, updatedBy
 const GMAPS_KEY = process.env.GOOGLE_MAPS_KEY;
 
 export const calculateCanonicalRoute = async (pickupCoords, dropoffCoords) => {
-  const safePickup  = pickupCoords  || [80.648, 16.506];
+  const safePickup = pickupCoords || [80.648, 16.506];
   const safeDropoff = dropoffCoords || [80.648, 16.506];
 
   if (!GMAPS_KEY) {
     const dist = haversineKm(safePickup, safeDropoff);
-    return { distanceKm: +dist.toFixed(2), durationMin: Math.round(dist * 3), polyline: null };
+    return {
+      distanceKm: +dist.toFixed(2),
+      durationMin: Math.round(dist * 3),
+      polyline: null,
+    };
   }
 
   try {
-    const res = await axios.get('https://maps.googleapis.com/maps/api/directions/json', {
-      params: {
-        origin:      `${safePickup[1]},${safePickup[0]}`,
-        destination: `${safeDropoff[1]},${safeDropoff[0]}`,
-        mode:        'driving',
-        key:         GMAPS_KEY,
+    const res = await axios.get(
+      "https://maps.googleapis.com/maps/api/directions/json",
+      {
+        params: {
+          origin: `${safePickup[1]},${safePickup[0]}`,
+          destination: `${safeDropoff[1]},${safeDropoff[0]}`,
+          mode: "driving",
+          key: GMAPS_KEY,
+        },
+        timeout: 8000,
       },
-      timeout: 8000,
-    });
+    );
     const route = res.data?.routes?.[0];
-    if (!route) throw new Error('No route returned');
+    if (!route) throw new Error("No route returned");
     const leg = route.legs[0];
     return {
-      distanceKm:  +(leg.distance.value / 1000).toFixed(2),
+      distanceKm: +(leg.distance.value / 1000).toFixed(2),
       durationMin: Math.round(leg.duration.value / 60),
-      polyline:    route.overview_polyline.points,
+      polyline: route.overview_polyline.points,
     };
   } catch (err) {
-    console.error('[calculateCanonicalRoute] GMaps fail → haversine fallback:', err.message);
+    console.error(
+      "[calculateCanonicalRoute] GMaps fail → haversine fallback:",
+      err.message,
+    );
     const dist = haversineKm(safePickup, safeDropoff);
-    return { distanceKm: +dist.toFixed(2), durationMin: Math.round(dist * 3), polyline: null };
+    return {
+      distanceKm: +dist.toFixed(2),
+      durationMin: Math.round(dist * 3),
+      polyline: null,
+    };
   }
 };
 
@@ -309,22 +405,40 @@ export const calculateCanonicalRoute = async (pickupCoords, dropoffCoords) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const buildRidePayload = ({
-  bookingId, rideType, vehicleClass,
-  pickupCoords, pickupAddress = '', pickupCity = '',
-  dropoffCoords, dropoffAddress = '', dropoffCity = '',
-  scheduledPickupAt, isReturnRide = false, createdBy,
+  bookingId,
+  rideType,
+  vehicleClass,
+  pickupCoords,
+  pickupAddress = "",
+  pickupCity = "",
+  dropoffCoords,
+  dropoffAddress = "",
+  dropoffCity = "",
+  scheduledPickupAt,
+  isReturnRide = false,
+  createdBy,
   waypoints = [],
-  activeNavigationTarget = 'pickup_patient',
-  rideStage = 'searching_driver',
+  activeNavigationTarget = "pickup_patient",
+  rideStage = "searching_driver",
 }) => ({
-  booking:               bookingId,
+  booking: bookingId,
   rideType,
   vehicleClass,
   isReturnRide,
-  pickup:  { type: 'Point', coordinates: pickupCoords,  address: pickupAddress,  city: pickupCity  },
-  dropoff: { type: 'Point', coordinates: dropoffCoords, address: dropoffAddress, city: dropoffCity },
+  pickup: {
+    type: "Point",
+    coordinates: pickupCoords,
+    address: pickupAddress,
+    city: pickupCity,
+  },
+  dropoff: {
+    type: "Point",
+    coordinates: dropoffCoords,
+    address: dropoffAddress,
+    city: dropoffCity,
+  },
   scheduledPickupAt,
-  status:                'requested',
+  status: "requested",
   createdBy,
   waypoints,
   activeNavigationTarget,
@@ -337,12 +451,12 @@ export const buildRidePayload = ({
 
 export const createAndLinkRide = async (booking, overrides = {}) => {
   const coords = {
-    pickupCoords:   booking.patientLocation?.coordinates     || [80.648, 16.506],
-    pickupAddress:  booking.patientLocation?.address         || '',
-    pickupCity:     booking.patientLocation?.city            || '',
-    dropoffCoords:  booking.destinationLocation?.coordinates || [80.648, 16.506],
-    dropoffAddress: booking.destinationLocation?.address     || '',
-    dropoffCity:    booking.destinationLocation?.city        || '',
+    pickupCoords: booking.patientLocation?.coordinates || [80.648, 16.506],
+    pickupAddress: booking.patientLocation?.address || "",
+    pickupCity: booking.patientLocation?.city || "",
+    dropoffCoords: booking.destinationLocation?.coordinates || [80.648, 16.506],
+    dropoffAddress: booking.destinationLocation?.address || "",
+    dropoffCity: booking.destinationLocation?.city || "",
   };
 
   const otp = genOtp();
@@ -354,29 +468,31 @@ export const createAndLinkRide = async (booking, overrides = {}) => {
 
   const ride = await Ride.create({
     ...buildRidePayload({
-      bookingId:         booking._id,
-      rideType:          'patient',
-      vehicleClass:      'four_wheeler',
+      bookingId: booking._id,
+      rideType: "patient",
+      vehicleClass: "four_wheeler",
       scheduledPickupAt: booking.scheduledAt,
       ...coords,
     }),
-    estimatedDistanceKm:  distanceKm,
+    estimatedDistanceKm: distanceKm,
     estimatedDurationMin: durationMin,
-    pickupOtp:            hashOtp(otp),
+    pickupOtp: hashOtp(otp),
     ...overrides,
   });
 
   const tracking = await RideTracking.create({
-    ride:                  ride._id,
-    booking:               booking._id,
+    ride: ride._id,
+    booking: booking._id,
     expectedRoutePolyline: polyline,
   });
 
-  await Ride.findByIdAndUpdate(ride._id, { $set: { trackingId: tracking._id } });
+  await Ride.findByIdAndUpdate(ride._id, {
+    $set: { trackingId: tracking._id },
+  });
 
   await Booking.findByIdAndUpdate(booking._id, {
     $push: { rides: ride._id },
-    $set:  { primaryRide: ride._id, status: 'confirmed' },
+    $set: { primaryRide: ride._id, status: "confirmed" },
   });
 
   return { ride, otp, distanceKm, durationMin, polyline };
@@ -387,82 +503,124 @@ export const createAndLinkRide = async (booking, overrides = {}) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const resolveKmRate = async (userId) => {
-  const config     = await PlatformPricingConfig.getGlobal();
+  const config = await PlatformPricingConfig.getGlobal();
   const configRate = config?.transport?.defaultRatePerKm ?? DEFAULT_KM_RATE;
 
   // FIX D: use family-aware lookup
   const sub = await findActiveSub(userId);
 
-  if (!sub) return { ratePerKm: configRate, source: 'default' };
+  if (!sub) return { ratePerKm: configRate, source: "default" };
 
   const planRate = sub.limits?.transportRatePerKm;
-  if (planRate != null && planRate > 0) return { ratePerKm: planRate, source: 'subscription' };
+  if (planRate != null && planRate > 0)
+    return { ratePerKm: planRate, source: "subscription" };
 
   if (sub.plan) {
     const plan = await SubscriptionPlan.findById(sub.plan)
-      .select('planType transport customOptions')
+      .select("planType transport customOptions")
       .lean();
 
-    if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
-      const transportOpt = plan.customOptions.find(o => o.optionKey === 'transport');
+    if (plan?.planType === "custom" && Array.isArray(plan.customOptions)) {
+      const transportOpt = plan.customOptions.find(
+        (o) => o.optionKey === "transport",
+      );
       if (transportOpt && transportOpt.quantity >= 0) {
-        const slabs   = config?.customPlanOptions?.transport?.kmSlabs ?? [];
-        const slabIdx = Math.max(0, Math.min(Math.floor(transportOpt.quantity), slabs.length - 1));
-        const slab    = slabs[slabIdx];
-        if (slab?.pricePerKm > 0) return { ratePerKm: slab.pricePerKm, source: 'subscription' };
+        const slabs = config?.customPlanOptions?.transport?.kmSlabs ?? [];
+        const slabIdx = Math.max(
+          0,
+          Math.min(Math.floor(transportOpt.quantity), slabs.length - 1),
+        );
+        const slab = slabs[slabIdx];
+        if (slab?.pricePerKm > 0)
+          return { ratePerKm: slab.pricePerKm, source: "subscription" };
       }
-      return { ratePerKm: configRate, source: 'default' };
+      return { ratePerKm: configRate, source: "default" };
     }
 
-    if (plan?.transport?.ratePerKm > 0) return { ratePerKm: plan.transport.ratePerKm, source: 'subscription' };
+    if (plan?.transport?.ratePerKm > 0)
+      return { ratePerKm: plan.transport.ratePerKm, source: "subscription" };
   }
 
-  return { ratePerKm: configRate, source: 'default' };
+  return { ratePerKm: configRate, source: "default" };
 };
 
 export const resolveCareRideKmRate = async (userId) => {
   const { ratePerKm, source } = await resolveKmRate(userId);
-  if (source === 'subscription') return { ratePerKm, source };
-  const config   = await PlatformPricingConfig.getGlobal();
+  if (source === "subscription") return { ratePerKm, source };
+  const config = await PlatformPricingConfig.getGlobal();
   const careRate = config?.transport?.careRideRatePerKm ?? 21;
-  return { ratePerKm: careRate, source: 'care_ride_config' };
+  return { ratePerKm: careRate, source: "care_ride_config" };
 };
 
 export const computeLegFare = ({
-  distanceKm, ratePerKm,
-  waitingMinutes = 0, freeWaitingMinutes = 5, waitingRatePerMin = 2,
-  baseFare = 0, isNight = false, nightSurchargeMultiplier = 1.2,
-  isWheelchair = false, wheelchairSurchargeAmount = 0,
+  distanceKm,
+  ratePerKm,
+  waitingMinutes = 0,
+  freeWaitingMinutes = 5,
+  waitingRatePerMin = 2,
+  baseFare = 0,
+  isNight = false,
+  nightSurchargeMultiplier = 1.2,
+  isWheelchair = false,
+  wheelchairSurchargeAmount = 0,
 }) => {
-  const distanceFare   = +(distanceKm * ratePerKm).toFixed(2);
-  const billableWait   = Math.max(0, waitingMinutes - freeWaitingMinutes);
-  const waitingCharge  = +(billableWait * waitingRatePerMin).toFixed(2);
-  const subtotal       = baseFare + distanceFare + waitingCharge;
-  const nightSurcharge = isNight ? +(subtotal * (nightSurchargeMultiplier - 1)).toFixed(2) : 0;
-  const wheelchairFee  = isWheelchair ? wheelchairSurchargeAmount : 0;
-  const totalFare      = +(subtotal + nightSurcharge + wheelchairFee).toFixed(2);
-  return { distanceFare, waitingCharge, nightSurcharge, wheelchairSurcharge: wheelchairFee, totalFare };
+  const distanceFare = +(distanceKm * ratePerKm).toFixed(2);
+  const billableWait = Math.max(0, waitingMinutes - freeWaitingMinutes);
+  const waitingCharge = +(billableWait * waitingRatePerMin).toFixed(2);
+  const subtotal = baseFare + distanceFare + waitingCharge;
+  const nightSurcharge = isNight
+    ? +(subtotal * (nightSurchargeMultiplier - 1)).toFixed(2)
+    : 0;
+  const wheelchairFee = isWheelchair ? wheelchairSurchargeAmount : 0;
+  const totalFare = +(subtotal + nightSurcharge + wheelchairFee).toFixed(2);
+  return {
+    distanceFare,
+    waitingCharge,
+    nightSurcharge,
+    wheelchairSurcharge: wheelchairFee,
+    totalFare,
+  };
 };
 
 export const resolveTransportFare = ({
-  bookingType, pickupCoords, dropoffCoords, ratePerKm,
-  includeReturn = false, waitingMinutes = 0,
-  freeWaitingMinutes = 5, waitingRatePerMin = 2,
-  isNight = false, isWheelchair = false, wheelchairSurchargeAmount = 0,
+  bookingType,
+  pickupCoords,
+  dropoffCoords,
+  ratePerKm,
+  includeReturn = false,
+  waitingMinutes = 0,
+  freeWaitingMinutes = 5,
+  waitingRatePerMin = 2,
+  isNight = false,
+  isWheelchair = false,
+  wheelchairSurchargeAmount = 0,
 }) => {
   const distanceKm = haversineKm(pickupCoords, dropoffCoords);
-  const legParams  = {
-    distanceKm, ratePerKm, isNight, isWheelchair,
-    wheelchairSurchargeAmount, freeWaitingMinutes, waitingRatePerMin,
+  const legParams = {
+    distanceKm,
+    ratePerKm,
+    isNight,
+    isWheelchair,
+    wheelchairSurchargeAmount,
+    freeWaitingMinutes,
+    waitingRatePerMin,
   };
-  const outbound  = computeLegFare({
+  const outbound = computeLegFare({
     ...legParams,
-    waitingMinutes: bookingType === 'patient_transport' ? waitingMinutes : 0,
+    waitingMinutes: bookingType === "patient_transport" ? waitingMinutes : 0,
   });
-  const returnLeg = includeReturn ? computeLegFare({ ...legParams, waitingMinutes: 0 }) : null;
+  const returnLeg = includeReturn
+    ? computeLegFare({ ...legParams, waitingMinutes: 0 })
+    : null;
   return {
-    distanceKm: +distanceKm.toFixed(2), ratePerKm, outbound, returnLeg, includeReturn,
-    totalTransportFee: +(outbound.totalFare + (returnLeg?.totalFare ?? 0)).toFixed(2),
+    distanceKm: +distanceKm.toFixed(2),
+    ratePerKm,
+    outbound,
+    returnLeg,
+    includeReturn,
+    totalTransportFee: +(
+      outbound.totalFare + (returnLeg?.totalFare ?? 0)
+    ).toFixed(2),
   };
 };
 
@@ -470,28 +628,36 @@ export const resolveTransportFare = ({
 // CARE ASSISTANT HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const autoAssignCareAssistant = async ({ patientCoords, maxRadiusKm = 20 }) => {
+export const autoAssignCareAssistant = async ({
+  patientCoords,
+  maxRadiusKm = 20,
+}) => {
   const [lng, lat] = patientCoords;
   const candidates = await CareAssistantProfile.find({
-    isActive:                  true,
-    isBlocked:                 false,
-    status:                    'Available',
-    'kyc.verificationStatus':  'Verified',
-    'verification.isVerified': true,
-    'availability.isOnline':   true,
+    isActive: true,
+    isBlocked: false,
+    status: "Available",
+    "kyc.verificationStatus": "Verified",
+    "verification.isVerified": true,
+    "availability.isOnline": true,
     location: {
       $near: {
-        $geometry:    { type: 'Point', coordinates: [lng, lat] },
+        $geometry: { type: "Point", coordinates: [lng, lat] },
         $maxDistance: maxRadiusKm * 1000,
       },
     },
   })
-    .select('user fullName photoUrl phone performance.averageRating location specializations')
+    .select(
+      "user fullName photoUrl phone performance.averageRating location specializations",
+    )
     .limit(5)
     .lean();
 
   if (!candidates.length) return null;
-  candidates.sort((a, b) => (b.performance?.averageRating ?? 0) - (a.performance?.averageRating ?? 0));
+  candidates.sort(
+    (a, b) =>
+      (b.performance?.averageRating ?? 0) - (a.performance?.averageRating ?? 0),
+  );
   return candidates[0];
 };
 
@@ -499,43 +665,62 @@ export const autoAssignCareAssistant = async ({ patientCoords, maxRadiusKm = 20 
 // FOLLOW-UP HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const checkFollowUpEligibility = async ({ customerId, doctorId, hospitalId }) => {
+export const checkFollowUpEligibility = async ({
+  customerId,
+  doctorId,
+  hospitalId,
+}) => {
   const doctor = await DoctorProfile.findById(doctorId)
-    .select('primaryHospital partnershipStatus isActive').lean();
-  if (!doctor || doctor.partnershipStatus !== 'Active' || !doctor.isActive)
-    return { isEligible: false, reason: 'Doctor not active' };
+    .select("primaryHospital partnershipStatus isActive")
+    .lean();
+  if (!doctor || doctor.partnershipStatus !== "Active" || !doctor.isActive)
+    return { isEligible: false, reason: "Doctor not active" };
 
   if (doctor.primaryHospital) {
     const hospital = await Hospital.findById(doctor.primaryHospital)
-      .select('managementModel isActive isVerified').lean();
-    if (hospital?.managementModel === 'hospital-manager') {
+      .select("managementModel isActive isVerified")
+      .lean();
+    if (hospital?.managementModel === "hospital-manager") {
       if (!hospitalId)
-        return { isEligible: false, reason: 'Hospital ID required for this doctor' };
+        return {
+          isEligible: false,
+          reason: "Hospital ID required for this doctor",
+        };
       if (hospitalId.toString() !== doctor.primaryHospital.toString())
-        return { isEligible: false, reason: 'Follow-up must be at same hospital' };
+        return {
+          isEligible: false,
+          reason: "Follow-up must be at same hospital",
+        };
     }
   }
 
   const query = {
-    patient:        customerId,
-    doctor:         doctorId,
-    isFollowUp:     false,
-    status:         { $in: ['scheduled', 'in_progress', 'completed'] },
+    patient: customerId,
+    doctor: doctorId,
+    isFollowUp: false,
+    status: { $in: ["scheduled", "in_progress", "completed"] },
     followUpExpiry: { $gt: new Date() },
   };
   if (hospitalId) query.hospital = hospitalId;
 
-  const recentOp = await OutPatientRecord.findOne(query).sort({ createdAt: -1 }).lean();
+  const recentOp = await OutPatientRecord.findOne(query)
+    .sort({ createdAt: -1 })
+    .lean();
   if (!recentOp)
-    return { isEligible: false, reason: 'No valid original consultation found for follow-up' };
+    return {
+      isEligible: false,
+      reason: "No valid original consultation found for follow-up",
+    };
 
   return {
-    isEligible:     true,
-    parentOp:       recentOp._id,
-    followUpFee:    recentOp.followUpFee || 0,
+    isEligible: true,
+    parentOp: recentOp._id,
+    followUpFee: recentOp.followUpFee || 0,
     parentOpNumber: recentOp.opNumber,
     followUpExpiry: recentOp.followUpExpiry,
-    daysRemaining:  Math.ceil((new Date(recentOp.followUpExpiry) - new Date()) / (1000 * 60 * 60 * 24)),
+    daysRemaining: Math.ceil(
+      (new Date(recentOp.followUpExpiry) - new Date()) / (1000 * 60 * 60 * 24),
+    ),
   };
 };
 
@@ -545,56 +730,69 @@ export const checkFollowUpEligibility = async ({ customerId, doctorId, hospitalI
 
 export const getHospitals = async (filters = {}) => {
   const query = { isActive: true, isVerified: true };
-  if (filters.city)            query['address.city']  = { $regex: filters.city, $options: 'i' };
-  if (filters.hospitalType)    query.hospitalType      = filters.hospitalType;
-  if (filters.managementModel) query.managementModel   = filters.managementModel;
+  if (filters.city)
+    query["address.city"] = { $regex: filters.city, $options: "i" };
+  if (filters.hospitalType) query.hospitalType = filters.hospitalType;
+  if (filters.managementModel) query.managementModel = filters.managementModel;
   return Hospital.find(query)
     .select(
-      'name slug hospitalType managementModel address location contact ' +
-      'specialties facilities accreditations operatingHours rating ' +
-      'isEmergencyReady hasICU hasBloodBank hasPharmacy hasDiagnostics ' +
-      'hasAmbulance hasWheelchairAccess is24x7 bedCount linkedDoctors'
+      "name slug hospitalType managementModel address location contact " +
+        "specialties facilities accreditations operatingHours rating " +
+        "isEmergencyReady hasICU hasBloodBank hasPharmacy hasDiagnostics " +
+        "hasAmbulance hasWheelchairAccess is24x7 bedCount linkedDoctors",
     )
     .lean();
 };
 
 const checkHospitalHours = (hospital, scheduledAt) => {
-  const dayNames      = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
- const baseUTC       = parseFrontendDateTime(scheduledAt);
+  const dayNames = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ];
+  const baseUTC = parseFrontendDateTime(scheduledAt);
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-  const istDate       = new Date(baseUTC.getTime() + IST_OFFSET_MS);
-  const dayName       = dayNames[istDate.getUTCDay()];
-  const reqMins       = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
+  const istDate = new Date(baseUTC.getTime() + IST_OFFSET_MS);
+  const dayName = dayNames[istDate.getUTCDay()];
+  const reqMins = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
 
   if (hospital.is24x7) return { available: true };
-  const opDay = hospital.operatingHours?.find(h => h.day === dayName);
-  if (!opDay)         return { available: false, reason: `No schedule for ${dayName}` };
-  if (opDay.isClosed) return { available: false, reason: `Closed on ${dayName}` };
+  const opDay = hospital.operatingHours?.find((h) => h.day === dayName);
+  if (!opDay) return { available: false, reason: `No schedule for ${dayName}` };
+  if (opDay.isClosed)
+    return { available: false, reason: `Closed on ${dayName}` };
   if (opDay.is24Hours) return { available: true };
 
-  const [oh, om] = (opDay.openTime  || '00:00').split(':').map(Number);
-  const [ch, cm] = (opDay.closeTime || '23:59').split(':').map(Number);
+  const [oh, om] = (opDay.openTime || "00:00").split(":").map(Number);
+  const [ch, cm] = (opDay.closeTime || "23:59").split(":").map(Number);
   if (reqMins < oh * 60 + om || reqMins >= ch * 60 + cm)
-    return { available: false, reason: `Open ${opDay.openTime}–${opDay.closeTime} on ${dayName}` };
+    return {
+      available: false,
+      reason: `Open ${opDay.openTime}–${opDay.closeTime} on ${dayName}`,
+    };
   return { available: true };
 };
 
 export const parseFrontendDateTime = (dateInput) => {
   if (!dateInput) return new Date();
   if (dateInput instanceof Date) return dateInput;
-  
+
   let rawStr = String(dateInput).trim();
-  
+
   // Fix 1: Frontend sending IST local time as UTC (ending in 'Z')
   // Converts e.g., '2026-06-09T15:30:00.000Z' to '2026-06-09T15:30:00.000+05:30'
   if (/T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(rawStr)) {
-    rawStr = rawStr.replace('Z', '+05:30');
-  } 
+    rawStr = rawStr.replace("Z", "+05:30");
+  }
   // Fix 2: Frontend sending just the date 'YYYY-MM-DD'
   else if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
     rawStr = `${rawStr}T00:00:00+05:30`;
   }
-  
+
   const parsed = new Date(rawStr);
   return isNaN(parsed.getTime()) ? new Date() : parsed;
 };
@@ -602,80 +800,124 @@ export const parseFrontendDateTime = (dateInput) => {
 // Replace your existing checkDoctorAvailability with this optimized version:
 export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
   const doctor = await DoctorProfile.findById(doctorProfileId)
-    .select('weeklyAvailability primaryHospital partnershipStatus isActive')
+    .select("weeklyAvailability primaryHospital partnershipStatus isActive")
     .lean();
-    
-  if (!doctor) return { available: false, reason: 'Doctor not found' };
-  if (doctor.partnershipStatus !== 'Active' || !doctor.isActive)
-    return { available: false, reason: 'Doctor not active' };
+
+  if (!doctor) return { available: false, reason: "Doctor not found" };
+  if (doctor.partnershipStatus !== "Active" || !doctor.isActive)
+    return { available: false, reason: "Doctor not active" };
 
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-  
+
   // Use the safe parser to neutralize frontend timezone strings
-  const baseUTC   = parseFrontendDateTime(scheduledAt);
-  const istDate   = new Date(baseUTC.getTime() + IST_OFFSET_MS);
-  const dayName   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][istDate.getUTCDay()];
-  const reqMins   = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
+  const baseUTC = parseFrontendDateTime(scheduledAt);
+  const istDate = new Date(baseUTC.getTime() + IST_OFFSET_MS);
+  const dayName = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ][istDate.getUTCDay()];
+  const reqMins = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
 
-  const dayEntry = doctor.weeklyAvailability?.find(d => d.day === dayName);
-  if (!dayEntry?.isAvailable) return { available: false, reason: `Unavailable on ${dayName}` };
+  const dayEntry = doctor.weeklyAvailability?.find((d) => d.day === dayName);
+  if (!dayEntry?.isAvailable)
+    return { available: false, reason: `Unavailable on ${dayName}` };
 
-  const matchedSlot = dayEntry.slots?.find(s => {
+  const matchedSlot = dayEntry.slots?.find((s) => {
     if (!s.isActive) return false;
-    const [sh, sm] = s.startTime.split(':').map(Number);
-    const [eh, em] = s.endTime.split(':').map(Number);
+    const [sh, sm] = s.startTime.split(":").map(Number);
+    const [eh, em] = s.endTime.split(":").map(Number);
     return reqMins >= sh * 60 + sm && reqMins < eh * 60 + em;
   });
-  
-  if (!matchedSlot) return { available: false, reason: `No slot at that time on ${dayName}` };
 
-  const [slotSh, slotSm] = matchedSlot.startTime.split(':').map(Number);
-  const [slotEh, slotEm] = matchedSlot.endTime.split(':').map(Number);
+  if (!matchedSlot)
+    return { available: false, reason: `No slot at that time on ${dayName}` };
+
+  const [slotSh, slotSm] = matchedSlot.startTime.split(":").map(Number);
+  const [slotEh, slotEm] = matchedSlot.endTime.split(":").map(Number);
 
   // FIX 2: Dynamic consultation duration based on capacity to prevent artificial blocks
-  const slotTotalMins = (slotEh * 60 + slotEm) - (slotSh * 60 + slotSm);
-  const dynamicConsultMins = Math.floor(slotTotalMins / (matchedSlot.maxPatients || 1));
+  const slotTotalMins = slotEh * 60 + slotEm - (slotSh * 60 + slotSm);
+  const dynamicConsultMins = Math.floor(
+    slotTotalMins / (matchedSlot.maxPatients || 1),
+  );
   const CONSULT_DURATION_MIN = Math.min(20, Math.max(5, dynamicConsultMins)); // Caps dynamically between 5 and 20 mins
 
-  const slotStart = new Date(Date.UTC(
-    istDate.getUTCFullYear(), istDate.getUTCMonth(), istDate.getUTCDate(),
-    slotSh, slotSm, 0, 0
-  ) - IST_OFFSET_MS);
-  
-  const slotEnd   = new Date(Date.UTC(
-    istDate.getUTCFullYear(), istDate.getUTCMonth(), istDate.getUTCDate(),
-    slotEh, slotEm, 0, 0
-  ) - IST_OFFSET_MS);
+  const slotStart = new Date(
+    Date.UTC(
+      istDate.getUTCFullYear(),
+      istDate.getUTCMonth(),
+      istDate.getUTCDate(),
+      slotSh,
+      slotSm,
+      0,
+      0,
+    ) - IST_OFFSET_MS,
+  );
+
+  const slotEnd = new Date(
+    Date.UTC(
+      istDate.getUTCFullYear(),
+      istDate.getUTCMonth(),
+      istDate.getUTCDate(),
+      slotEh,
+      slotEm,
+      0,
+      0,
+    ) - IST_OFFSET_MS,
+  );
 
   const existingInSlot = await OutPatientRecord.find({
-    doctor:      doctorProfileId,
-    status:      { $in: ['scheduled', 'in_progress'] },
+    doctor: doctorProfileId,
+    status: { $in: ["scheduled", "in_progress"] },
     scheduledAt: { $gte: slotStart, $lt: slotEnd },
-  }).select('scheduledAt').lean();
+  })
+    .select("scheduledAt")
+    .lean();
 
   if (existingInSlot.length >= matchedSlot.maxPatients) {
-    const times = existingInSlot.map(r => new Date(r.scheduledAt).getTime()).sort((a, b) => b - a);
-    const next  = new Date(times[0] + CONSULT_DURATION_MIN * 60 * 1000);
-    const fmt   = next.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const times = existingInSlot
+      .map((r) => new Date(r.scheduledAt).getTime())
+      .sort((a, b) => b - a);
+    const next = new Date(times[0] + CONSULT_DURATION_MIN * 60 * 1000);
+    const fmt = next.toLocaleTimeString("en-IN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
     return { available: false, reason: `Slot full. Next available: ${fmt}` };
   }
 
-  const overlap = existingInSlot.find(r =>
-    Math.abs(new Date(r.scheduledAt).getTime() - baseUTC.getTime()) < CONSULT_DURATION_MIN * 60 * 1000
+  const overlap = existingInSlot.find(
+    (r) =>
+      Math.abs(new Date(r.scheduledAt).getTime() - baseUTC.getTime()) <
+      CONSULT_DURATION_MIN * 60 * 1000,
   );
 
   if (overlap) {
-    const next = new Date(new Date(overlap.scheduledAt).getTime() + CONSULT_DURATION_MIN * 60 * 1000);
-    const fmt  = next.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const next = new Date(
+      new Date(overlap.scheduledAt).getTime() +
+        CONSULT_DURATION_MIN * 60 * 1000,
+    );
+    const fmt = next.toLocaleTimeString("en-IN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
     return { available: false, reason: `Already booked. Next slot: ${fmt}` };
   }
 
   if (doctor.primaryHospital) {
     const hospital = await Hospital.findById(doctor.primaryHospital)
-      .select('managementModel operatingHours is24x7 isActive isVerified').lean();
-    if (hospital?.managementModel === 'hospital-manager') {
+      .select("managementModel operatingHours is24x7 isActive isVerified")
+      .lean();
+    if (hospital?.managementModel === "hospital-manager") {
       if (!hospital.isActive || !hospital.isVerified)
-        return { available: false, reason: 'Hospital not operational' };
+        return { available: false, reason: "Hospital not operational" };
       const hospCheck = checkHospitalHours(hospital, baseUTC);
       if (!hospCheck.available) return hospCheck;
     }
@@ -684,12 +926,18 @@ export const checkDoctorAvailability = async (doctorProfileId, scheduledAt) => {
   return { available: true };
 };
 
-export const checkHospitalOrDoctorAvailability = async ({ hospitalId, doctorId, scheduledAt }) => {
+export const checkHospitalOrDoctorAvailability = async ({
+  hospitalId,
+  doctorId,
+  scheduledAt,
+}) => {
   if (hospitalId) {
     const hospital = await Hospital.findById(hospitalId)
-      .select('isActive isVerified operatingHours is24x7 managementModel').lean();
-    if (!hospital)                                  return { available: false, reason: 'Hospital not found' };
-    if (!hospital.isActive || !hospital.isVerified) return { available: false, reason: 'Hospital not operational' };
+      .select("isActive isVerified operatingHours is24x7 managementModel")
+      .lean();
+    if (!hospital) return { available: false, reason: "Hospital not found" };
+    if (!hospital.isActive || !hospital.isVerified)
+      return { available: false, reason: "Hospital not operational" };
     const check = checkHospitalHours(hospital, scheduledAt);
     if (!check.available) return check;
   }
@@ -699,36 +947,37 @@ export const checkHospitalOrDoctorAvailability = async ({ hospitalId, doctorId, 
 
 export const getDoctorsByHospital = async (hospitalId) => {
   const hospital = await Hospital.findById(hospitalId)
-    .select('managementModel linkedDoctors isActive isVerified')
+    .select("managementModel linkedDoctors isActive isVerified")
     .lean();
-  if (!hospital)                                  throw new Error('Hospital not found');
-  if (!hospital.isActive || !hospital.isVerified) throw new Error('Hospital not operational');
+  if (!hospital) throw new Error("Hospital not found");
+  if (!hospital.isActive || !hospital.isVerified)
+    throw new Error("Hospital not operational");
 
   const doctors = await DoctorProfile.find({
-    _id:               { $in: hospital.linkedDoctors },
-    partnershipStatus: 'Active',
-    isActive:          true,
+    _id: { $in: hospital.linkedDoctors },
+    partnershipStatus: "Active",
+    isActive: true,
   })
-    .populate('user', 'name avatar')
+    .populate("user", "name avatar")
     .select(
-      'user specialization qualifications experienceYears consultationTypes fees ' +
-      'profilePhotoUrl biography languagesSpoken weeklyAvailability rating isOnline'
+      "user specialization qualifications experienceYears consultationTypes fees " +
+        "profilePhotoUrl biography languagesSpoken weeklyAvailability rating isOnline",
     )
     .lean();
 
-  const isHospitalManaged = hospital.managementModel === 'hospital-manager';
+  const isHospitalManaged = hospital.managementModel === "hospital-manager";
 
   // Pricing always comes from the doctor's own fees — hospitals (managed or
   // owner-operated) do not set consultation pricing.
   return doctors.map((doc) => {
     const effectiveFees = {
-      inPersonFee:             doc.fees?.inPersonFee             ?? doc.fees?.consultationFee ?? 0,
-      videoFee:                doc.fees?.videoFee                ?? doc.fees?.consultationFee ?? 0,
-      homeVisitFee:            doc.fees?.homeVisitFee            ?? doc.fees?.consultationFee ?? 0,
-      followUpFee:             doc.fees?.followUpFee             ?? 0,
+      inPersonFee: doc.fees?.inPersonFee ?? doc.fees?.consultationFee ?? 0,
+      videoFee: doc.fees?.videoFee ?? doc.fees?.consultationFee ?? 0,
+      homeVisitFee: doc.fees?.homeVisitFee ?? doc.fees?.consultationFee ?? 0,
+      followUpFee: doc.fees?.followUpFee ?? 0,
       followUpDiscountPercent: doc.fees?.followUpDiscountPercent ?? 0,
-      followUpValidDays:       doc.fees?.followUpValidDays       ?? 7,
-      source: 'doctor',
+      followUpValidDays: doc.fees?.followUpValidDays ?? 7,
+      source: "doctor",
     };
     return { ...doc, effectiveFees, hospitalManaged: isHospitalManaged };
   });
@@ -739,62 +988,73 @@ export const getDoctorsByHospital = async (hospitalId) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const snapshotLimits = async (plan, pricingConfig = null) => {
-  let consultationsPerMonth       = plan.consultations?.freePerMonth        ?? 0;
-  let careAssistantVisitsPerMonth = plan.careAssistant?.visitsPerMonth      ?? null;
-  let transportRatePerKm          = plan.transport?.ratePerKm               ?? null;
-  let transportRidesPerMonth      = plan.transport?.ridesPerMonth           ?? null;
-  let pharmacyDiscountPercent     = plan.pharmacy?.discountMin ?? plan.pharmacy?.discountMax ?? 0;
-  let diagnosticsDiscountPercent  = plan.diagnostics?.discountPercent       ?? 0;
-  let homeSampleCollection        = plan.diagnostics?.homeSampleCollection  ?? false;
+  let consultationsPerMonth = plan.consultations?.freePerMonth ?? 0;
+  let careAssistantVisitsPerMonth = plan.careAssistant?.visitsPerMonth ?? null;
+  let transportRatePerKm = plan.transport?.ratePerKm ?? null;
+  let transportRidesPerMonth = plan.transport?.ridesPerMonth ?? null;
+  let pharmacyDiscountPercent =
+    plan.pharmacy?.discountMin ?? plan.pharmacy?.discountMax ?? 0;
+  let diagnosticsDiscountPercent = plan.diagnostics?.discountPercent ?? 0;
+  let homeSampleCollection = plan.diagnostics?.homeSampleCollection ?? false;
 
-  let careAssistantTierIndex      = null;
-  let careAssistantTierLabel      = null;
+  let careAssistantTierIndex = null;
+  let careAssistantTierLabel = null;
   let careAssistantChargePerVisit = null;
 
-  if (plan.planType === 'fixed') {
-    const serviceType = plan.careAssistant?.serviceType ?? 'None';
-    if (serviceType !== 'None') {
+  if (plan.planType === "fixed") {
+    const serviceType = plan.careAssistant?.serviceType ?? "None";
+    if (serviceType !== "None") {
       careAssistantTierLabel = serviceType;
     }
   }
 
-  if (plan.planType === 'custom' && Array.isArray(plan.customOptions)) {
-    const consultOpt = plan.customOptions.find(o => o.optionKey === 'consultations');
+  if (plan.planType === "custom" && Array.isArray(plan.customOptions)) {
+    const consultOpt = plan.customOptions.find(
+      (o) => o.optionKey === "consultations",
+    );
     if (consultOpt?.quantity > 0) {
       consultationsPerMonth = consultOpt.quantity;
     }
 
-    const caOpt = plan.customOptions.find(o => o.optionKey === 'careAssistant');
+    const caOpt = plan.customOptions.find(
+      (o) => o.optionKey === "careAssistant",
+    );
     if (caOpt?.quantity > 0) {
       careAssistantVisitsPerMonth = caOpt.quantity;
 
-      const config = pricingConfig ?? await PlatformPricingConfig.getGlobal();
-      const tiers  = config?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
-      const idx    = Number(caOpt.careAssistantTierIndex ?? 0);
-      const tier   = tiers[idx] ?? tiers[0] ?? null;
+      const config = pricingConfig ?? (await PlatformPricingConfig.getGlobal());
+      const tiers =
+        config?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
+      const idx = Number(caOpt.careAssistantTierIndex ?? 0);
+      const tier = tiers[idx] ?? tiers[0] ?? null;
 
-      careAssistantTierIndex      = idx;
-      careAssistantTierLabel      = tier?.label ?? null;
-      careAssistantChargePerVisit = tier?.chargeToUser ?? caOpt.unitPrice ?? null;
+      careAssistantTierIndex = idx;
+      careAssistantTierLabel = tier?.label ?? null;
+      careAssistantChargePerVisit =
+        tier?.chargeToUser ?? caOpt.unitPrice ?? null;
     }
 
-    const tOpt = plan.customOptions.find(o => o.optionKey === 'transport');
+    const tOpt = plan.customOptions.find((o) => o.optionKey === "transport");
     if (tOpt?.unitPrice > 0) {
-      transportRatePerKm     = -1;
+      transportRatePerKm = -1;
       transportRidesPerMonth = tOpt.quantity ?? null;
     }
 
-    const diagOpt = plan.customOptions.find(o => o.optionKey === 'diagnostics');
+    const diagOpt = plan.customOptions.find(
+      (o) => o.optionKey === "diagnostics",
+    );
     if (diagOpt?.quantity > 0) {
       diagnosticsDiscountPercent = diagOpt.quantity;
     }
 
-    const pharmOpt = plan.customOptions.find(o => o.optionKey === 'pharmacy');
+    const pharmOpt = plan.customOptions.find((o) => o.optionKey === "pharmacy");
     if (pharmOpt?.quantity > 0) {
       pharmacyDiscountPercent = pharmOpt.quantity;
     }
 
-    const homeOpt = plan.customOptions.find(o => o.optionKey === 'homeSampleCollection');
+    const homeOpt = plan.customOptions.find(
+      (o) => o.optionKey === "homeSampleCollection",
+    );
     if (homeOpt?.quantity > 0) {
       homeSampleCollection = true;
     }
@@ -804,7 +1064,7 @@ export const snapshotLimits = async (plan, pricingConfig = null) => {
     consultationsPerMonth,
     transportRidesPerMonth,
     careAssistantVisitsPerMonth,
-    labTestsPerMonth:            0,
+    labTestsPerMonth: 0,
     pharmacyDiscountPercent,
     diagnosticsDiscountPercent,
     transportRatePerKm,
@@ -820,14 +1080,14 @@ export const snapshotLimits = async (plan, pricingConfig = null) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const resolvePlanModes = (plan) => {
-  if (!plan || plan.planType === 'custom') {
+  if (!plan || plan.planType === "custom") {
     return { inPerson: true, video: true, home: true };
   }
   const modes = plan.consultations?.modes || {};
   return {
     inPerson: modes.inPerson !== false,
-    video:    modes.video    === true,
-    home:     modes.home     === true,
+    video: modes.video === true,
+    home: modes.home === true,
   };
 };
 
@@ -835,45 +1095,55 @@ const resolvePlanModes = (plan) => {
 // checkSubscriptionConsultation — FIX A + FIX D
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const checkSubscriptionConsultation = async (userId, consultationType = null) => {
-  const isHomeVisit = consultationType === 'homeVisit';
-  const isVideo     = consultationType === 'video';
+export const checkSubscriptionConsultation = async (
+  userId,
+  consultationType = null,
+) => {
+  const isHomeVisit = consultationType === "homeVisit";
+  const isVideo = consultationType === "video";
 
   // FIX D: family-aware lookup
   const sub = await findActiveSub(userId);
 
   if (!sub) {
     return {
-      allowed: false, sub: null, remaining: 0, isFree: false,
-      reason: 'No active subscription',
+      allowed: false,
+      sub: null,
+      remaining: 0,
+      isFree: false,
+      reason: "No active subscription",
       videoBlocked: false,
-      homeBlocked:  false,
+      homeBlocked: false,
     };
   }
 
   let plan = null;
   if (sub.plan) {
     plan = await SubscriptionPlan.findById(sub.plan)
-      .select('planType fixedTier consultations customOptions onlineModeAllowed')
+      .select(
+        "planType fixedTier consultations customOptions onlineModeAllowed",
+      )
       .lean();
   }
 
-  const planType  = sub.planType  || plan?.planType  || 'fixed';
+  const planType = sub.planType || plan?.planType || "fixed";
   const fixedTier = sub.fixedTier || plan?.fixedTier || null;
 
   const modes = resolvePlanModes(plan);
 
-  const modeKey           = isHomeVisit ? 'home' : isVideo ? 'video' : 'inPerson';
+  const modeKey = isHomeVisit ? "home" : isVideo ? "video" : "inPerson";
   const modeCoveredByPlan = modes[modeKey];
 
-  const videoBlocked = isVideo     && !modes.video;
-  const homeBlocked  = isHomeVisit && !modes.home;
+  const videoBlocked = isVideo && !modes.video;
+  const homeBlocked = isHomeVisit && !modes.home;
 
   let limit = sub.limits?.consultationsPerMonth ?? null;
 
   if ((limit == null || limit === 0) && plan) {
-    if (plan.planType === 'custom' && Array.isArray(plan.customOptions)) {
-      const co = plan.customOptions.find(o => o.optionKey === 'consultations');
+    if (plan.planType === "custom" && Array.isArray(plan.customOptions)) {
+      const co = plan.customOptions.find(
+        (o) => o.optionKey === "consultations",
+      );
       if (co?.quantity > 0) limit = co.quantity;
     } else if (plan.consultations?.freePerMonth != null) {
       limit = plan.consultations.freePerMonth;
@@ -882,50 +1152,70 @@ export const checkSubscriptionConsultation = async (userId, consultationType = n
 
   if (!limit || limit === 0) {
     return {
-      allowed: true, sub, remaining: 0, isFree: false,
-      videoBlocked, homeBlocked,
-      reason: 'No consultation quota in plan',
+      allowed: true,
+      sub,
+      remaining: 0,
+      isFree: false,
+      videoBlocked,
+      homeBlocked,
+      reason: "No consultation quota in plan",
     };
   }
 
   if (!modeCoveredByPlan) {
     return {
-      allowed: true, sub, remaining: 0, isFree: false,
-      videoBlocked, homeBlocked,
+      allowed: true,
+      sub,
+      remaining: 0,
+      isFree: false,
+      videoBlocked,
+      homeBlocked,
       reason: isVideo
-        ? `Your ${fixedTier || 'current'} plan covers in-person consultations only. Video fee applies.`
+        ? `Your ${fixedTier || "current"} plan covers in-person consultations only. Video fee applies.`
         : isHomeVisit
-          ? `Your ${fixedTier || 'current'} plan does not cover home visits via quota. Home visit fee applies.`
-          : 'Mode not covered by plan',
+          ? `Your ${fixedTier || "current"} plan does not cover home visits via quota. Home visit fee applies.`
+          : "Mode not covered by plan",
     };
   }
 
-  const now   = new Date();
-  const usage = sub.usageHistory?.find(u =>
-    u.month === now.getMonth() + 1 && u.year === now.getFullYear()
+  const now = new Date();
+  const usage = sub.usageHistory?.find(
+    (u) => u.month === now.getMonth() + 1 && u.year === now.getFullYear(),
   );
   const used = usage?.consultationsUsed ?? 0;
 
   if (limit === -1) {
     return {
-      allowed: true, sub, remaining: Infinity, isFree: true,
-      videoBlocked: false, homeBlocked: false,
-      reason: 'Unlimited consultations',
+      allowed: true,
+      sub,
+      remaining: Infinity,
+      isFree: true,
+      videoBlocked: false,
+      homeBlocked: false,
+      reason: "Unlimited consultations",
     };
   }
 
   if (used >= limit) {
     return {
-      allowed: true, sub, remaining: 0, isFree: false,
-      videoBlocked, homeBlocked,
+      allowed: true,
+      sub,
+      remaining: 0,
+      isFree: false,
+      videoBlocked,
+      homeBlocked,
       reason: `Monthly quota exhausted (${used}/${limit} used)`,
     };
   }
 
   const remaining = limit - used;
   return {
-    allowed: true, sub, remaining, isFree: true,
-    videoBlocked: false, homeBlocked: false,
+    allowed: true,
+    sub,
+    remaining,
+    isFree: true,
+    videoBlocked: false,
+    homeBlocked: false,
     reason: `${remaining} of ${limit} consultations remaining this month`,
   };
 };
@@ -940,21 +1230,28 @@ export const checkSubscriptionCareAssistant = async (userId) => {
 
   if (!sub) {
     return {
-      allowed: false, sub: null, remaining: 0, isFree: false,
-      planType: null, tierSnapshot: null,
-      reason: 'No active subscription',
+      allowed: false,
+      sub: null,
+      remaining: 0,
+      isFree: false,
+      planType: null,
+      tierSnapshot: null,
+      reason: "No active subscription",
     };
   }
 
-  let limit    = sub.limits?.careAssistantVisitsPerMonth ?? null;
-  let planType = sub.planType ?? 'fixed';
+  let limit = sub.limits?.careAssistantVisitsPerMonth ?? null;
+  let planType = sub.planType ?? "fixed";
 
-if ((limit == null || limit === 0) && sub.plan) {
+  if ((limit == null || limit === 0) && sub.plan) {
     const plan = await SubscriptionPlan.findById(sub.plan)
-      .select('planType customOptions careAssistant').lean();
-    planType = plan?.planType ?? 'fixed';
-    if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
-      const caOpt = plan.customOptions.find(o => o.optionKey === 'careAssistant');
+      .select("planType customOptions careAssistant")
+      .lean();
+    planType = plan?.planType ?? "fixed";
+    if (plan?.planType === "custom" && Array.isArray(plan.customOptions)) {
+      const caOpt = plan.customOptions.find(
+        (o) => o.optionKey === "careAssistant",
+      );
       if (caOpt?.quantity > 0) limit = caOpt.quantity;
     } else if (plan?.careAssistant?.isDedicated === true) {
       // Dedicated plans: unlimited CA for the whole subscription period
@@ -966,51 +1263,66 @@ if ((limit == null || limit === 0) && sub.plan) {
     }
   }
 
-  const tierSnapshot = (sub.limits?.careAssistantTierIndex != null || sub.limits?.careAssistantTierLabel)
-    ? {
-        tierIndex:      sub.limits.careAssistantTierIndex      ?? null,
-        tierLabel:      sub.limits.careAssistantTierLabel      ?? null,
-        chargePerVisit: sub.limits.careAssistantChargePerVisit ?? null,
-      }
-    : null;
+  const tierSnapshot =
+    sub.limits?.careAssistantTierIndex != null ||
+    sub.limits?.careAssistantTierLabel
+      ? {
+          tierIndex: sub.limits.careAssistantTierIndex ?? null,
+          tierLabel: sub.limits.careAssistantTierLabel ?? null,
+          chargePerVisit: sub.limits.careAssistantChargePerVisit ?? null,
+        }
+      : null;
 
   if (!limit || limit === 0) {
     return {
-      allowed: false, sub, remaining: 0, isFree: false,
-      planType, tierSnapshot,
-      reason: 'No care assistant quota in plan',
+      allowed: false,
+      sub,
+      remaining: 0,
+      isFree: false,
+      planType,
+      tierSnapshot,
+      reason: "No care assistant quota in plan",
     };
   }
 
-  const now   = new Date();
+  const now = new Date();
   const usage = sub.usageHistory?.find(
-    u => u.month === now.getMonth() + 1 && u.year === now.getFullYear()
+    (u) => u.month === now.getMonth() + 1 && u.year === now.getFullYear(),
   );
   const used = usage?.careAssistantVisitsUsed ?? 0;
 
   if (limit === -1) {
     return {
-      allowed: true, sub, remaining: Infinity,
-      isFree: planType !== 'custom', planType, tierSnapshot,
-      reason: 'Unlimited care assistant visits',
+      allowed: true,
+      sub,
+      remaining: Infinity,
+      isFree: planType !== "custom",
+      planType,
+      tierSnapshot,
+      reason: "Unlimited care assistant visits",
     };
   }
 
   if (used >= limit) {
     return {
-      allowed: false, sub, remaining: 0, isFree: false, planType, tierSnapshot,
+      allowed: false,
+      sub,
+      remaining: 0,
+      isFree: false,
+      planType,
+      tierSnapshot,
       reason: `Care assistant quota exhausted (${used}/${limit} used this month)`,
     };
   }
 
   return {
-    allowed:   true,
+    allowed: true,
     sub,
     remaining: limit - used,
-    isFree:    planType !== 'custom',
+    isFree: planType !== "custom",
     planType,
     tierSnapshot,
-    reason:    `${limit - used} of ${limit} care assistant visits remaining this month`,
+    reason: `${limit - used} of ${limit} care assistant visits remaining this month`,
   };
 };
 
@@ -1018,7 +1330,10 @@ if ((limit == null || limit === 0) && sub.plan) {
 // checkConsultationModeAllowed — soft gate, no change needed
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const checkConsultationModeAllowed = async (userId, consultationType) => {
+export const checkConsultationModeAllowed = async (
+  userId,
+  consultationType,
+) => {
   return { allowed: true, blockedByPlan: false };
 };
 
@@ -1032,33 +1347,37 @@ export const checkSubscriptionDiagnostics = async (userId) => {
 
   if (!sub) {
     return {
-      discountPercent:        0,
-      homeSampleCollection:   false,
-      homeCollectionFreeNow:  false,
+      discountPercent: 0,
+      homeSampleCollection: false,
+      homeCollectionFreeNow: false,
       homeCollectionUsedOnce: false,
-      homeVisitsUsed:         0,
-      homeVisitLimit:         null,
-      sub:                    null,
+      homeVisitsUsed: 0,
+      homeVisitLimit: null,
+      sub: null,
     };
   }
 
-  let discountPercent      = sub.limits?.diagnosticsDiscountPercent ?? null;
-  let homeSampleCollection = sub.limits?.homeSampleCollection       ?? null;
+  let discountPercent = sub.limits?.diagnosticsDiscountPercent ?? null;
+  let homeSampleCollection = sub.limits?.homeSampleCollection ?? null;
 
   const needsFallback = discountPercent == null || homeSampleCollection == null;
 
   if (needsFallback && sub.plan) {
     const plan = await SubscriptionPlan.findById(sub.plan)
-      .select('planType customOptions diagnostics')
+      .select("planType customOptions diagnostics")
       .lean();
 
-    if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
+    if (plan?.planType === "custom" && Array.isArray(plan.customOptions)) {
       if (discountPercent == null) {
-        const diagOpt = plan.customOptions.find(o => o.optionKey === 'diagnostics');
+        const diagOpt = plan.customOptions.find(
+          (o) => o.optionKey === "diagnostics",
+        );
         discountPercent = diagOpt?.quantity ?? 0;
       }
       if (homeSampleCollection == null) {
-        const hscOpt = plan.customOptions.find(o => o.optionKey === 'homeSampleCollection');
+        const hscOpt = plan.customOptions.find(
+          (o) => o.optionKey === "homeSampleCollection",
+        );
         homeSampleCollection = hscOpt ? hscOpt.quantity >= 1 : false;
       }
     } else if (plan) {
@@ -1069,12 +1388,12 @@ export const checkSubscriptionDiagnostics = async (userId) => {
     }
   }
 
-  discountPercent      = discountPercent      ?? 0;
+  discountPercent = discountPercent ?? 0;
   homeSampleCollection = homeSampleCollection ?? false;
 
-  const now        = new Date();
-  const usage      = sub.usageHistory?.find(
-    u => u.month === now.getMonth() + 1 && u.year === now.getFullYear()
+  const now = new Date();
+  const usage = sub.usageHistory?.find(
+    (u) => u.month === now.getMonth() + 1 && u.year === now.getFullYear(),
   );
   const homeVisitsUsed = usage?.diagnosticBookingsMade ?? 0;
 
@@ -1088,7 +1407,7 @@ export const checkSubscriptionDiagnostics = async (userId) => {
   }
 
   const homeCollectionUsedOnce = sub.limits?.homeCollectionUsedOnce ?? false;
-  const homeCollectionFreeNow  = homeSampleCollection && !homeCollectionUsedOnce;
+  const homeCollectionFreeNow = homeSampleCollection && !homeCollectionUsedOnce;
 
   return {
     discountPercent,
@@ -1109,11 +1428,11 @@ export const markHomeCollectionUsed = async (subscriptionId) => {
   if (!subscriptionId) return;
   try {
     await UserSubscription.findByIdAndUpdate(subscriptionId, {
-      $set: { 'limits.homeCollectionUsedOnce': true },
+      $set: { "limits.homeCollectionUsedOnce": true },
     });
     console.log(`[markHomeCollectionUsed] ✅ marked for sub:${subscriptionId}`);
   } catch (e) {
-    console.error('[markHomeCollectionUsed] ❌ failed:', e.message);
+    console.error("[markHomeCollectionUsed] ❌ failed:", e.message);
   }
 };
 
@@ -1124,11 +1443,11 @@ export const markCaStandardTierUsed = async (subscriptionId) => {
   if (!subscriptionId) return;
   try {
     await UserSubscription.findByIdAndUpdate(subscriptionId, {
-      $set: { 'limits.caStandardTierUsedOnce': true },
+      $set: { "limits.caStandardTierUsedOnce": true },
     });
     console.log(`[markCaStandardTierUsed] ✅ marked for sub:${subscriptionId}`);
   } catch (e) {
-    console.error('[markCaStandardTierUsed] ❌ failed:', e.message);
+    console.error("[markCaStandardTierUsed] ❌ failed:", e.message);
   }
 };
 
@@ -1139,11 +1458,13 @@ export const recoverCaStandardTierUsage = async (subscriptionId) => {
   if (!subscriptionId) return;
   try {
     await UserSubscription.findByIdAndUpdate(subscriptionId, {
-      $set: { 'limits.caStandardTierUsedOnce': false },
+      $set: { "limits.caStandardTierUsedOnce": false },
     });
-    console.log(`[recoverCaStandardTierUsage] ✅ recovered for sub:${subscriptionId}`);
+    console.log(
+      `[recoverCaStandardTierUsage] ✅ recovered for sub:${subscriptionId}`,
+    );
   } catch (e) {
-    console.error('[recoverCaStandardTierUsage] ❌ failed:', e.message);
+    console.error("[recoverCaStandardTierUsage] ❌ failed:", e.message);
   }
 };
 
@@ -1153,29 +1474,31 @@ export const recoverCaStandardTierUsage = async (subscriptionId) => {
 
 export const applySubscriptionUsage = async (subscriptionId, field, delta) => {
   const ALLOWED = [
-    'consultationsUsed',
-    'transportRidesUsed',
-    'careAssistantVisitsUsed',
-    'diagnosticBookingsMade',
+    "consultationsUsed",
+    "transportRidesUsed",
+    "careAssistantVisitsUsed",
+    "diagnosticBookingsMade",
   ];
   if (!ALLOWED.includes(field)) {
-    console.error(`[applySubscriptionUsage] INVALID field: "${field}". Allowed: ${ALLOWED.join(', ')}`);
+    console.error(
+      `[applySubscriptionUsage] INVALID field: "${field}". Allowed: ${ALLOWED.join(", ")}`,
+    );
     return;
   }
 
-  const now   = new Date();
+  const now = new Date();
   const month = now.getMonth() + 1;
-  const year  = now.getFullYear();
+  const year = now.getFullYear();
 
   const result = await UserSubscription.findOneAndUpdate(
     {
-      _id:                  subscriptionId,
-      'usageHistory.month': month,
-      'usageHistory.year':  year,
+      _id: subscriptionId,
+      "usageHistory.month": month,
+      "usageHistory.year": year,
       ...(delta < 0 ? { [`usageHistory.$.${field}`]: { $gt: 0 } } : {}),
     },
     { $inc: { [`usageHistory.$.${field}`]: delta } },
-    { new: true }
+    { new: true },
   );
 
   if (!result) {
@@ -1185,22 +1508,28 @@ export const applySubscriptionUsage = async (subscriptionId, field, delta) => {
           usageHistory: {
             month,
             year,
-            consultationsUsed:       0,
-            transportRidesUsed:      0,
+            consultationsUsed: 0,
+            transportRidesUsed: 0,
             careAssistantVisitsUsed: 0,
-            diagnosticBookingsMade:  0,
+            diagnosticBookingsMade: 0,
             [field]: delta,
           },
         },
       });
-      console.log(`[applySubscriptionUsage] ✅ Created month entry & set ${field}+=${delta} for sub:${subscriptionId}`);
+      console.log(
+        `[applySubscriptionUsage] ✅ Created month entry & set ${field}+=${delta} for sub:${subscriptionId}`,
+      );
     } else {
-      console.warn(`[applySubscriptionUsage] ⚠️ Nothing to decrement for sub:${subscriptionId} field:${field}`);
+      console.warn(
+        `[applySubscriptionUsage] ⚠️ Nothing to decrement for sub:${subscriptionId} field:${field}`,
+      );
     }
     return;
   }
 
-  console.log(`[applySubscriptionUsage] ✅ ${field} delta=${delta} for sub:${subscriptionId}`);
+  console.log(
+    `[applySubscriptionUsage] ✅ ${field} delta=${delta} for sub:${subscriptionId}`,
+  );
 };
 
 export const incrementSubscriptionUsage = async (subId, field) => {
@@ -1215,13 +1544,17 @@ export const decrementSubscriptionUsage = async (subId, field) => {
 
 export const queueSubscriptionUsage = async (bookingId, subId, field) => {
   const ALLOWED = [
-    'consultationsUsed',
-    'transportRidesUsed',
-    'careAssistantVisitsUsed',
-    'diagnosticBookingsMade',
+    "consultationsUsed",
+    "transportRidesUsed",
+    "careAssistantVisitsUsed",
+    "diagnosticBookingsMade",
   ];
   if (!bookingId || !subId || !field) {
-    console.error('[queueSubscriptionUsage] missing params', { bookingId, subId, field });
+    console.error("[queueSubscriptionUsage] missing params", {
+      bookingId,
+      subId,
+      field,
+    });
     return;
   }
   if (!ALLOWED.includes(field)) {
@@ -1232,25 +1565,31 @@ export const queueSubscriptionUsage = async (bookingId, subId, field) => {
     await Booking.findByIdAndUpdate(bookingId, {
       $push: { subscriptionUsagePending: { subId: subId.toString(), field } },
     });
-    console.log(`[queueSubscriptionUsage] ✅ queued ${field} for booking:${bookingId} sub:${subId}`);
+    console.log(
+      `[queueSubscriptionUsage] ✅ queued ${field} for booking:${bookingId} sub:${subId}`,
+    );
   } catch (e) {
-    console.error('[queueSubscriptionUsage] failed:', e.message);
+    console.error("[queueSubscriptionUsage] failed:", e.message);
   }
 };
 
 const flushSubscriptionUsage = async (booking) => {
   const fresh = await Booking.findById(booking._id)
-    .select('subscriptionUsagePending confirmedSubscriptionUsage')
+    .select("subscriptionUsagePending confirmedSubscriptionUsage")
     .lean();
 
   const pending = fresh?.subscriptionUsagePending ?? [];
 
   if (!pending.length) {
-    console.log(`[flushSubscriptionUsage] skip — no pending for booking:${booking._id}`);
+    console.log(
+      `[flushSubscriptionUsage] skip — no pending for booking:${booking._id}`,
+    );
     return [];
   }
 
-  console.log(`[flushSubscriptionUsage] flushing ${pending.length} items for booking:${booking._id}`);
+  console.log(
+    `[flushSubscriptionUsage] flushing ${pending.length} items for booking:${booking._id}`,
+  );
 
   for (const { subId, field } of pending) {
     if (!subId || !field) continue;
@@ -1258,7 +1597,10 @@ const flushSubscriptionUsage = async (booking) => {
       await applySubscriptionUsage(subId, field, 1);
       console.log(`[flushSubscriptionUsage] ✅ flushed ${field} sub:${subId}`);
     } catch (e) {
-      console.error(`[flushSubscriptionUsage] ❌ failed ${field} sub:${subId}:`, e.message);
+      console.error(
+        `[flushSubscriptionUsage] ❌ failed ${field} sub:${subId}:`,
+        e.message,
+      );
     }
   }
 
@@ -1277,45 +1619,60 @@ export const flushAndRecord = async (booking) => {
 
   await Booking.findByIdAndUpdate(booking._id, {
     $push: { confirmedSubscriptionUsage: { $each: flushed } },
-    $set:  { subscriptionUsagePending: [] },
+    $set: { subscriptionUsagePending: [] },
   });
 
-  console.log(`[flushAndRecord] ✅ recorded ${flushed.length} items for booking:${booking._id}`);
+  console.log(
+    `[flushAndRecord] ✅ recorded ${flushed.length} items for booking:${booking._id}`,
+  );
 };
 
 export const recoverSubscriptionUsageOnCancel = async (booking) => {
   const fresh = await Booking.findById(booking._id)
-    .select('subscriptionUsagePending confirmedSubscriptionUsage')
+    .select("subscriptionUsagePending confirmedSubscriptionUsage")
     .lean();
 
-  const pending   = fresh?.subscriptionUsagePending   ?? [];
+  const pending = fresh?.subscriptionUsagePending ?? [];
   const confirmed = fresh?.confirmedSubscriptionUsage ?? [];
 
-  console.log(`[recoverSubscriptionUsageOnCancel] booking:${booking._id} pending:${pending.length} confirmed:${confirmed.length}`);
+  console.log(
+    `[recoverSubscriptionUsageOnCancel] booking:${booking._id} pending:${pending.length} confirmed:${confirmed.length}`,
+  );
 
   if (pending.length > 0) {
     await Booking.findByIdAndUpdate(booking._id, {
       $set: { subscriptionUsagePending: [] },
     });
-    console.log(`[recoverSubscriptionUsageOnCancel] ✅ cleared ${pending.length} pending items — quota never consumed`);
-    return { recovered: false, reason: 'pending cleared — quota was never consumed' };
+    console.log(
+      `[recoverSubscriptionUsageOnCancel] ✅ cleared ${pending.length} pending items — quota never consumed`,
+    );
+    return {
+      recovered: false,
+      reason: "pending cleared — quota was never consumed",
+    };
   }
 
   if (confirmed.length > 0) {
     for (const { subId, field } of confirmed) {
       if (!subId || !field) continue;
       await decrementSubscriptionUsage(subId, field);
-      console.log(`[recoverSubscriptionUsageOnCancel] ✅ restored ${field} sub:${subId}`);
+      console.log(
+        `[recoverSubscriptionUsageOnCancel] ✅ restored ${field} sub:${subId}`,
+      );
     }
     await Booking.findByIdAndUpdate(booking._id, {
       $set: { confirmedSubscriptionUsage: [] },
     });
-    console.log(`[recoverSubscriptionUsageOnCancel] ✅ recovered ${confirmed.length} quota items`);
+    console.log(
+      `[recoverSubscriptionUsageOnCancel] ✅ recovered ${confirmed.length} quota items`,
+    );
     return { recovered: true, decremented: confirmed.length };
   }
 
-  console.log(`[recoverSubscriptionUsageOnCancel] no usage recorded — nothing to recover`);
-  return { recovered: false, reason: 'no subscription usage on this booking' };
+  console.log(
+    `[recoverSubscriptionUsageOnCancel] no usage recorded — nothing to recover`,
+  );
+  return { recovered: false, reason: "no subscription usage on this booking" };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1323,20 +1680,24 @@ export const recoverSubscriptionUsageOnCancel = async (booking) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const resolveConsultationFee = async ({
-  isFollowUp, followUpFee, isCoveredBySubscription,
-  doctorId, hospitalId, consultationType,
+  isFollowUp,
+  followUpFee,
+  isCoveredBySubscription,
+  doctorId,
+  hospitalId,
+  consultationType,
 }) => {
   const gstRateMap = {
-    inPerson:  0.00,
-    video:     0.05,
+    inPerson: 0.0,
+    video: 0.05,
     homeVisit: 0.05,
   };
-  let gstRate = gstRateMap[consultationType] ?? 0.00;
+  let gstRate = gstRateMap[consultationType] ?? 0.0;
 
   let baseFee = 600;
   let doctorShare = 600;
   let hospitalShare = 0;
-  let source = 'default';
+  let source = "default";
 
   // PRICING ALWAYS COMES FROM THE DOCTOR PROFILE.
   // Hospitals (managed or owner-operated) never set their own consultation
@@ -1345,22 +1706,34 @@ export const resolveConsultationFee = async ({
   // single source of truth for what the patient pays and what the doctor
   // keeps, regardless of which hospital they're linked to.
   if (doctorId) {
-    const doc = await DoctorProfile.findById(doctorId).select('fees').lean();
+    const doc = await DoctorProfile.findById(doctorId).select("fees").lean();
     if (doc?.fees) {
-      source = 'doctor';
+      source = "doctor";
 
       if (isFollowUp) {
         baseFee = followUpFee || 0;
         // Pro-rata the follow-up fee based on the doctor's standard inPerson split
         const stdFee = doc.fees.inPersonFee ?? doc.fees.consultationFee ?? 1;
-        const stdHon = doc.fees.inPersonHonorarium ?? doc.fees.consultationHonorarium ?? 0;
+        const stdHon =
+          doc.fees.inPersonHonorarium ?? doc.fees.consultationHonorarium ?? 0;
         doctorShare = Math.round(baseFee * (stdHon / stdFee));
       } else {
-        const feeMap = { inPerson: doc.fees.inPersonFee, video: doc.fees.videoFee, homeVisit: doc.fees.homeVisitFee };
-        const honMap = { inPerson: doc.fees.inPersonHonorarium, video: doc.fees.videoHonorarium, homeVisit: doc.fees.homeVisitHonorarium };
+        const feeMap = {
+          inPerson: doc.fees.inPersonFee,
+          video: doc.fees.videoFee,
+          homeVisit: doc.fees.homeVisitFee,
+        };
+        const honMap = {
+          inPerson: doc.fees.inPersonHonorarium,
+          video: doc.fees.videoHonorarium,
+          homeVisit: doc.fees.homeVisitHonorarium,
+        };
 
         baseFee = feeMap[consultationType] ?? doc.fees.consultationFee ?? 0;
-        doctorShare = honMap[consultationType] ?? doc.fees.consultationHonorarium ?? baseFee;
+        doctorShare =
+          honMap[consultationType] ??
+          doc.fees.consultationHonorarium ??
+          baseFee;
       }
 
       // Whatever the doctor doesn't take as honorarium is the hospital's
@@ -1374,7 +1747,7 @@ export const resolveConsultationFee = async ({
   // SUBSCRIPTION LOGIC
   const feeChargedToCustomer = isCoveredBySubscription ? 0 : baseFee;
   if (isCoveredBySubscription) {
-    source = 'subscription';
+    source = "subscription";
     gstRate = 0; // No GST on a free charge
   }
 
@@ -1395,10 +1768,14 @@ export const resolveConsultationFee = async ({
 // CARE ASSISTANT FEE RESOLVER
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const resolveCareAssistantFee = async ({ userId, durationHours, config }) => {
-  const resolvedConfig = config || await PlatformPricingConfig.getGlobal();
+export const resolveCareAssistantFee = async ({
+  userId,
+  durationHours,
+  config,
+}) => {
+  const resolvedConfig = config || (await PlatformPricingConfig.getGlobal());
   const parsedDuration = parseInt(durationHours, 10) || 4;
-  const subCheck       = await checkSubscriptionCareAssistant(userId);
+  const subCheck = await checkSubscriptionCareAssistant(userId);
 
   // Tier-matching helper: inclusive on both bounds so a duration exactly
   // equal to a tier's upper bound still matches THAT tier (not the next
@@ -1407,7 +1784,7 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
     let idx = tiers.findIndex(
       (t) =>
         duration >= (t.minHours ?? 0) &&
-        (t.maxHours == null || duration <= t.maxHours)
+        (t.maxHours == null || duration <= t.maxHours),
     );
     if (idx < 0) {
       // exact minHours match fallback
@@ -1420,70 +1797,36 @@ export const resolveCareAssistantFee = async ({ userId, durationHours, config })
     return idx < 0 ? 0 : idx;
   };
 
-// 1. FIXED plan
-if (subCheck.allowed && subCheck.planType !== 'custom') {
-  const sub           = subCheck.sub;
-  const platformTiers = resolvedConfig?.careAssistant?.pricingTiers ?? [];
-  const activeTiers   = platformTiers.filter(t => t.isActive !== false).sort((a, b) => (a.minHours ?? 0) - (b.minHours ?? 0));
+  // 1. FIXED plan — always charge platform rate, no quota/subscription tracking
+  if (subCheck.allowed && subCheck.planType !== "custom") {
+    const sub = subCheck.sub;
+    const platformTiers = resolvedConfig?.careAssistant?.pricingTiers ?? [];
+    const activeTiers = platformTiers
+      .filter((t) => t.isActive !== false)
+      .sort((a, b) => (a.minHours ?? 0) - (b.minHours ?? 0));
+    const requestedTier =
+      activeTiers[matchTier(activeTiers, parsedDuration)] ?? null;
 
-  const requestedTier = activeTiers[matchTier(activeTiers, parsedDuration)] ?? null;
-
-  // 1a. DEDICATED plan (e.g. Pregnant Women Care) — ANY tier, unlimited, free
-  //     for the whole subscription period. No quota tracking at all.
-  if (sub?.limits?.careAssistantTierLabel === 'Dedicated' || subCheck.tierSnapshot?.tierLabel === 'Dedicated') {
     return {
-      fee:                     0,
-      source:                  'subscription_dedicated',
-      isCoveredBySubscription: true,
-      quotaTracked:            false,
+      fee: requestedTier?.chargeToUser ?? 0,
+      source: "platform",
+      isCoveredBySubscription: false,
+      quotaTracked: false,
       sub,
-      subQuotaInfo:            subCheck,
-      tier:                    { ...requestedTier, label: 'Dedicated' },
+      subQuotaInfo: subCheck,
+      tier: requestedTier,
     };
   }
-
-  // 1b. STANDARD fixed plan — first/lowest tier free ONE TIME per billing cycle
-  const freeTier = activeTiers[0] ?? null;
-  const isFirstTierRequested = requestedTier && freeTier && requestedTier.minHours === freeTier.minHours;
-  const standardUsedOnce = sub?.limits?.caStandardTierUsedOnce ?? false;
-
-  if (isFirstTierRequested && !standardUsedOnce) {
-    return {
-      fee:                     0,
-      source:                  'subscription',
-      isCoveredBySubscription: true,
-      quotaTracked:            true,      // signals: mark caStandardTierUsedOnce on payment confirm
-      caStandardTierFree:      true,
-      sub,
-      subQuotaInfo:            subCheck,
-      tier:                    freeTier,
-    };
-  }
-
-  // 1c. First tier already used once this cycle, OR a higher tier selected
-  //     → charge platform rate for the requested tier, no quota consumed
-  return {
-    fee:                     requestedTier?.chargeToUser ?? 0,
-    source:                  'platform',
-    isCoveredBySubscription: false,
-    quotaTracked:            false,
-    sub,
-    subQuotaInfo:            subCheck,
-    tier:                    requestedTier,
-    reason: isFirstTierRequested
-      ? 'Standard tier free-use already used this billing cycle — platform rate applies'
-      : undefined,
-  };
-}
 
   // 2. CUSTOM plan
-  if (subCheck.planType === 'custom') {
-    const sub       = subCheck.sub;
+  if (subCheck.planType === "custom") {
+    const sub = subCheck.sub;
     const remaining = subCheck.remaining ?? 0;
 
     if (subCheck.allowed && (remaining > 0 || remaining === Infinity)) {
-      const planTierIdx   = sub.limits?.careAssistantTierIndex ?? 0;
-      const customTiers   = resolvedConfig?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
+      const planTierIdx = sub.limits?.careAssistantTierIndex ?? 0;
+      const customTiers =
+        resolvedConfig?.customPlanOptions?.careAssistant?.pricingTiers ?? [];
 
       let selectedTierIdx = matchTier(customTiers, parsedDuration);
 
@@ -1494,7 +1837,7 @@ if (subCheck.allowed && subCheck.planType !== 'custom') {
       // Primary check: does the SELECTED tier's chargeToUser match the
       // snapshotted free charge?
       const snapshotCharge = sub.limits?.careAssistantChargePerVisit;
-      const snapshotLabel  = sub.limits?.careAssistantTierLabel;
+      const snapshotLabel = sub.limits?.careAssistantTierLabel;
       const selectedTierForMatch = customTiers[selectedTierIdx];
 
       const isPlanTierBySnapshot =
@@ -1503,7 +1846,7 @@ if (subCheck.allowed && subCheck.planType !== 'custom') {
         Number(selectedTierForMatch.chargeToUser) === Number(snapshotCharge);
 
       const isPlanTierByLabel =
-        !snapshotCharge != null && // only if charge match unavailable
+        snapshotCharge == null && // only if charge match unavailable
         snapshotLabel &&
         selectedTierForMatch?.label === snapshotLabel;
 
@@ -1515,67 +1858,75 @@ if (subCheck.allowed && subCheck.planType !== 'custom') {
       // 2a. PLAN TIER selected → FREE
       if (isPlanTier) {
         const snapshotTierIndex = sub.limits?.careAssistantTierIndex;
-        const snapshotCharge2   = sub.limits?.careAssistantChargePerVisit;
-        const snapshotLabel2    = sub.limits?.careAssistantTierLabel;
+        const snapshotCharge2 = sub.limits?.careAssistantChargePerVisit;
+        const snapshotLabel2 = sub.limits?.careAssistantTierLabel;
 
         let tier = null;
 
         if (snapshotCharge2 != null) {
           tier = {
-            label:        snapshotLabel2 ?? `Tier ${snapshotTierIndex}`,
+            label: snapshotLabel2 ?? `Tier ${snapshotTierIndex}`,
             chargeToUser: snapshotCharge2,
-            tierIndex:    snapshotTierIndex,
+            tierIndex: snapshotTierIndex,
           };
         } else if (customTiers[selectedTierIdx]) {
           const ct = customTiers[selectedTierIdx];
           tier = {
-            label:             ct.label,
-            minHours:          ct.minHours,
-            maxHours:          ct.maxHours ?? null,
-            chargeToUser:      ct.chargeToUser,
+            label: ct.label,
+            minHours: ct.minHours,
+            maxHours: ct.maxHours ?? null,
+            chargeToUser: ct.chargeToUser,
             payoutToAssistant: ct.payoutToAssistant,
-            tierIndex:         selectedTierIdx,
+            tierIndex: selectedTierIdx,
           };
         } else {
           try {
             const plan = await SubscriptionPlan.findById(sub.plan)
-              .select('planType customOptions')
+              .select("planType customOptions")
               .lean();
-            if (plan?.planType === 'custom' && Array.isArray(plan.customOptions)) {
-              const caOpt = plan.customOptions.find((o) => o.optionKey === 'careAssistant');
+            if (
+              plan?.planType === "custom" &&
+              Array.isArray(plan.customOptions)
+            ) {
+              const caOpt = plan.customOptions.find(
+                (o) => o.optionKey === "careAssistant",
+              );
               if (caOpt) {
-                const idx        = Number(caOpt.careAssistantTierIndex ?? 0);
+                const idx = Number(caOpt.careAssistantTierIndex ?? 0);
                 const customTier = customTiers[idx] ?? customTiers[0] ?? null;
                 if (customTier) {
                   tier = {
-                    label:             customTier.label,
-                    minHours:          customTier.minHours,
-                    maxHours:          customTier.maxHours ?? null,
-                    chargeToUser:      customTier.chargeToUser,
+                    label: customTier.label,
+                    minHours: customTier.minHours,
+                    maxHours: customTier.maxHours ?? null,
+                    chargeToUser: customTier.chargeToUser,
                     payoutToAssistant: customTier.payoutToAssistant,
-                    tierIndex:         idx,
+                    tierIndex: idx,
                   };
                 } else if (caOpt.unitPrice != null) {
                   tier = {
-                    label:        caOpt.label ?? `Tier ${idx}`,
+                    label: caOpt.label ?? `Tier ${idx}`,
                     chargeToUser: caOpt.unitPrice,
-                    tierIndex:    idx,
+                    tierIndex: idx,
                   };
                 }
               }
             }
           } catch (e) {
-            console.error('[resolveCareAssistantFee] plan lookup failed:', e.message);
+            console.error(
+              "[resolveCareAssistantFee] plan lookup failed:",
+              e.message,
+            );
           }
         }
 
         return {
-          fee:                     0,
-          source:                  'custom_plan_quota',
+          fee: 0,
+          source: "custom_plan_quota",
           isCoveredBySubscription: true,
-          quotaTracked:            true,
+          quotaTracked: true,
           sub,
-          subQuotaInfo:            subCheck,
+          subQuotaInfo: subCheck,
           tier,
         };
       }
@@ -1584,45 +1935,53 @@ if (subCheck.allowed && subCheck.planType !== 'custom') {
       const chargeTier = customTiers[selectedTierIdx] ?? null;
       console.log(
         `[resolveCareAssistantFee] custom plan: selected tier ${selectedTierIdx} ` +
-        `(charge ${chargeTier?.chargeToUser}) does not match plan's free tier ` +
-        `(snapshot charge ${snapshotCharge}, label "${snapshotLabel}", index ${planTierIdx})` +
-        ` — charging platform rate ${chargeTier?.chargeToUser ?? 0}`
+          `(charge ${chargeTier?.chargeToUser}) does not match plan's free tier ` +
+          `(snapshot charge ${snapshotCharge}, label "${snapshotLabel}", index ${planTierIdx})` +
+          ` — charging platform rate ${chargeTier?.chargeToUser ?? 0}`,
       );
 
       return {
-        fee:                     chargeTier?.chargeToUser ?? 0,
-        source:                  'platform',
+        fee: chargeTier?.chargeToUser ?? 0,
+        source: "platform",
         isCoveredBySubscription: false,
-        quotaTracked:            false,
+        quotaTracked: false,
         sub,
-        subQuotaInfo:            subCheck,
-        tier:                    chargeTier ? { ...chargeTier, tierIndex: selectedTierIdx } : null,
+        subQuotaInfo: subCheck,
+        tier: chargeTier ? { ...chargeTier, tierIndex: selectedTierIdx } : null,
       };
     }
 
     // 2c. Quota exhausted
-    const platformTier = PlatformPricingConfig.resolveCareAssistantTier?.(resolvedConfig, parsedDuration) ?? null;
+    const platformTier =
+      PlatformPricingConfig.resolveCareAssistantTier?.(
+        resolvedConfig,
+        parsedDuration,
+      ) ?? null;
     return {
-      fee:                     platformTier?.chargeToUser ?? 0,
-      source:                  'platform',
+      fee: platformTier?.chargeToUser ?? 0,
+      source: "platform",
       isCoveredBySubscription: false,
-      quotaTracked:            false,
+      quotaTracked: false,
       sub,
-      subQuotaInfo:            subCheck,
-      tier:                    platformTier,
+      subQuotaInfo: subCheck,
+      tier: platformTier,
     };
   }
 
   // 3. No sub / exhausted
-  const platformTier = PlatformPricingConfig.resolveCareAssistantTier?.(resolvedConfig, parsedDuration) ?? null;
+  const platformTier =
+    PlatformPricingConfig.resolveCareAssistantTier?.(
+      resolvedConfig,
+      parsedDuration,
+    ) ?? null;
   return {
-    fee:                     platformTier?.chargeToUser ?? 0,
-    source:                  'platform',
+    fee: platformTier?.chargeToUser ?? 0,
+    source: "platform",
     isCoveredBySubscription: false,
-    quotaTracked:            false,
-    sub:                     subCheck.sub,
-    subQuotaInfo:            subCheck,
-    tier:                    platformTier,
+    quotaTracked: false,
+    sub: subCheck.sub,
+    subQuotaInfo: subCheck,
+    tier: platformTier,
   };
 };
 
@@ -1640,27 +1999,56 @@ export const isPointNearRoute = ({ point, polyline, thresholdKm = 3 }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const buildFareBreakdown = ({
-  consultationFee   = 0, doctorShare       = 0, hospitalShare     = 0,
-  careAssistantFee  = 0, transportFee      = 0, diagnosticFee     = 0, 
-  pharmacyFee       = 0, bloodBankFee      = 0, homeCollectionFee = 0, 
-  platformFee       = 0, taxPercent        = 0, discount          = 0, 
-  couponDiscount    = 0, walletApplied     = 0,
+  consultationFee = 0,
+  doctorShare = 0,
+  hospitalShare = 0,
+  careAssistantFee = 0,
+  transportFee = 0,
+  diagnosticFee = 0,
+  pharmacyFee = 0,
+  bloodBankFee = 0,
+  homeCollectionFee = 0,
+  platformFee = 0,
+  taxPercent = 0,
+  discount = 0,
+  couponDiscount = 0,
+  walletApplied = 0,
 } = {}) => {
-  const subtotal      = +(
-    consultationFee + careAssistantFee + transportFee + diagnosticFee +
-    pharmacyFee + bloodBankFee + homeCollectionFee + platformFee
+  const subtotal = +(
+    consultationFee +
+    careAssistantFee +
+    transportFee +
+    diagnosticFee +
+    pharmacyFee +
+    bloodBankFee +
+    homeCollectionFee +
+    platformFee
   ).toFixed(2);
   const discountTotal = +((discount || 0) + (couponDiscount || 0)).toFixed(2);
-  const taxableBase   = +Math.max(0, subtotal - discountTotal).toFixed(2);
-  const taxes         = taxPercent ? +(taxableBase * (taxPercent / 100)).toFixed(2) : 0;
-  const totalAmount   = +(taxableBase + taxes).toFixed(2);
-  const amountPaid    = totalAmount;
-  
+  const taxableBase = +Math.max(0, subtotal - discountTotal).toFixed(2);
+  const taxes = taxPercent ? +(taxableBase * (taxPercent / 100)).toFixed(2) : 0;
+  const totalAmount = +(taxableBase + taxes).toFixed(2);
+  const amountPaid = totalAmount;
+
   return {
-    consultationFee, doctorShare, hospitalShare, careAssistantFee, transportFee, 
-    diagnosticFee, pharmacyFee, bloodBankFee, homeCollectionFee, platformFee,
-    taxes, discount, couponDiscount, walletApplied,
-    totalAmount, amountPaid, refundAmount: 0, currency: 'INR',
+    consultationFee,
+    doctorShare,
+    hospitalShare,
+    careAssistantFee,
+    transportFee,
+    diagnosticFee,
+    pharmacyFee,
+    bloodBankFee,
+    homeCollectionFee,
+    platformFee,
+    taxes,
+    discount,
+    couponDiscount,
+    walletApplied,
+    totalAmount,
+    amountPaid,
+    refundAmount: 0,
+    currency: "INR",
   };
 };
 
@@ -1669,44 +2057,68 @@ export const buildFareBreakdown = ({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const generateOpNumber = async (hospitalId) => {
-  const now  = new Date();
-  const date = now.toISOString().slice(0, 10).replace(/-/g, '');
-  let hospCode = 'GEN';
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const now = new Date();
+
+  // IST date string for OP code (e.g. "20260624")
+  const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+  const date = istNow.toISOString().slice(0, 10).replace(/-/g, "");
+
+  let hospCode = "GEN";
   if (hospitalId) {
-    const hosp = await Hospital.findById(hospitalId).select('slug name').lean();
+    const hosp = await Hospital.findById(hospitalId).select("slug name").lean();
     if (hosp)
-      hospCode = (hosp.slug || hosp.name || 'GEN')
-        .replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 5);
+      hospCode = (hosp.slug || hosp.name || "GEN")
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .toUpperCase()
+        .slice(0, 5);
   }
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
+
+  // IST midnight as UTC — consistent with parseFrontendDateTime pattern used elsewhere
+  const istMidnight = new Date(
+    Date.UTC(
+      istNow.getUTCFullYear(),
+      istNow.getUTCMonth(),
+      istNow.getUTCDate(),
+      0,
+      0,
+      0,
+      0,
+    ) - IST_OFFSET_MS,
+  );
+
   const count = await OutPatientRecord.countDocuments({
-    createdAt:  { $gte: startOfDay },
+    createdAt: { $gte: istMidnight },
     ...(hospitalId ? { hospital: hospitalId } : {}),
   });
-  return `OP-${date}-${hospCode}-${String(count + 1).padStart(4, '0')}`;
+
+  return `OP-${date}-${hospCode}-${String(count + 1).padStart(4, "0")}`;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RAZORPAY HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const createRazorpayOrder = async (amountInRupees, bookingCode, notes = {}) => {
+export const createRazorpayOrder = async (
+  amountInRupees,
+  bookingCode,
+  notes = {},
+) => {
   if (amountInRupees <= 0) return null;
   const order = await razorpay.orders.create({
-    amount:   Math.round(amountInRupees * 100),
-    currency: 'INR',
-    receipt:  bookingCode,
-    notes:    { bookingCode, ...notes },
+    amount: Math.round(amountInRupees * 100),
+    currency: "INR",
+    receipt: bookingCode,
+    notes: { bookingCode, ...notes },
   });
-  return { orderId: order.id, amount: amountInRupees, currency: 'INR' };
+  return { orderId: order.id, amount: amountInRupees, currency: "INR" };
 };
 
 export const verifyRazorpaySignature = (orderId, paymentId, signature) => {
   const digest = crypto
-    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+    .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
     .update(`${orderId}|${paymentId}`)
-    .digest('hex');
+    .digest("hex");
   return digest === signature;
 };
 
@@ -1714,19 +2126,31 @@ export const verifyRazorpaySignature = (orderId, paymentId, signature) => {
 // WALLET PAYMENT
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const processWalletPayment = async ({ userId, amount, bookingId, bookingCode }) => {
+export const processWalletPayment = async ({
+  userId,
+  amount,
+  bookingId,
+  bookingCode,
+}) => {
   const wallet = await Wallet.findOne({ user: userId });
-  if (!wallet)                          throw new Error('Wallet not found');
-  if (wallet.availableBalance < amount) throw new Error(`Insufficient wallet balance. Available: ₹${wallet.availableBalance}`);
-  await wallet.debit(amount, 'Booking_Payment', {
-    referenceId:  bookingId,
-    onModel:      'Booking',
-    description:  `Payment for booking ${bookingCode}`,
-    initiatedBy:  userId,
+  if (!wallet) throw new Error("Wallet not found");
+  if (wallet.availableBalance < amount)
+    throw new Error(
+      `Insufficient wallet balance. Available: ₹${wallet.availableBalance}`,
+    );
+  await wallet.debit(amount, "Booking_Payment", {
+    referenceId: bookingId,
+    onModel: "Booking",
+    description: `Payment for booking ${bookingCode}`,
+    initiatedBy: userId,
   });
   return {
-    gateway: 'Wallet', transactionId: `WALLET-${Date.now()}`,
-    paymentMode: 'Wallet', amount, status: 'success', paidAt: new Date(),
+    gateway: "Wallet",
+    transactionId: `WALLET-${Date.now()}`,
+    paymentMode: "Wallet",
+    amount,
+    status: "success",
+    paidAt: new Date(),
   };
 };
 
@@ -1735,13 +2159,22 @@ export const processWalletPayment = async ({ userId, amount, bookingId, bookingC
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const computeRefundAmount = async (booking) => {
-  const config         = await PlatformPricingConfig.getGlobal();
-  const policy         = config?.refundPolicy || {};
+  const config = await PlatformPricingConfig.getGlobal();
+  const policy = config?.refundPolicy || {};
   const thresholdHours = policy.rideFullRefundHoursThreshold ?? 24;
-  const partialPercent = policy.ridePartialRefundPercent     ?? 50;
-  const hoursUntil     = (new Date(booking.scheduledAt) - new Date()) / (1000 * 60 * 60);
-  const refundPercent  = hoursUntil >= thresholdHours ? 100 : partialPercent;
-  const refundAmount   = +((booking.fareBreakdown?.totalAmount ?? 0) * refundPercent / 100).toFixed(2);
+  const partialPercent = policy.ridePartialRefundPercent ?? 50;
+
+  let refundPercent = 100; // default full refund when no scheduledAt
+  if (booking.scheduledAt) {
+    const hoursUntil =
+      (new Date(booking.scheduledAt) - new Date()) / (1000 * 60 * 60);
+    refundPercent = hoursUntil >= thresholdHours ? 100 : partialPercent;
+  }
+
+  const refundAmount = +(
+    ((booking.fareBreakdown?.totalAmount ?? 0) * refundPercent) /
+    100
+  ).toFixed(2);
   return { refundPercent, refundAmount };
 };
 
@@ -1750,32 +2183,38 @@ export const computeRefundAmount = async (booking) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const getLabs = async (filters = {}) => {
-  const query = { status: 'approved', isActive: true };
-  if (filters.city)           query['registeredAddress.city'] = { $regex: filters.city, $options: 'i' };
-  if (filters.labType)        query.labType                   = filters.labType;
-  if (filters.homeCollection) query.sampleCollectionMode      = { $in: ['Home Collection', 'Both'] };
+  const query = { status: "approved", isActive: true };
+  if (filters.city)
+    query["registeredAddress.city"] = { $regex: filters.city, $options: "i" };
+  if (filters.labType) query.labType = filters.labType;
+  if (filters.homeCollection)
+    query.sampleCollectionMode = { $in: ["Home Collection", "Both"] };
   return LabPartnerProfile.find(query)
     .select(
-      'labName labCode labType ownershipType registeredAddress timing ' +
-      'sampleCollectionMode homeCollectionRadius homeCollectionFee ' +
-      'reportDeliveryModes avgTurnaroundHours averageRating totalReviews ' +
-      'accreditations isFeatured logoUrl'
+      "labName labCode labType ownershipType registeredAddress timing " +
+        "sampleCollectionMode homeCollectionRadius homeCollectionFee " +
+        "reportDeliveryModes avgTurnaroundHours averageRating totalReviews " +
+        "accreditations isFeatured logoUrl",
     )
     .lean();
 };
 
 export const getLabWithTests = async (labId) => {
-  const lab = await LabPartnerProfile.findOne({ _id: labId, status: 'approved', isActive: true })
+  const lab = await LabPartnerProfile.findOne({
+    _id: labId,
+    status: "approved",
+    isActive: true,
+  })
     .select(
-      'labName labCode labType registeredAddress timing branches ' +
-      'sampleCollectionMode homeCollectionRadius homeCollectionFee ' +
-      'reportDeliveryModes avgTurnaroundHours averageRating accreditations ' +
-      'labTests labPackages contactPersons logoUrl'
+      "labName labCode labType registeredAddress timing branches " +
+        "sampleCollectionMode homeCollectionRadius homeCollectionFee " +
+        "reportDeliveryModes avgTurnaroundHours averageRating accreditations " +
+        "labTests labPackages contactPersons logoUrl",
     )
     .lean();
-  if (!lab) throw new Error('Lab not found or not operational');
-  lab.labTests    = (lab.labTests    || []).filter(t => t.isActive && t.slug);
-  lab.labPackages = (lab.labPackages || []).filter(p => p.isActive && p.slug);
+  if (!lab) throw new Error("Lab not found or not operational");
+  lab.labTests = (lab.labTests || []).filter((t) => t.isActive && t.slug);
+  lab.labPackages = (lab.labPackages || []).filter((p) => p.isActive && p.slug);
   return lab;
 };
 
@@ -1784,71 +2223,90 @@ export const getLabWithTests = async (labId) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const resolveServiceComponents = (bookingType) => ({
-  needsTransport:     ['full_care_ride', 'patient_transport', 'diagnostic_home'].includes(bookingType),
-  needsCareAssistant: ['full_care_ride', 'care_assistant'].includes(bookingType),
-  needsDoctor:        ['full_care_ride', 'doctor_consultation', 'doctor_online', 'physiotherapist', 'follow_up'].includes(bookingType),
-  needsDiagnostic:    ['diagnostic_center', 'diagnostic_home'].includes(bookingType),
-  needsPharmacy:      false,
-  needsBloodBank:     false,
-  isOnline:           bookingType === 'doctor_online',
-  isFollowUpType:     bookingType === 'follow_up',
-  needsReturnOption:  ['full_care_ride', 'patient_transport'].includes(bookingType),
-  needsWaitingOption: bookingType === 'patient_transport',
-  canAddDoctor:       bookingType === 'patient_transport',
+  needsTransport: [
+    "full_care_ride",
+    "patient_transport",
+    "diagnostic_home",
+  ].includes(bookingType),
+  needsCareAssistant: ["full_care_ride", "care_assistant"].includes(
+    bookingType,
+  ),
+  needsDoctor: [
+    "full_care_ride",
+    "doctor_consultation",
+    "doctor_online",
+    "physiotherapist",
+    "follow_up",
+  ].includes(bookingType),
+  needsDiagnostic: ["diagnostic_center", "diagnostic_home"].includes(
+    bookingType,
+  ),
+  needsPharmacy: false,
+  needsBloodBank: false,
+  isOnline: bookingType === "doctor_online",
+  isFollowUpType: bookingType === "follow_up",
+  needsReturnOption: ["full_care_ride", "patient_transport"].includes(
+    bookingType,
+  ),
+  needsWaitingOption: bookingType === "patient_transport",
+  canAddDoctor: bookingType === "patient_transport",
 });
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PAY-AT-SERVICE: Generate Razorpay Payment Link (QR-safe, production)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const generatePayAtServiceLink = async ({ booking, customer, generatedByUserId }) => {
-  const TWO_HOURS_MS  = 2 * 60 * 60 * 1000;
-  const expiresAt     = new Date(Date.now() + TWO_HOURS_MS);
-  const expireUnix    = Math.floor(expiresAt.getTime() / 1000);
+export const generatePayAtServiceLink = async ({
+  booking,
+  customer,
+  generatedByUserId,
+}) => {
+  const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+  const expiresAt = new Date(Date.now() + TWO_HOURS_MS);
+  const expireUnix = Math.floor(expiresAt.getTime() / 1000);
 
   const amount = booking.fareBreakdown?.totalAmount ?? 0;
-  if (amount <= 0) throw new Error('Amount must be > 0 for pay-at-service link');
+  if (amount <= 0)
+    throw new Error("Amount must be > 0 for pay-at-service link");
 
   // Razorpay Payment Links API — works on all accounts, QR-renderable
   const linkPayload = {
-    amount:       Math.round(amount * 100), // paise
-    currency:     'INR',
+    amount: Math.round(amount * 100), // paise
+    currency: "INR",
     accept_partial: false,
-    description:  `Payment for Booking #${booking.bookingCode}`,
+    description: `Payment for Booking #${booking.bookingCode}`,
     customer: {
-      name:    customer.name  || booking.patientInfo?.name || 'Customer',
-      email:   customer.email || '',
-      contact: customer.phone || '',
+      name: customer.name || booking.patientInfo?.name || "Customer",
+      email: customer.email || "",
+      contact: customer.phone || "",
     },
     notify: {
-      sms:   !!customer.phone,
+      sms: !!customer.phone,
       email: !!customer.email,
     },
     reminder_enable: false,
     notes: {
-      bookingCode:    booking.bookingCode,
-      bookingId:      booking._id.toString(),
-      generatedBy:    generatedByUserId?.toString() ?? 'system',
-      source:         'pay_at_service',
+      bookingCode: booking.bookingCode,
+      bookingId: booking._id.toString(),
+      generatedBy: generatedByUserId?.toString() ?? "system",
+      source: "pay_at_service",
     },
-    callback_url:    `${process.env.FRONTEND_URL}/bookings/${booking._id}/payment-complete`,
-    callback_method: 'get',
-    expire_by:       expireUnix,
+    callback_url: `${process.env.FRONTEND_URL}/bookings/${booking._id}/payment-complete`,
+    callback_method: "get",
+    expire_by: expireUnix,
   };
 
   const link = await razorpay.paymentLink.create(linkPayload);
 
   return {
-    paymentLinkId:  link.id,
-    paymentLinkUrl: link.short_url,   // this IS the short URL — also renders as QR
-    shortUrl:       link.short_url,
-    qrCodeUrl:      null,             // frontend renders QR from shortUrl using qrcode lib
+    paymentLinkId: link.id,
+    paymentLinkUrl: link.short_url, // this IS the short URL — also renders as QR
+    shortUrl: link.short_url,
+    qrCodeUrl: null, // frontend renders QR from shortUrl using qrcode lib
     amount,
     expiresAt,
-    generatedAt:    new Date(),
+    generatedAt: new Date(),
   };
 };
 
 export { resolvePlanModes };
- 

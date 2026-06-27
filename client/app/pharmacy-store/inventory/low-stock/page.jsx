@@ -32,10 +32,9 @@ import {
   ArrowUpRight,
   Eye,
   SlidersHorizontal,
-  Beaker,
-  Building2,
-  Percent,
   CircleDot,
+  Building2,
+  AlertCircle,Loader2
 } from "lucide-react";
 import {
   BarChart,
@@ -46,153 +45,128 @@ import {
   Tooltip,
   ResponsiveContainer,
   Cell,
-  RadarChart,
-  Radar,
-  PolarGrid,
-  PolarAngleAxis,
   PieChart,
   Pie,
   Legend,
 } from "recharts";
 
-/* ─── Motion variants ─────────────────────────────────────── */
-const fadeUp  = { hidden: { opacity: 0, y: 24 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 260, damping: 22 } } };
-const stagger = { hidden: {},                     show: { transition: { staggerChildren: 0.07 } } };
+/* ─── Motion Variants ─────────────────────────────────────── */
+const FADE_UP = { 
+  hidden: { opacity: 0, y: 20 }, 
+  show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 260, damping: 22 } } 
+};
+const STAGGER = { 
+  hidden: {}, 
+  show: { transition: { staggerChildren: 0.05 } } 
+};
 
-/* ─── CSS row stagger (table-safe) ───────────────────────── */
+/* ─── CSS Row Stagger (Table-Safe) ───────────────────────── */
 const rowStyle = (i) => ({
-  animation: "fadeInRow 0.35s ease both",
-  animationDelay: `${i * 0.045}s`,
+  animation: "fadeInRow 0.4s ease-out forwards",
+  animationDelay: `${i * 0.03}s`,
+  opacity: 0, // start invisible until animation kicks in
 });
 
-/* ─── Urgency helpers ─────────────────────────────────────── */
-/**
- * lowStockItems[] from API:
- *   { name, brandName, category, medicineId, batchNumber,
- *     stockQuantity, expiryDate, pricePerUnit }
- */
+/* ─── Urgency Logic ─────────────────────────────────────── */
 const urgencyLevel = (qty) =>
   qty === 0 ? "out" : qty <= 3 ? "critical" : qty <= 7 ? "urgent" : "low";
 
 const URGENCY_META = {
-  out:      { label: "Out of Stock", color: "var(--error)",   bg: "color-mix(in oklch, var(--error)   13%, var(--base-200))", border: "color-mix(in oklch, var(--error)   35%, var(--base-300))" },
-  critical: { label: "Critical",     color: "var(--error)",   bg: "color-mix(in oklch, var(--error)   10%, var(--base-200))", border: "color-mix(in oklch, var(--error)   25%, var(--base-300))" },
-  urgent:   { label: "Urgent",       color: "var(--warning)", bg: "color-mix(in oklch, var(--warning) 12%, var(--base-200))", border: "color-mix(in oklch, var(--warning) 30%, var(--base-300))" },
-  low:      { label: "Low",          color: "var(--accent)",  bg: "color-mix(in oklch, var(--accent)  12%, var(--base-200))", border: "color-mix(in oklch, var(--accent)  25%, var(--base-300))" },
+  out:      { label: "Out of Stock", color: "var(--error)",   bg: "color-mix(in oklch, var(--error)   10%, transparent)", border: "var(--error)" },
+  critical: { label: "Critical",     color: "var(--error)",   bg: "color-mix(in oklch, var(--error)   10%, transparent)", border: "color-mix(in oklch, var(--error) 40%, transparent)" },
+  urgent:   { label: "Urgent",       color: "var(--warning)", bg: "color-mix(in oklch, var(--warning) 10%, transparent)", border: "color-mix(in oklch, var(--warning) 40%, transparent)" },
+  low:      { label: "Low",          color: "var(--accent)",  bg: "color-mix(in oklch, var(--accent)  10%, transparent)", border: "color-mix(in oklch, var(--accent) 40%, transparent)" },
 };
 
-const daysToExpiry = (expiryDate) => {
-  if (!expiryDate) return null;
-  return Math.ceil((new Date(expiryDate) - Date.now()) / 86400000);
-};
-
-/* ─── Background ──────────────────────────────────────────── */
+/* ─── Global Background ──────────────────────────────────── */
 function WarningBg() {
   return (
-    <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+    <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden bg-base-200">
       <style>{`
         @keyframes fadeInRow {
-          from { opacity: 0; transform: translateY(7px); }
+          from { opacity: 0; transform: translateY(10px); }
           to   { opacity: 1; transform: translateY(0);   }
-        }
-        @keyframes scanline {
-          0%   { transform: translateY(-100%); }
-          100% { transform: translateY(100vh); }
         }
       `}</style>
 
-      {/* Diagonal warning grid */}
+      {/* Subtle warning mesh */}
       <div
-        className="absolute inset-0 opacity-[0.025]"
+        className="absolute inset-0 opacity-[0.015]"
         style={{
-          backgroundImage:
-            "repeating-linear-gradient(45deg, var(--warning) 0, var(--warning) 1px, transparent 0, transparent 50%)",
-          backgroundSize: "24px 24px",
+          backgroundImage: "repeating-linear-gradient(45deg, var(--error) 0, var(--error) 1px, transparent 0, transparent 50%)",
+          backgroundSize: "32px 32px",
         }}
       />
-
-      {/* Ambient glows */}
+      {/* Ambient Glows */}
       <motion.div
-        animate={{ opacity: [0.1, 0.22, 0.1], scale: [1, 1.15, 1] }}
-        transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
-        className="absolute -top-24 -left-24 w-[500px] h-[500px] rounded-full blur-3xl"
-        style={{ background: "radial-gradient(circle, var(--warning), transparent 65%)" }}
-      />
-      <motion.div
-        animate={{ opacity: [0.07, 0.16, 0.07], scale: [1, 1.1, 1] }}
-        transition={{ duration: 8, repeat: Infinity, ease: "easeInOut", delay: 3 }}
-        className="absolute bottom-0 right-0 w-[400px] h-[400px] rounded-full blur-3xl"
-        style={{ background: "radial-gradient(circle, var(--error), transparent 65%)" }}
-      />
-      <motion.div
-        animate={{ opacity: [0.05, 0.12, 0.05] }}
-        transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 5 }}
-        className="absolute top-1/2 right-1/4 w-64 h-64 rounded-full blur-3xl"
-        style={{ background: "radial-gradient(circle, var(--primary), transparent 65%)" }}
+        animate={{ opacity: [0.03, 0.08, 0.03], scale: [1, 1.05, 1] }}
+        transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+        className="absolute top-0 right-0 w-[500px] h-[500px] rounded-full blur-3xl bg-error"
       />
     </div>
   );
 }
 
-/* ─── Urgency badge ───────────────────────────────────────── */
+/* ─── Urgency Badge ───────────────────────────────────────── */
 function UrgencyBadge({ qty }) {
   const u = URGENCY_META[urgencyLevel(qty)];
   return (
     <span
-      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-black"
+      className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider"
       style={{ background: u.bg, color: u.color, border: `1px solid ${u.border}` }}
     >
-      <CircleDot size={8} />
+      <CircleDot size={8} className={qty === 0 ? "animate-pulse" : ""} />
       {u.label}
     </span>
   );
 }
 
-/* ─── Stat card ───────────────────────────────────────────── */
+/* ─── Stat Card ───────────────────────────────────────────── */
 const StatCard = memo(function StatCard({ icon: Icon, label, value, sub, color, pulse }) {
   return (
-    <motion.div variants={fadeUp} className="glass-card p-5 relative overflow-hidden group">
+    <motion.div variants={FADE_UP} className="card p-5 relative overflow-hidden group shadow-sm border border-base-300 bg-base-100">
       <div
         className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500"
-        style={{ background: `radial-gradient(ellipse at 80% 20%, color-mix(in oklch,${color} 10%,transparent), transparent 70%)` }}
+        style={{ background: `radial-gradient(ellipse at 80% 20%, color-mix(in oklch,${color} 8%,transparent), transparent 60%)` }}
       />
-      {pulse && (
-        <motion.div
-          animate={{ opacity: [0, 0.12, 0] }}
-          transition={{ duration: 2, repeat: Infinity }}
-          className="absolute inset-0 rounded-2xl"
-          style={{ background: color }}
-        />
-      )}
-      <div className="flex items-start justify-between mb-3 relative">
-        <div className="p-2.5 rounded-xl" style={{ background: `color-mix(in oklch,${color} 15%,var(--base-200))` }}>
-          <Icon size={17} style={{ color }} />
+      <div className="flex items-start justify-between mb-4 relative z-10">
+        <div className="p-2.5 rounded-xl" style={{ background: `color-mix(in oklch,${color} 15%, transparent)` }}>
+          <Icon size={18} style={{ color }} />
         </div>
-        <ArrowUpRight size={13} className="text-base-content/25 group-hover:text-primary transition-colors" />
+        {pulse && (
+          <span className="flex h-3 w-3 relative">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ backgroundColor: color }}></span>
+            <span className="relative inline-flex rounded-full h-3 w-3" style={{ backgroundColor: color }}></span>
+          </span>
+        )}
       </div>
-      <p className="text-2xl font-black font-montserrat relative" style={{ color }}>{value ?? "—"}</p>
-      <p className="text-xs font-semibold text-base-content/55 uppercase tracking-wider mt-1">{label}</p>
-      {sub && <p className="text-xs text-base-content/35 mt-0.5">{sub}</p>}
+      <div className="relative z-10">
+        <p className="text-3xl font-black font-montserrat" style={{ color }}>{value ?? "—"}</p>
+        <p className="text-xs font-bold text-base-content/50 uppercase tracking-widest mt-1">{label}</p>
+        {sub && <p className="text-[10px] text-base-content/40 mt-1 font-medium">{sub}</p>}
+      </div>
     </motion.div>
   );
 });
 
-/* ─── Custom recharts tooltip ─────────────────────────────── */
+/* ─── Recharts Tooltip ────────────────────────────────────── */
 const ChartTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="glass-card px-3 py-2 text-xs" style={{ border: "1px solid var(--base-300)" }}>
-      <p className="font-bold text-base-content mb-1">{label}</p>
+    <div className="bg-base-100 border border-base-300 shadow-xl rounded-xl px-4 py-3 text-xs z-50">
+      <p className="font-bold text-base-content mb-2">{label}</p>
       {payload.map((p, i) => (
-        <p key={i} style={{ color: p.color || p.fill }}>
-          {p.name}: <strong>{p.value}</strong>
-        </p>
+        <div key={i} className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full" style={{ background: p.color || p.fill }} />
+          <span className="text-base-content/70">{p.name}:</span>
+          <strong className="text-base-content">{p.value} items</strong>
+        </div>
       ))}
     </div>
   );
 };
 
-/* ─── Category bar chart ──────────────────────────────────── */
+/* ─── Charts ──────────────────────────────────────────────── */
 const CategoryChart = memo(function CategoryChart({ items }) {
   const data = useMemo(() => {
     const map = {};
@@ -201,90 +175,74 @@ const CategoryChart = memo(function CategoryChart({ items }) {
       map[cat] = (map[cat] || 0) + 1;
     });
     return Object.entries(map)
-      .map(([name, count]) => ({ name: name.slice(0, 10), count }))
+      .map(([name, count]) => ({ name: name.slice(0, 12) + (name.length > 12 ? '...' : ''), count }))
       .sort((a, b) => b.count - a.count)
-      .slice(0, 8);
+      .slice(0, 7);
   }, [items]);
 
   return (
-    <ResponsiveContainer width="100%" height={190}>
-      <BarChart data={data} barCategoryGap="35%">
+    <ResponsiveContainer width="100%" height={220}>
+      <BarChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
         <defs>
-          <linearGradient id="lowGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor="var(--warning)" stopOpacity={0.9} />
-            <stop offset="100%" stopColor="var(--error)"   stopOpacity={0.7} />
+          <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--warning)" stopOpacity={0.8} />
+            <stop offset="100%" stopColor="var(--error)" stopOpacity={0.6} />
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" vertical={false} />
-        <XAxis dataKey="name" tick={{ fontSize: 9, fill: "var(--base-content)", opacity: 0.45 }} axisLine={false} tickLine={false} />
-        <YAxis tick={{ fontSize: 9, fill: "var(--base-content)", opacity: 0.45 }} axisLine={false} tickLine={false} allowDecimals={false} />
-        <Tooltip content={<ChartTooltip />} cursor={{ fill: "var(--warning)", opacity: 0.05 }} />
-        <Bar dataKey="count" fill="url(#lowGrad)" radius={[6, 6, 0, 0]} name="Items" />
+        <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--base-content)", opacity: 0.5 }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fontSize: 10, fill: "var(--base-content)", opacity: 0.5 }} axisLine={false} tickLine={false} allowDecimals={false} />
+        <Tooltip content={<ChartTooltip />} cursor={{ fill: "var(--base-300)", opacity: 0.4 }} />
+        <Bar dataKey="count" fill="url(#barGrad)" radius={[4, 4, 0, 0]} barSize={32} name="Inventory Items" />
       </BarChart>
     </ResponsiveContainer>
   );
 });
 
-/* ─── Urgency distribution pie ────────────────────────────── */
 const UrgencyPie = memo(function UrgencyPie({ items }) {
   const data = useMemo(() => {
-    const out      = items.filter((i) => i.stockQuantity === 0).length;
-    const critical = items.filter((i) => i.stockQuantity > 0 && i.stockQuantity <= 3).length;
-    const urgent   = items.filter((i) => i.stockQuantity > 3 && i.stockQuantity <= 7).length;
-    const low      = items.filter((i) => i.stockQuantity > 7).length;
+    const out      = items.filter((i) => (i.availableStock || 0) === 0).length;
+    const critical = items.filter((i) => (i.availableStock || 0) > 0 && (i.availableStock || 0) <= 3).length;
+    const urgent   = items.filter((i) => (i.availableStock || 0) > 3 && (i.availableStock || 0) <= 7).length;
+    const low      = items.filter((i) => (i.availableStock || 0) > 7).length;
+    
     return [
       { name: "Out of Stock", value: out,      color: "var(--error)"   },
-      { name: "Critical ≤3",  value: critical, color: "oklch(62% 0.22 25)" },
-      { name: "Urgent ≤7",    value: urgent,   color: "var(--warning)" },
-      { name: "Low ≤10",      value: low,      color: "var(--accent)"  },
+      { name: "Critical (≤3)",value: critical, color: "oklch(62% 0.22 25)" },
+      { name: "Urgent (≤7)",  value: urgent,   color: "var(--warning)" },
+      { name: "Low (≤10)",    value: low,      color: "var(--accent)"  },
     ].filter((d) => d.value > 0);
   }, [items]);
 
   if (!data.length) return (
-    <div className="h-[190px] flex items-center justify-center text-xs text-base-content/30">
-      No data
+    <div className="h-[220px] flex items-center justify-center text-xs text-base-content/40 font-medium border border-dashed border-base-300 rounded-xl">
+      No Alert Data Available
     </div>
   );
 
   return (
-    <ResponsiveContainer width="100%" height={190}>
+    <ResponsiveContainer width="100%" height={220}>
       <PieChart>
         <Pie
-          data={data}
-          cx="50%"
-          cy="50%"
-          innerRadius={48}
-          outerRadius={72}
-          paddingAngle={3}
-          dataKey="value"
-          animationBegin={0}
-          animationDuration={1000}
+          data={data} cx="50%" cy="50%" innerRadius={55} outerRadius={80}
+          paddingAngle={4} dataKey="value" animationDuration={800} stroke="none"
         >
           {data.map((d, i) => <Cell key={i} fill={d.color} />)}
         </Pie>
         <Tooltip content={<ChartTooltip />} />
         <Legend
-          iconType="circle"
-          iconSize={7}
-          wrapperStyle={{ fontSize: 10 }}
-          formatter={(v) => <span style={{ color: "var(--base-content)", opacity: 0.55 }}>{v}</span>}
+          iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: '10px' }}
+          formatter={(v) => <span className="text-base-content/70 font-medium">{v}</span>}
         />
       </PieChart>
     </ResponsiveContainer>
   );
 });
 
-/* ─── Stock detail modal ──────────────────────────────────── */
-/**
- * medicineStockDetail from fetchMedicineStock(medicineId: string)
- * Shape: { medicineId, name, storeInventory[], totalStock, isLowStock }
- */
+/* ─── Detail Modal ────────────────────────────────────────── */
 const StockDetailModal = memo(function StockDetailModal({ item, onClose, stockDetail, isLoading }) {
   const batches = useMemo(
-    () =>
-      stockDetail?.medicineId === item?.medicineId
-        ? stockDetail.storeInventory ?? []
-        : [],
+    () => stockDetail?.medicineId === item?.medicineId ? stockDetail.storeInventory ?? [] : [],
     [stockDetail, item]
   );
 
@@ -294,361 +252,230 @@ const StockDetailModal = memo(function StockDetailModal({ item, onClose, stockDe
     return () => document.removeEventListener("keydown", fn);
   }, [onClose]);
 
-  const itemDays = daysToExpiry(item?.expiryDate);
+  const qty = item?.availableStock ?? 0;
+  const isOut = qty === 0;
 
   return (
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(10px)" }}
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral/60 backdrop-blur-sm"
+      onClick={onClose} role="dialog" aria-modal="true"
     >
       <motion.div
-        initial={{ scale: 0.88, opacity: 0, y: 32 }}
-        animate={{ scale: 1,    opacity: 1, y: 0  }}
-        exit={{   scale: 0.88, opacity: 0, y: 32  }}
-        transition={{ type: "spring", stiffness: 280, damping: 22 }}
-        className="glass-card w-full max-w-lg p-6 max-h-[88vh] overflow-y-auto"
+        initial={{ scale: 0.95, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0, y: 20 }}
+        transition={{ type: "spring", stiffness: 300, damping: 25 }}
+        className="bg-base-100 rounded-[2rem] shadow-2xl w-full max-w-lg overflow-hidden border border-base-300"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Warning strip for critical items */}
-        {item?.stockQuantity <= 3 && (
-          <motion.div
-            animate={{ opacity: [0.7, 1, 0.7] }}
-            transition={{ duration: 1.2, repeat: Infinity }}
-            className="h-1 w-full rounded-full mb-4"
-            style={{ background: "linear-gradient(90deg, var(--error), var(--warning), var(--error))" }}
-          />
+        {/* Warning strip */}
+        {qty <= 3 && (
+          <div className="h-1.5 w-full bg-gradient-to-r from-error via-warning to-error bg-[length:200%_auto] animate-[gradient_2s_linear_infinite]" />
         )}
 
         {/* Header */}
-        <div className="flex items-start justify-between mb-5 gap-4">
-          <div className="flex items-center gap-3">
-            <div
-              className="p-3 rounded-2xl shrink-0"
-              style={{ background: "color-mix(in oklch, var(--warning) 14%, var(--base-200))" }}
-            >
-              <ShieldAlert size={20} style={{ color: "var(--warning)" }} />
+        <div className="px-6 py-5 border-b border-base-200 bg-base-100 flex items-start justify-between gap-4">
+          <div className="flex gap-4">
+            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${isOut ? 'bg-error/10 text-error' : 'bg-warning/10 text-warning'}`}>
+              <ShieldAlert size={24} />
             </div>
             <div>
-              <h3 className="font-black text-lg font-montserrat text-base-content leading-tight">
-                {item?.name}
-              </h3>
-              <p className="text-xs text-base-content/50 mt-0.5">{item?.brandName}</p>
-              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                <UrgencyBadge qty={item?.stockQuantity} />
-                <span className="badge badge-info text-xs">{item?.category || "General"}</span>
+              <h3 className="font-bold text-lg text-base-content leading-tight">{item?.name}</h3>
+              <p className="text-xs text-base-content/50 mt-1">{item?.brandName}</p>
+              <div className="mt-2">
+                <UrgencyBadge qty={qty} />
               </div>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="p-2 rounded-xl hover:bg-base-300 transition-colors shrink-0 focus-visible:outline-none"
-          >
-            <X size={15} />
+          <button onClick={onClose} className="btn btn-ghost btn-sm btn-circle text-base-content/40 hover:text-base-content">
+            <X size={18} />
           </button>
         </div>
 
-        {/* Key metrics */}
-        <div className="grid grid-cols-3 gap-3 mb-5">
-          {[
-            {
-              label: "Stock Left",
-              value: item?.stockQuantity,
-              icon: Package,
-              color: item?.stockQuantity === 0 ? "var(--error)" : item?.stockQuantity <= 7 ? "var(--warning)" : "var(--accent)",
-            },
-            {
-              label: "Price/Unit",
-              value: item?.pricePerUnit ? `₹${item.pricePerUnit}` : "—",
-              icon: Tag,
-              color: "var(--primary)",
-            },
-            {
-              label: "Expiry",
-              value: itemDays !== null ? `${itemDays}d` : "—",
-              icon: Calendar,
-              color: itemDays !== null && itemDays <= 30 ? "var(--warning)" : "var(--success)",
-            },
-          ].map((s) => (
-            <div key={s.label} className="bg-base-200 rounded-xl p-3 text-center">
-              <s.icon size={13} className="mx-auto mb-1 opacity-50" style={{ color: s.color }} />
-              <p className="text-lg font-black font-montserrat" style={{ color: s.color }}>{s.value}</p>
-              <p className="text-xs text-base-content/45 mt-0.5">{s.label}</p>
+        {/* Body */}
+        <div className="p-6 bg-base-200/30">
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            <div className="bg-base-100 border border-base-200 rounded-2xl p-4 text-center shadow-sm">
+              <Package size={16} className="mx-auto mb-2 opacity-40 text-base-content" />
+              <p className={`text-xl font-black ${isOut ? 'text-error' : 'text-warning'}`}>{qty}</p>
+              <p className="text-[10px] font-bold text-base-content/50 uppercase tracking-widest mt-1">Available</p>
             </div>
-          ))}
-        </div>
-
-        {/* Batch & expiry detail */}
-        <div className="bg-base-200 rounded-xl p-3 mb-4">
-          <p className="text-xs font-black uppercase tracking-wider text-base-content/40 mb-2 flex items-center gap-1">
-            <Hash size={10} /> Batch Detail
-          </p>
-          <div className="grid grid-cols-2 gap-y-1.5 text-xs">
-            {[
-              { label: "Batch No.",  value: item?.batchNumber || "—" },
-              { label: "Category",   value: item?.category || "—"   },
-              {
-                label: "Expiry Date",
-                value: item?.expiryDate
-                  ? new Date(item.expiryDate).toLocaleDateString("en-IN", {
-                      day: "2-digit", month: "short", year: "numeric",
-                    })
-                  : "—",
-              },
-              {
-                label: "Days Left",
-                value: itemDays !== null
-                  ? <span style={{ color: itemDays <= 30 ? "var(--warning)" : "var(--success)" }}>{itemDays} days</span>
-                  : "—",
-              },
-            ].map((r) => (
-              <div key={r.label}>
-                <span className="text-base-content/40 font-semibold">{r.label}: </span>
-                <span className="text-base-content font-bold">{r.value}</span>
-              </div>
-            ))}
+            <div className="bg-base-100 border border-base-200 rounded-2xl p-4 text-center shadow-sm">
+              <Tag size={16} className="mx-auto mb-2 opacity-40 text-primary" />
+              <p className="text-xl font-black text-primary">₹{item?.sellingPrice ?? item?.mrp ?? "—"}</p>
+              <p className="text-[10px] font-bold text-base-content/50 uppercase tracking-widest mt-1">Unit Price</p>
+            </div>
+            <div className="bg-base-100 border border-base-200 rounded-2xl p-4 text-center shadow-sm">
+              <AlertCircle size={16} className="mx-auto mb-2 opacity-40 text-base-content" />
+              <p className="text-xl font-black text-base-content">{item?.reorderLevel ?? 10}</p>
+              <p className="text-[10px] font-bold text-base-content/50 uppercase tracking-widest mt-1">Threshold</p>
+            </div>
           </div>
-        </div>
 
-        {/* All store batches (from fetchMedicineStock) */}
-        <div>
-          <p className="text-xs font-black uppercase tracking-wider text-base-content/40 mb-2 flex items-center gap-1">
-            <Layers size={10} /> All Store Batches
-            {isLoading && <span className="ml-1 text-primary animate-pulse text-xs">· loading…</span>}
-          </p>
+          <div>
+            <h4 className="text-xs font-bold text-base-content uppercase tracking-widest mb-3 flex items-center gap-2">
+              <Layers size={14} className="text-primary" /> Active Batches in Store
+              {isLoading && <Loader2 size={12} className="animate-spin text-primary ml-2" />}
+            </h4>
 
-          {isLoading ? (
-            <div className="space-y-2">
-              {[1, 2].map((i) => <div key={i} className="skeleton h-12 w-full rounded-xl" />)}
-            </div>
-          ) : batches.length === 0 ? (
-            <p className="text-xs text-base-content/30 py-4 text-center">
-              Select medicine to load all batches
-            </p>
-          ) : (
-            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-              {batches.map((b, i) => {
-                const bDays = daysToExpiry(b.expiryDate);
-                const bColor = b.stockQuantity === 0 ? "var(--error)" : b.stockQuantity <= 7 ? "var(--warning)" : "var(--success)";
-                return (
-                  <motion.div
-                    key={b._id || i}
-                    initial={{ opacity: 0, x: -8 }}
-                    animate={{ opacity: 1,  x: 0  }}
-                    transition={{ delay: i * 0.06 }}
-                    className="flex items-center justify-between bg-base-200 rounded-xl px-3 py-2.5"
-                  >
+            {isLoading ? (
+              <div className="space-y-3">
+                <div className="skeleton h-14 w-full rounded-xl bg-base-300" />
+                <div className="skeleton h-14 w-full rounded-xl bg-base-300" />
+              </div>
+            ) : batches.length === 0 ? (
+              <div className="text-center py-6 bg-base-100 border border-base-200 border-dashed rounded-xl">
+                <p className="text-xs font-medium text-base-content/40">No batch records found in registry.</p>
+              </div>
+            ) : (
+              <div className="space-y-2.5 max-h-[200px] overflow-y-auto pr-2 scrollbar-thin">
+                {batches.map((b, i) => (
+                  <div key={b._id || i} className="flex items-center justify-between bg-base-100 border border-base-200 rounded-xl p-3 shadow-sm">
                     <div>
-                      <p className="text-xs font-bold text-base-content">{b.batchNumber}</p>
-                      <p className="text-xs text-base-content/40">
-                        {b.expiryDate
-                          ? new Date(b.expiryDate).toLocaleDateString("en-IN", {
-                              day: "2-digit", month: "short", year: "numeric",
-                            })
-                          : "—"}
-                        {bDays !== null && (
-                          <span style={{ color: bDays <= 30 ? "var(--warning)" : "var(--base-content)", opacity: bDays <= 30 ? 1 : 0.4 }}>
-                            {" "}· {bDays}d left
-                          </span>
-                        )}
+                      <p className="text-sm font-bold text-base-content font-mono">{b.batchNumber || "Unknown Batch"}</p>
+                      <p className="text-[11px] text-base-content/50 mt-0.5 flex items-center gap-1.5">
+                        <Calendar size={10} />
+                        {b.expiryDate ? new Date(b.expiryDate).toLocaleDateString("en-IN", { month: "short", year: "numeric" }) : "N/A"}
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-black" style={{ color: bColor }}>{b.stockQuantity}</p>
-                      <p className="text-xs text-base-content/35">units</p>
+                      <p className="text-base font-black text-base-content">{b.stockQuantity}</p>
+                      <p className="text-[10px] uppercase font-bold text-base-content/40 tracking-wider">Units</p>
                     </div>
-                  </motion.div>
-                );
-              })}
-            </div>
-          )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </motion.div>
     </motion.div>
   );
 });
 
-/* ─── Table skeleton ──────────────────────────────────────── */
-function TableSkeleton({ rows = 8 }) {
+/* ─── Table Skeleton ──────────────────────────────────────── */
+function TableSkeleton({ rows = 6 }) {
   return Array.from({ length: rows }).map((_, i) => (
-    <tr key={i} aria-hidden="true">
-      {Array.from({ length: 7 }).map((_, j) => (
-        <td key={j} className="py-4 px-4">
-          <div className="skeleton h-4 w-full rounded-lg" />
+    <tr key={i}>
+      {Array.from({ length: 5 }).map((_, j) => (
+        <td key={j} className="py-4 px-6 border-b border-base-200">
+          <div className="skeleton h-4 w-full rounded bg-base-300/50" />
         </td>
       ))}
     </tr>
   ));
 }
 
-/* ─── Low stock table row ─────────────────────────────────── */
+/* ─── Table Row ───────────────────────────────────────────── */
 const LowStockRow = memo(function LowStockRow({ item, index, onView }) {
-  const u       = URGENCY_META[urgencyLevel(item.stockQuantity)];
-  const expDays = useMemo(() => daysToExpiry(item.expiryDate), [item.expiryDate]);
-  const handle  = useCallback(() => onView(item), [item, onView]);
-
-  /* animated stock bar width as % of threshold (10) */
-  const pct = Math.min((item.stockQuantity / 10) * 100, 100);
+  const qty = item.availableStock ?? 0;
+  const u   = URGENCY_META[urgencyLevel(qty)];
+  const threshold = item.reorderLevel ?? 10;
+  const pct = Math.min((qty / threshold) * 100, 100);
 
   return (
-    <tr
-      className="border-b border-base-300/40 hover:bg-warning/5 transition-colors duration-200 group"
-      style={rowStyle(index)}
-    >
-      {/* Medicine */}
-      <td className="py-3.5 px-4">
-        <div className="flex items-center gap-3">
-          <div
-            className="p-1.5 rounded-lg shrink-0"
-            style={{ background: u.bg }}
-          >
-            <Pill size={12} style={{ color: u.color }} />
+    <tr className="border-b border-base-200 hover:bg-base-200/50 transition-colors group" style={rowStyle(index)}>
+      {/* Medicine Info */}
+      <td className="py-4 px-6">
+        <div className="flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border" style={{ background: u.bg, borderColor: u.border }}>
+            <Pill size={16} style={{ color: u.color }} />
           </div>
           <div>
-            <p className="font-semibold text-sm text-base-content leading-tight">{item.name}</p>
-            <p className="text-xs text-base-content/40 mt-0.5">{item.brandName || "—"}</p>
+            <p className="font-bold text-sm text-base-content">{item.name}</p>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-base-content/50">{item.brandName || "Generic"}</span>
+              <span className="w-1 h-1 rounded-full bg-base-300" />
+              <span className="text-[10px] font-bold uppercase tracking-wider text-base-content/40">{item.category || "Item"}</span>
+            </div>
           </div>
         </div>
       </td>
 
-      {/* Category */}
-      <td className="py-3.5 px-4">
-        <span className="badge badge-info text-xs">{item.category || "General"}</span>
-      </td>
-
-      {/* Batch */}
-      <td className="py-3.5 px-4">
-        <span className="font-mono text-xs bg-base-200 px-2 py-1 rounded-lg text-base-content/60">
-          {item.batchNumber || "—"}
-        </span>
-      </td>
-
-      {/* Stock qty + mini bar */}
-      <td className="py-3.5 px-4">
-        <div className="flex items-center gap-2">
-          <div className="w-16 h-1.5 rounded-full bg-base-300 overflow-hidden">
+      {/* Stock Bar */}
+      <td className="py-4 px-6">
+        <div className="min-w-[120px]">
+          <div className="flex items-baseline justify-between mb-1.5">
+            <span className="text-sm font-black tabular-nums" style={{ color: u.color }}>{qty}</span>
+            <span className="text-[10px] font-bold text-base-content/30 uppercase tracking-widest">/ {threshold} min</span>
+          </div>
+          <div className="w-full h-1.5 rounded-full bg-base-300 overflow-hidden">
             <motion.div
-              className="h-full rounded-full"
+              className="h-full rounded-full transition-all duration-1000 ease-out"
               initial={{ width: 0 }}
               animate={{ width: `${pct}%` }}
-              transition={{ duration: 1, delay: index * 0.04, ease: "easeOut" }}
               style={{ background: u.color }}
             />
           </div>
-          <span className="text-sm font-black tabular-nums" style={{ color: u.color }}>
-            {item.stockQuantity}
-          </span>
-        </div>
-      </td>
-
-      {/* Expiry */}
-      <td className="py-3.5 px-4">
-        <div>
-          <p className="text-xs text-base-content/55 flex items-center gap-1">
-            <Calendar size={9} />
-            {item.expiryDate
-              ? new Date(item.expiryDate).toLocaleDateString("en-IN", {
-                  day: "2-digit", month: "short", year: "numeric",
-                })
-              : "—"}
-          </p>
-          {expDays !== null && (
-            <p
-              className="text-xs font-bold mt-0.5"
-              style={{ color: expDays <= 30 ? "var(--warning)" : "var(--success)" }}
-            >
-              {expDays}d left
-            </p>
-          )}
         </div>
       </td>
 
       {/* Price */}
-      <td className="py-3.5 px-4">
-        <span className="text-sm font-semibold text-base-content">
-          {item.pricePerUnit ? `₹${item.pricePerUnit}` : "—"}
-        </span>
+      <td className="py-4 px-6">
+        <div className="text-sm font-bold text-base-content">
+          ₹{item.sellingPrice ?? item.mrp ?? "—"}
+        </div>
+        <div className="text-[10px] text-base-content/40 uppercase tracking-wider font-semibold mt-0.5">Per Unit</div>
       </td>
 
-      {/* Status + action */}
-      <td className="py-3.5 px-4">
-        <div className="flex items-center gap-2">
-          <UrgencyBadge qty={item.stockQuantity} />
-          <motion.button
-            whileHover={{ scale: 1.08 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={handle}
-            aria-label={`View details for ${item.name}`}
-            className="p-1.5 rounded-lg hover:bg-base-200 transition-colors focus-visible:outline-none"
-            style={{ color: "var(--primary)" }}
-          >
-            <Eye size={13} />
-          </motion.button>
-        </div>
+      {/* Status */}
+      <td className="py-4 px-6">
+        <UrgencyBadge qty={qty} />
+      </td>
+
+      {/* Actions */}
+      <td className="py-4 px-6 text-right">
+        <button
+          onClick={() => onView(item)}
+          className="btn btn-sm btn-ghost border border-base-300 text-base-content/60 hover:text-primary hover:border-primary hover:bg-primary/5"
+        >
+          <Eye size={14} />
+          <span className="hidden lg:inline ml-1">Details</span>
+        </button>
       </td>
     </tr>
   );
 });
 
 /* ═══════════════════════════════════════════════════════════
-   MAIN PAGE
+   MAIN PAGE EXPORT
 ═══════════════════════════════════════════════════════════ */
 export default function LowStock() {
   const dispatch = useDispatch();
 
-  /* ── Slice selectors ── */
-  const { lowStockItems, lowStockMeta, medicineStockDetail, loading } =
-    useSelector((s) => s.pharmacyStore);
+  const { lowStockItems, lowStockMeta, medicineStockDetail, loading } = useSelector((s) => s.pharmacyStore);
 
-  /* ── Local UI state ── */
-  const [search,   setSearch  ] = useState("");
-  const [sortKey,  setSortKey ] = useState("stockQuantity"); // "stockQuantity" | "name" | "expiryDate"
-  const [sortAsc,  setSortAsc ] = useState(true);
-  const [catFilter,setCatFilter] = useState("all");
-  const [selected, setSelected ] = useState(null); // item for modal
+  const [search, setSearch]       = useState("");
+  const [sortKey, setSortKey]     = useState("availableStock");
+  const [sortAsc, setSortAsc]     = useState(true);
+  const [catFilter, setCatFilter] = useState("all");
+  const [selected, setSelected]   = useState(null);
 
-  const isLoading     = loading.lowStock;
+  const isLoading      = loading.lowStock;
   const isStockLoading = loading.medicineStock;
 
-  /* ── Fetch on mount ── */
   useEffect(() => {
     dispatch(fetchLowStock({}));
   }, [dispatch]);
 
-  /* ── Fetch stock detail when modal opens ── */
   useEffect(() => {
     if (selected?.medicineId) {
       dispatch(fetchMedicineStock(selected.medicineId));
     }
   }, [dispatch, selected?.medicineId]);
 
-  /* ── Derived data ── */
-  const categories = useMemo(
-    () => ["all", ...Array.from(new Set(lowStockItems.map((i) => i.category || "General").filter(Boolean)))],
-    [lowStockItems]
-  );
+  /* ── Derived Data ── */
+  const categories = useMemo(() => ["all", ...Array.from(new Set(lowStockItems.map((i) => i.category || "General").filter(Boolean)))], [lowStockItems]);
 
   const filtered = useMemo(() => {
     let list = lowStockItems;
     if (catFilter !== "all") list = list.filter((i) => (i.category || "General") === catFilter);
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter(
-        (i) =>
-          i.name?.toLowerCase().includes(q) ||
-          i.brandName?.toLowerCase().includes(q) ||
-          i.batchNumber?.toLowerCase().includes(q)
-      );
+      list = list.filter((i) => i.name?.toLowerCase().includes(q) || i.brandName?.toLowerCase().includes(q));
     }
     return [...list].sort((a, b) => {
-      let av = a[sortKey], bv = b[sortKey];
-      if (sortKey === "expiryDate") { av = av ? new Date(av) : Infinity; bv = bv ? new Date(bv) : Infinity; }
+      let av = a[sortKey] ?? 0; 
+      let bv = b[sortKey] ?? 0;
       if (typeof av === "string") av = av.toLowerCase();
       if (typeof bv === "string") bv = bv.toLowerCase();
       if (av < bv) return sortAsc ? -1 : 1;
@@ -657,209 +484,147 @@ export default function LowStock() {
     });
   }, [lowStockItems, search, catFilter, sortKey, sortAsc]);
 
-  /* ── Stat derivations ── */
-  const outCount      = useMemo(() => lowStockItems.filter((i) => i.stockQuantity === 0).length,          [lowStockItems]);
-  const criticalCount = useMemo(() => lowStockItems.filter((i) => i.stockQuantity > 0 && i.stockQuantity <= 3).length, [lowStockItems]);
-  const urgentCount   = useMemo(() => lowStockItems.filter((i) => i.stockQuantity > 3 && i.stockQuantity <= 7).length, [lowStockItems]);
-  const expiringSoon  = useMemo(() => lowStockItems.filter((i) => { const d = daysToExpiry(i.expiryDate); return d !== null && d <= 30; }).length, [lowStockItems]);
+  /* ── Stats ── */
+  const outCount      = useMemo(() => lowStockItems.filter((i) => (i.availableStock ?? 0) === 0).length, [lowStockItems]);
+  const criticalCount = useMemo(() => lowStockItems.filter((i) => (i.availableStock ?? 0) > 0 && (i.availableStock ?? 0) <= 3).length, [lowStockItems]);
+  const urgentCount   = useMemo(() => lowStockItems.filter((i) => (i.availableStock ?? 0) > 3 && (i.availableStock ?? 0) <= 7).length, [lowStockItems]);
 
-  /* ── Sort toggle ── */
   const toggleSort = useCallback((key) => {
     if (sortKey === key) setSortAsc((a) => !a);
     else { setSortKey(key); setSortAsc(true); }
   }, [sortKey]);
 
-  const SortIcon = ({ col }) => (
-    sortKey === col
-      ? sortAsc ? <ChevronUp size={11} className="inline ml-0.5" /> : <ChevronDown size={11} className="inline ml-0.5" />
-      : null
-  );
-
   return (
-    <div className="min-h-screen" style={{ background: "var(--base-100)" }}>
+    <div data-theme="pharmacy" className="min-h-screen relative z-0 pb-16">
       <WarningBg />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 relative z-10">
 
         {/* ── Header ── */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1,  y: 0  }}
-          className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8"
-        >
+        <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 mb-8">
           <div>
-            <div className="flex items-center gap-2 mb-1">
-              <motion.div
-                animate={{ scale: [1, 1.25, 1] }}
-                transition={{ duration: 1.6, repeat: Infinity, repeatDelay: 2 }}
-              >
-                <ShieldAlert size={17} style={{ color: "var(--warning)" }} />
-              </motion.div>
-              <span className="text-xs font-black uppercase tracking-widest" style={{ color: "var(--warning)" }}>
-                Reorder Required
+            <div className="flex items-center gap-2 mb-2">
+              <span className="flex h-2.5 w-2.5 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-error"></span>
               </span>
+              <span className="text-xs font-black uppercase tracking-widest text-error">Reorder Required</span>
             </div>
-            <h1 className="section-heading text-3xl lg:text-4xl">
-              Low <span className="text-gradient-primary">Stock</span>
+            <h1 className="text-3xl lg:text-4xl font-black font-montserrat tracking-tight text-base-content">
+              Low <span className="text-error">Stock Alerts</span>
             </h1>
-            <p className="text-sm text-base-content/50 mt-1">
-              {lowStockMeta?.count ?? lowStockItems.length} items below threshold
-              {lowStockMeta?.threshold != null && (
-                <span className="ml-1.5 px-1.5 py-0.5 rounded-md text-xs font-bold" style={{ background: "color-mix(in oklch, var(--warning) 12%, var(--base-200))", color: "var(--warning)" }}>
-                  ≤ {lowStockMeta.threshold} units
-                </span>
-              )}
+            <p className="text-sm text-base-content/50 mt-2 font-medium">
+              Monitor inventory nearing depletion. Recommended threshold is <strong className="text-base-content">≤ {lowStockMeta?.threshold ?? 10} units</strong>.
             </p>
           </div>
 
-          <motion.button
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.96 }}
+          <button
             onClick={() => dispatch(fetchLowStock({}))}
             disabled={isLoading}
-            aria-label="Refresh low stock"
-            className="btn-primary-cta flex items-center gap-2 text-xs px-4 py-2.5 disabled:opacity-60"
+            className="btn bg-base-100 border border-base-300 text-base-content shadow-sm hover:bg-base-200"
           >
-            <RefreshCw size={13} className={isLoading ? "animate-spin" : ""} />
-            Refresh
-          </motion.button>
+            <RefreshCw size={16} className={isLoading ? "animate-spin text-primary" : "text-base-content/60"} />
+            <span className="hidden sm:inline">Sync Data</span>
+          </button>
         </motion.div>
 
-        {/* ── Stat cards ── */}
-        <motion.div
-          variants={stagger}
-          initial="hidden"
-          animate="show"
-          className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8"
-        >
-          <StatCard icon={TrendingDown}  label="Total Low Stock"  value={lowStockMeta?.count ?? lowStockItems.length} sub={`threshold ≤ ${lowStockMeta?.threshold ?? 10}`} color="var(--warning)" />
-          <StatCard icon={Zap}           label="Out of Stock"     value={outCount}      color="var(--error)"   pulse={outCount > 0} />
-          <StatCard icon={ShieldAlert}   label="Critical (≤3)"   value={criticalCount} color="oklch(62% 0.22 25)" />
-          <StatCard icon={AlertTriangle} label="Urgent (≤7)"      value={urgentCount}   color="var(--accent)"  />
-          <StatCard icon={Calendar}      label="Expiring ≤30d"   value={expiringSoon}  color="var(--info)"    />
+        {/* ── Stat Cards ── */}
+        <motion.div variants={STAGGER} initial="hidden" animate="show" className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <StatCard icon={Layers}        label="Total Alerts"  value={lowStockMeta?.count ?? lowStockItems.length} color="var(--primary)" />
+          <StatCard icon={Zap}           label="Out of Stock"  value={outCount}      color="var(--error)"   pulse={outCount > 0} />
+          <StatCard icon={ShieldAlert}   label="Critical (≤3)" value={criticalCount} color="oklch(62% 0.22 25)" />
+          <StatCard icon={AlertTriangle} label="Urgent (≤7)"   value={urgentCount}   color="var(--warning)"  />
         </motion.div>
 
         {/* ── Charts ── */}
-        <div className="grid lg:grid-cols-2 gap-6 mb-8">
-          <motion.div variants={fadeUp} initial="hidden" animate="show" className="glass-card p-5">
-            <p className="font-bold text-sm mb-1 flex items-center gap-2 text-base-content">
-              <SlidersHorizontal size={13} className="text-warning" /> Low Stock by Category
-            </p>
-            <p className="text-xs text-base-content/40 mb-4">Items count per medicine category</p>
+        <div className="grid lg:grid-cols-2 gap-4 mb-6">
+          <motion.div variants={FADE_UP} initial="hidden" animate="show" className="card bg-base-100 border border-base-300 shadow-sm p-6">
+            <h3 className="font-bold text-sm mb-1 flex items-center gap-2 text-base-content uppercase tracking-wider">
+              <SlidersHorizontal size={14} className="text-primary" /> Category Distribution
+            </h3>
+            <p className="text-xs text-base-content/40 mb-6 font-medium">Alerts grouped by product type</p>
             <CategoryChart items={lowStockItems} />
           </motion.div>
 
-          <motion.div variants={fadeUp} initial="hidden" animate="show" className="glass-card p-5">
-            <p className="font-bold text-sm mb-1 flex items-center gap-2 text-base-content">
-              <Zap size={13} className="text-error" /> Urgency Breakdown
-            </p>
-            <p className="text-xs text-base-content/40 mb-4">Distribution by severity level</p>
+          <motion.div variants={FADE_UP} initial="hidden" animate="show" className="card bg-base-100 border border-base-300 shadow-sm p-6">
+            <h3 className="font-bold text-sm mb-1 flex items-center gap-2 text-base-content uppercase tracking-wider">
+              <ShieldAlert size={14} className="text-error" /> Severity Breakdown
+            </h3>
+            <p className="text-xs text-base-content/40 mb-6 font-medium">Items categorized by urgency level</p>
             <UrgencyPie items={lowStockItems} />
           </motion.div>
         </div>
 
-        {/* ── Filters ── */}
-        <motion.div
-          variants={fadeUp}
-          initial="hidden"
-          animate="show"
-          className="glass-card p-4 mb-4 flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap"
-        >
-          {/* Search */}
-          <div className="relative flex-1 min-w-48">
-            <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
-            <input
-              type="search"
-              placeholder="Search medicine, brand, batch…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              aria-label="Search low stock items"
-              className="input-field w-full pl-8 text-xs py-2"
-            />
+        {/* ── Data Table ── */}
+        <motion.div variants={FADE_UP} initial="hidden" animate="show" className="card bg-base-100 border border-base-300 shadow-sm overflow-hidden">
+          
+          {/* Table Toolbar */}
+          <div className="p-4 border-b border-base-200 bg-base-100/50 flex flex-col md:flex-row gap-4 items-center justify-between">
+            <div className="relative w-full md:w-80">
+              <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+              <input
+                type="text"
+                placeholder="Search products..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="input-field w-full pl-9 h-10 text-sm bg-base-200/50"
+              />
+            </div>
+            <div className="flex gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 scrollbar-hide">
+              {categories.slice(0, 5).map((cat) => (
+                <button
+                  key={cat} onClick={() => setCatFilter(cat)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap capitalize ${
+                    catFilter === cat ? "bg-base-content text-base-100" : "bg-base-200 text-base-content/60 hover:bg-base-300"
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Category pills */}
-          <div className="flex gap-1.5 flex-wrap">
-            {categories.slice(0, 6).map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setCatFilter(cat)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all capitalize ${
-                  catFilter === cat
-                    ? "bg-warning text-warning-content"
-                    : "bg-base-200 hover:bg-base-300 text-base-content/60"
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-
-          <p className="text-xs text-base-content/40 ml-auto shrink-0">
-            {filtered.length} item{filtered.length !== 1 ? "s" : ""}
-          </p>
-        </motion.div>
-
-        {/* ── Table ──────────────────────────────────────────────────
-            IMPORTANT: plain <table>/<tbody>/<tr> only.
-            No motion.table / motion.tbody / motion.tr —
-            they render as <div> and break HTML table structure.
-        ─────────────────────────────────────────────────────────── */}
-        <motion.div variants={fadeUp} initial="hidden" animate="show" className="glass-card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full" aria-label="Low stock medicines table">
-              <thead>
-                <tr className="border-b border-base-300 bg-base-200/60">
+          <div className="overflow-x-auto min-h-[300px]">
+            <table className="w-full text-left" aria-label="Low stock items registry">
+              <thead className="bg-base-200/50">
+                <tr>
                   {[
-                    { key: "name",          label: "Medicine"     },
-                    { key: null,            label: "Category"     },
-                    { key: null,            label: "Batch"        },
-                    { key: "stockQuantity", label: "Stock Qty"    },
-                    { key: "expiryDate",    label: "Expiry"       },
-                    { key: null,            label: "Price"        },
-                    { key: null,            label: "Status"       },
+                    { key: "name",           label: "Product Name" },
+                    { key: "availableStock", label: "Available Qty" },
+                    { key: "sellingPrice",   label: "Unit Price" },
+                    { key: null,             label: "Alert Status" },
+                    { key: null,             label: "Actions" },
                   ].map(({ key, label }) => (
                     <th
                       key={label}
-                      scope="col"
                       onClick={key ? () => toggleSort(key) : undefined}
-                      className={`text-left py-3 px-4 text-xs font-black uppercase tracking-widest text-base-content/45 ${key ? "cursor-pointer hover:text-warning select-none" : ""}`}
+                      className={`py-4 px-6 text-xs font-bold uppercase tracking-widest text-base-content/50 ${key ? "cursor-pointer hover:text-base-content select-none" : ""}`}
                     >
-                      {label}
-                      {key && <SortIcon col={key} />}
+                      <div className={`flex items-center gap-1.5 ${label === 'Actions' ? 'justify-end' : ''}`}>
+                        {label}
+                        {key && sortKey === key && (sortAsc ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                      </div>
                     </th>
                   ))}
                 </tr>
               </thead>
-
-              {/* plain <tbody> — never motion.tbody */}
               <tbody>
                 {isLoading ? (
-                  <TableSkeleton rows={8} />
+                  <TableSkeleton rows={5} />
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-20 text-center">
-                      <div className="flex flex-col items-center gap-3">
-                        <div className="p-4 rounded-2xl bg-base-200">
-                          <Package size={28} className="text-base-content/25" />
-                        </div>
-                        <p className="text-sm text-base-content/40 font-semibold">No low-stock items found</p>
-                        {search && (
-                          <button
-                            onClick={() => setSearch("")}
-                            className="text-xs text-primary hover:underline"
-                          >
-                            Clear search
-                          </button>
-                        )}
+                    <td colSpan={5} className="py-24 text-center">
+                      <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-base-200 mb-4">
+                        <Package size={28} className="text-base-content/30" />
                       </div>
+                      <h3 className="font-bold text-base-content text-lg">All caught up!</h3>
+                      <p className="text-sm text-base-content/50 mt-1 max-w-sm mx-auto">No inventory items are currently falling below their reorder thresholds.</p>
                     </td>
                   </tr>
                 ) : (
-                  /* plain <tr> with CSS animation — never motion.tr */
                   filtered.map((item, i) => (
                     <LowStockRow
-                      key={`${item.medicineId}-${item.batchNumber}-${i}`}
+                      key={item.inventoryId || i}
                       item={item}
                       index={i}
                       onView={setSelected}
@@ -869,34 +634,25 @@ export default function LowStock() {
               </tbody>
             </table>
           </div>
-
-          {/* Footer summary */}
+          
+          {/* Footer Info */}
           {!isLoading && filtered.length > 0 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-base-300/50">
-              <p className="text-xs text-base-content/40">
-                Showing <strong className="text-base-content/60">{filtered.length}</strong> of{" "}
-                <strong className="text-base-content/60">{lowStockItems.length}</strong> low-stock items
+            <div className="p-4 border-t border-base-200 bg-base-200/30 flex items-center justify-between">
+              <p className="text-xs font-semibold text-base-content/50 uppercase tracking-widest">
+                Showing {filtered.length} of {lowStockItems.length} Alerts
               </p>
-              <div className="flex items-center gap-1.5 text-xs text-base-content/40">
-                <div className="w-2 h-2 rounded-full" style={{ background: "var(--error)" }} />   Out of Stock: {outCount}
-                <div className="w-2 h-2 rounded-full ml-2" style={{ background: "var(--warning)" }} /> Urgent: {urgentCount + criticalCount}
-              </div>
             </div>
           )}
         </motion.div>
       </div>
 
-      {/* ── Stock detail modal ── */}
+      {/* ── Detail Modal ── */}
       <AnimatePresence>
         {selected && (
           <StockDetailModal
             item={selected}
             onClose={() => setSelected(null)}
-            stockDetail={
-              medicineStockDetail?.medicineId === selected.medicineId
-                ? medicineStockDetail
-                : null
-            }
+            stockDetail={medicineStockDetail?.medicineId === selected.medicineId ? medicineStockDetail : null}
             isLoading={isStockLoading}
           />
         )}

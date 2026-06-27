@@ -38,6 +38,7 @@ import {
   clearPrescriptionUpload,
   uploadPrescriptionFile,
   uploadCartItemPrescription,
+  fetchDeliveryPricing,
   // Selectors
   selectCart,
   selectCartItems,
@@ -52,6 +53,8 @@ import {
   selectCouponError,
   selectPrescriptionUploadLoading,
   selectPrescriptionUploadError,
+  selectDeliveryPricing,
+  selectDeliveryPricingLoading,
 } from '@/store/slices/pharmacyOrderSlice';
 
 import {
@@ -144,7 +147,6 @@ const loadRazorpayScript = () =>
     document.body.appendChild(s);
   });
 
-/** Clean Promise-based wrapper for Razorpay */
 const openRazorpayModal = ({ rzpKey, rzpOrderId, amount, name, description, prefill }) =>
   new Promise((resolve, reject) => {
     if (typeof window === 'undefined' || !window.Razorpay) {
@@ -194,7 +196,6 @@ const slideVariants = {
 // § SUB-COMPONENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ─── RxImagePreview ───────────────────────────────────────────────────────────
 const RxImagePreview = React.memo(({ imageUrl, onView }) => {
   if (!imageUrl) return null;
   const isPdf = isPdfUrl(imageUrl);
@@ -220,7 +221,6 @@ const RxImagePreview = React.memo(({ imageUrl, onView }) => {
 });
 RxImagePreview.displayName = 'RxImagePreview';
 
-// ─── RxLightbox ──────────────────────────────────────────────────────────────
 const RxLightbox = React.memo(({ imageUrl, medicineName, onClose }) => {
   const isPdf = isPdfUrl(imageUrl);
   useEffect(() => {
@@ -283,7 +283,6 @@ const RxLightbox = React.memo(({ imageUrl, medicineName, onClose }) => {
 });
 RxLightbox.displayName = 'RxLightbox';
 
-// ─── PrescriptionBadge ───────────────────────────────────────────────────────
 const PrescriptionBadge = React.memo(({ item, onUpload, onView, isUploading }) => {
   const rxStatus = getPrescriptionStatus(item);
   if (!rxStatus) return null;
@@ -337,15 +336,14 @@ const PrescriptionBadge = React.memo(({ item, onUpload, onView, isUploading }) =
 });
 PrescriptionBadge.displayName = 'PrescriptionBadge';
 
-// ─── PrescriptionUploadModal ──────────────────────────────────────────────────
 const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUploading }) => {
   const dispatch   = useDispatch();
   const medicine   = item?.medicine;
   const fileRef    = useRef(null);
 
-  const [selectedFile,      setSelectedFile]    = useState(null);
+  const [selectedFile,       setSelectedFile]    = useState(null);
   const [localPreviewUrl, setLocalPreviewUrl] = useState(null);
-  const [uploadError,       setUploadError]     = useState(null);
+  const [uploadError,        setUploadError]     = useState(null);
 
   useEffect(() => {
     return () => { if (localPreviewUrl) URL.revokeObjectURL(localPreviewUrl); };
@@ -394,7 +392,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
         className="card w-full max-w-md p-6 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-error/10 border border-error/20 flex items-center justify-center shrink-0">
@@ -415,7 +412,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
           </button>
         </div>
 
-        {/* Medicine info row */}
         {medicine?.brandName && (
           <div className="flex items-center gap-3 p-3 rounded-md bg-base-200 border border-base-300">
             <Package className="w-4 h-4 text-primary shrink-0" />
@@ -428,7 +424,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
           </div>
         )}
 
-        {/* Currently uploaded (replace flow) */}
         {item?.prescription?.imageUrl && !selectedFile && (
           <div className="space-y-1.5">
             <p className="text-[9px] uppercase tracking-widest text-base-content/40 font-bold">
@@ -453,7 +448,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
           </div>
         )}
 
-        {/* New file preview */}
         {selectedFile && (
           <div className="space-y-1.5">
             <p className="text-[9px] uppercase tracking-widest text-base-content/40 font-bold">
@@ -481,7 +475,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
           </div>
         )}
 
-        {/* Upload zone */}
         {!selectedFile && (
           <div
             className="border-2 border-dashed border-base-300 rounded-md p-6 flex flex-col items-center justify-center gap-3 hover:border-primary/50 hover:bg-primary/5 transition-all cursor-pointer group"
@@ -503,7 +496,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
           </div>
         )}
 
-        {/* Re-select option after file chosen */}
         {selectedFile && (
           <button onClick={() => fileRef.current?.click()}
                   className="w-full flex items-center justify-center gap-1.5 py-2 border border-dashed border-base-300 rounded-md text-[10px] font-bold text-base-content/50 hover:text-primary hover:border-primary/40 transition-all">
@@ -514,7 +506,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
           </button>
         )}
 
-        {/* Warning note */}
         <div className="alert alert-warning text-[10px] py-2">
           <AlertTriangle className="w-4 h-4 shrink-0" />
           <p className="leading-relaxed">
@@ -523,7 +514,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
           </p>
         </div>
 
-        {/* Error message */}
         <AnimatePresence>
           {uploadError && (
             <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
@@ -535,7 +525,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
           )}
         </AnimatePresence>
 
-        {/* Actions */}
         <div className="flex gap-2 pt-1">
           <button onClick={onClose} disabled={isUploading}
                   className="btn btn-ghost flex-1 border border-base-300">
@@ -554,7 +543,6 @@ const PrescriptionUploadModal = React.memo(({ item, onConfirm, onClose, isUpload
 });
 PrescriptionUploadModal.displayName = 'PrescriptionUploadModal';
 
-// ─── PrescriptionStep ─────────────────────────────────────────────────────────
 const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId }) => {
   const rxItems    = items.filter((i) => i.isPrescriptionRequired);
   const missingRx  = rxItems.filter((i) => !i.prescription?.imageUrl);
@@ -567,7 +555,6 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
       initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }}
       className="space-y-4"
     >
-      {/* Banner */}
       <div className="alert alert-warning py-3">
         <FileText className="w-5 h-5 shrink-0" />
         <div>
@@ -580,7 +567,6 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
         </div>
       </div>
 
-      {/* Progress bar */}
       <div>
         <div className="flex justify-between text-[9px] font-bold uppercase tracking-widest text-base-content/40 mb-1.5">
           <span>Upload Progress</span>
@@ -598,7 +584,6 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
         </div>
       </div>
 
-      {/* Rx item cards */}
       <div className="space-y-3">
         {rxItems.map((item) => {
           const medicine   = item.medicine;
@@ -661,7 +646,6 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
         })}
       </div>
 
-      {/* Skip note */}
       {!allDone && (
         <div className="alert bg-base-200 border-base-300 py-2 mt-4 text-[10px]">
           <AlertCircle className="w-4 h-4 text-base-content/40 shrink-0" />
@@ -676,7 +660,6 @@ const PrescriptionStep = React.memo(({ items, onUpload, onView, uploadingItemId 
 });
 PrescriptionStep.displayName = 'PrescriptionStep';
 
-// ─── CartItem ─────────────────────────────────────────────────────────────────
 const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescription, onViewPrescription, isUpdating }) => {
   const medicine   = item.medicine;
   const primaryImg = medicine?.images?.find((i) => i.isPrimary)?.url ?? medicine?.images?.[0]?.url ?? null;
@@ -688,7 +671,6 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
                 className="card flex flex-col sm:flex-row gap-4 p-4 group"
                 role="listitem"
     >
-      {/* Medicine thumbnail */}
       <div className="relative w-full sm:w-24 h-24 shrink-0 rounded-xl overflow-hidden bg-base-200 border border-base-300">
         {primaryImg
           ? <img src={primaryImg} alt={medicine?.brandName ?? 'Medicine'} loading="lazy" className="w-full h-full object-contain p-2" />
@@ -700,7 +682,6 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
         )}
       </div>
 
-      {/* Medicine details */}
       <div className="flex-1 min-w-0 space-y-1">
         <h3 className="text-xs text-base-content font-bold truncate">{medicine?.brandName ?? 'Medicine'}</h3>
         <p className="text-[10px] text-base-content/50 font-medium uppercase tracking-wider truncate">
@@ -717,9 +698,7 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
         <PrescriptionBadge item={item} onUpload={onUploadPrescription} onView={onViewPrescription} isUploading={isUpdating} />
       </div>
 
-      {/* Quantity + price + remove */}
       <div className="flex sm:flex-col items-center sm:items-end justify-between gap-3 shrink-0">
-        {/* Quantity stepper */}
         <div className="flex items-center gap-1 bg-base-200 rounded-lg border border-base-300 p-0.5"
              role="group" aria-label={`Quantity for ${medicine?.brandName}`}>
           <button onClick={() => onQuantityChange(item, item.quantity - 1)} disabled={item.quantity <= 1 || isUpdating}
@@ -737,7 +716,6 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
           </button>
         </div>
 
-        {/* Line total */}
         <span className="text-base text-base-content font-bold">₹{lineTotal}</span>
 
         <button onClick={() => onRemove(item)} disabled={isUpdating} aria-label={`Remove ${medicine?.brandName ?? 'item'}`}
@@ -750,7 +728,6 @@ const CartItem = React.memo(({ item, onQuantityChange, onRemove, onUploadPrescri
 });
 CartItem.displayName = 'CartItem';
 
-// ─── AddressForm ──────────────────────────────────────────────────────────────
 const AddressForm = React.memo(({ address, onChange, errors }) => (
   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
     {ADDRESS_FIELDS.map((field) => (
@@ -781,7 +758,6 @@ const AddressForm = React.memo(({ address, onChange, errors }) => (
 ));
 AddressForm.displayName = 'AddressForm';
 
-// ─── CouponInput ──────────────────────────────────────────────────────────────
 const CouponInput = React.memo(({ orderTotal, coupon, couponLoading, couponError, onApply, onRemove }) => {
   const [code, setCode] = useState('');
 
@@ -831,19 +807,20 @@ const CouponInput = React.memo(({ orderTotal, coupon, couponLoading, couponError
 });
 CouponInput.displayName = 'CouponInput';
 
-// ─── BillSummary ──────────────────────────────────────────────────────────────
-const BillSummary = React.memo(({ billSummary, subscriptionDiscount, coupon, paymentMethod }) => {
+const BillSummary = React.memo(({ billSummary, subscriptionDiscount, coupon, paymentMethod, deliveryCharge, platformFee, deliveryType, deliveryPricing }) => {
   const subTotal   = billSummary.itemsTotal  ?? 0;
   const taxTotal   = billSummary.estimatedTax ?? 0;
   const grossTotal = billSummary.totalAmount  ?? 0;
   const subSavings   = parseFloat((subTotal * (subscriptionDiscount / 100)).toFixed(2));
   const couponSaving = coupon?.discountAmount ?? 0;
-  const finalTotal   = parseFloat(Math.max(0, grossTotal - subSavings - couponSaving).toFixed(2));
+  
+  const finalTotal   = parseFloat(Math.max(0, grossTotal - subSavings - couponSaving + deliveryCharge + platformFee).toFixed(2));
 
   const rows = [
     { label: 'Items Total',      value: `₹${subTotal.toFixed(2)}`,  highlight: false },
     { label: 'Estimated GST',    value: `₹${taxTotal.toFixed(2)}`,  highlight: false },
-    { label: 'Delivery Charges', value: 'FREE',                     highlight: true  },
+    { label: `Delivery (${deliveryType})`, value: deliveryCharge > 0 ? `₹${deliveryCharge.toFixed(2)}` : 'FREE', highlight: deliveryCharge === 0 },
+    { label: 'Platform Fee',     value: `₹${platformFee.toFixed(2)}`, highlight: false },
     ...(subSavings > 0 ? [{ label: `Plan Discount (${subscriptionDiscount}%)`, value: `-₹${subSavings.toFixed(2)}`, highlight: true, isDiscount: true }] : []),
     ...(couponSaving > 0 ? [{ label: `Coupon (${coupon.code})`, value: `-₹${couponSaving.toFixed(2)}`, highlight: true, isDiscount: true }] : []),
   ];
@@ -862,7 +839,7 @@ const BillSummary = React.memo(({ billSummary, subscriptionDiscount, coupon, pay
       </div>
       {(subSavings > 0 || couponSaving > 0) && (
         <p className="text-[10px] font-bold text-success flex items-center gap-1 pt-1">
-          <BadgePercent className="w-3 h-3" /> You save ₹{(subSavings + couponSaving).toFixed(2)} on this order
+          <BadgePercent className="w-3 h-3" /> You save ₹{(subSavings + couponSaving).toFixed(2)} on items
         </p>
       )}
     </div>
@@ -870,7 +847,6 @@ const BillSummary = React.memo(({ billSummary, subscriptionDiscount, coupon, pay
 });
 BillSummary.displayName = 'BillSummary';
 
-// ─── Cute & Lovable SVG Animation Variants ────────────────────────────────────
 const bounceVariant = {
   animate: { 
     y: [0, -12, 0], 
@@ -902,7 +878,6 @@ const floatItemVariant = (delay, yOffset, rotate) => ({
   },
 });
 
-// ─── EmptyCart (Lovable Pharmacy Bag) ─────────────────────────────────────────
 const EmptyCart = React.memo(({ onShop }) => (
   <motion.div
     initial={{ opacity: 0, scale: 0.95 }}
@@ -923,34 +898,29 @@ const EmptyCart = React.memo(({ onShop }) => (
           </linearGradient>
         </defs>
 
-        {/* Floor Shadow */}
         <motion.ellipse
           variants={shadowVariant}
           animate="animate"
           cx="100" cy="180" rx="55" ry="8" fill="currentColor" className="text-base-content/20 origin-[100px_180px]"
         />
 
-        {/* Floating Sparkle Left */}
         <motion.path 
           variants={floatItemVariant(0.5, -15, 45)} animate="animate" 
           d="M35 60 Q40 60 40 55 Q40 60 45 60 Q40 60 40 65 Q40 60 35 60 Z" 
           fill="var(--warning)" opacity="0.8" className="origin-[40px_60px]"
         />
         
-        {/* Floating Heart Right */}
         <motion.path 
           variants={floatItemVariant(1.2, -20, -10)} animate="animate" 
           d="M165 55 C165 45, 150 45, 150 55 C150 70, 165 80, 165 80 C165 80, 180 70, 180 55 C180 45, 165 45, 165 55 Z" 
           fill="var(--error)" opacity="0.8" className="origin-[165px_60px]"
         />
 
-        {/* Floating Capsule Bottom Left */}
         <motion.g variants={floatItemVariant(0.8, 15, 20)} animate="animate" className="origin-[45px_145px]">
           <rect x="35" y="135" width="20" height="10" rx="5" fill="url(#capsuleGrad)" opacity="0.9" />
           <path d="M45 135 H50 V145 H45 Z" fill="var(--primary)" opacity="0.2" />
         </motion.g>
 
-        {/* Main Lovable Bag Character */}
         <motion.g variants={bounceVariant} animate="animate" className="origin-[100px_170px]">
           
           <path d="M 70 75 C 70 40, 130 40, 130 75" fill="none" stroke="currentColor" strokeWidth="10" strokeLinecap="round" className="text-base-300" />
@@ -1000,7 +970,6 @@ const EmptyCart = React.memo(({ onShop }) => (
 ));
 EmptyCart.displayName = 'EmptyCart';
 
-// ─── CartSkeleton ─────────────────────────────────────────────────────────────
 const CartSkeleton = () => (
   <div className="space-y-3" aria-busy="true">
     {[...Array(3)].map((_, i) => (
@@ -1016,7 +985,6 @@ const CartSkeleton = () => (
   </div>
 );
 
-// ─── StepIndicator ────────────────────────────────────────────────────────────
 const StepIndicator = React.memo(({ step, onBack, hasRxItems }) => {
   const STEPS = [
     { key: 'cart',         label: 'Cart'     },
@@ -1084,14 +1052,18 @@ export default function CartPage() {
   const pharmacyDiscount = mySub?.limits?.pharmacyDiscountPercent ?? 0;
   const subscriptionName = useSelector(selectMySubPlanName) ?? '';
 
+  const deliveryPricing        = useSelector(selectDeliveryPricing);
+  const deliveryPricingLoading = useSelector(selectDeliveryPricingLoading);
+
   // ── Local state ───────────────────────────────────────────────────────────────
-  const [address,        setAddress]        = useState(DEFAULT_ADDRESS);
-  const [addressErrors,  setAddressErrors]  = useState({});
-  const [paymentMethod,  setPaymentMethod]  = useState('Razorpay');
-  const [updatingItemId, setUpdatingItemId] = useState(null);
-  const [step,           setStep]           = useState('cart');
-  const [showStoreInfo,  setShowStoreInfo]  = useState(false);
-  const [slideDir,       setSlideDir]       = useState(1);
+  const [address,         setAddress]        = useState(DEFAULT_ADDRESS);
+  const [addressErrors,   setAddressErrors]  = useState({});
+  const [paymentMethod,   setPaymentMethod]  = useState('Razorpay');
+  const [deliveryType,    setDeliveryType]   = useState('Standard');
+  const [updatingItemId,  setUpdatingItemId] = useState(null);
+  const [step,            setStep]           = useState('cart');
+  const [showStoreInfo,   setShowStoreInfo]  = useState(false);
+  const [slideDir,        setSlideDir]       = useState(1);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
 
   const [rxModalItem,   setRxModalItem]   = useState(null);
@@ -1112,10 +1084,23 @@ export default function CartPage() {
     return parseFloat(Math.max(0, gross - subSaved).toFixed(2));
   }, [billSummary.totalAmount, pharmacyDiscount]);
 
+  // Fetch Delivery Pricing whenever the base cart total changes
+  useEffect(() => {
+    if (items.length > 0) {
+      dispatch(fetchDeliveryPricing({ orderTotal: orderTotalForCoupon, deliveryType: 'Standard' }));
+    }
+  }, [dispatch, orderTotalForCoupon, items.length]);
+
+  const platformFee = deliveryPricing?.platformFee ?? 5;
+  const deliveryCharge = deliveryType === 'Express' 
+    ? (deliveryPricing?.delivery?.express?.charge ?? 0)
+    : (deliveryPricing?.delivery?.standard?.charge ?? 0);
+
   const finalPayable = useMemo(() => {
     const couponSaving = coupon?.discountAmount ?? 0;
-    return parseFloat(Math.max(0, orderTotalForCoupon - couponSaving).toFixed(2));
-  }, [orderTotalForCoupon, coupon]);
+    const discountedTotal = Math.max(0, orderTotalForCoupon - couponSaving);
+    return parseFloat((discountedTotal + deliveryCharge + platformFee).toFixed(2));
+  }, [orderTotalForCoupon, coupon, deliveryCharge, platformFee]);
 
   const goToStep = useCallback((next) => {
     setSlideDir(STEP_ORDER[next] > STEP_ORDER[step] ? 1 : -1);
@@ -1129,7 +1114,6 @@ export default function CartPage() {
     dispatch(clearPharmacyErrors());
   }, [dispatch]);
 
-  // Cleanly navigate to success when order is completely paid/verified internally
   useEffect(() => {
     if (currentOrder?.payment?.status === 'Paid' && step !== 'success') {
        goToStep('success');
@@ -1213,7 +1197,12 @@ export default function CartPage() {
     setIsProcessingPayment(true);
     
     try {
-      const result = await dispatch(checkoutCart({ address, paymentMethod, couponCode: coupon.code ?? undefined })).unwrap();
+      const result = await dispatch(checkoutCart({ 
+        address, 
+        paymentMethod, 
+        couponCode: coupon.code ?? undefined,
+        deliveryType 
+      })).unwrap();
       
       if (paymentMethod === 'COD') { 
         goToStep('success'); 
@@ -1222,7 +1211,6 @@ export default function CartPage() {
       }
       
       if (paymentMethod === 'Wallet') {
-        // Safe access to result.order, falling back if it's missing (though checkoutCart thunk catches these errors)
         await dispatch(payViaWallet({ orderId: result.order?._id })).unwrap();
         dispatch(fetchWalletDetails());
         setIsProcessingPayment(false);
@@ -1232,14 +1220,11 @@ export default function CartPage() {
      if (paymentMethod === 'Razorpay') {
         let payResp;
         try {
-          // 1. MUST LOAD THE SDK SCRIPT FIRST!
           const loaded = await loadRazorpayScript();
           if (!loaded) {
             throw new Error('Failed to load Razorpay SDK. Please check your connection.');
           }
 
-          // 2. NOW OPEN THE MODAL
-          // SAFETY FIX: Used optional chaining for result.order?.payment to prevent crashes
           payResp = await openRazorpayModal({
             rzpKey: RAZORPAY_KEY,
             rzpOrderId: result.order?.payment?.razorpayOrderId,
@@ -1259,7 +1244,6 @@ export default function CartPage() {
           return;
         }
 
-        // If we reach here, Razorpay callback was successful. Proceed to verify.
         const verificationToast = toast.loading('Verifying your payment...');
         try {
           await dispatch(verifyPayment({
@@ -1276,10 +1260,9 @@ export default function CartPage() {
         }
       }
     } catch { 
-      // Handled by standard thunk rejected action logs/toasts
       setIsProcessingPayment(false);
     }
-  }, [dispatch, address, paymentMethod, coupon.code, walletBalance, walletData, finalPayable, goToStep]);
+  }, [dispatch, address, paymentMethod, deliveryType, coupon.code, walletBalance, walletData, finalPayable, goToStep]);
 
   // ── Success screen ────────────────────────────────────────────────────────────
   if (step === 'success') {
@@ -1314,6 +1297,7 @@ export default function CartPage() {
             <p className="text-[10px] uppercase font-bold tracking-widest text-base-content/40 mb-2">Order Summary</p>
             {[
               { label: 'Payment Method', value: currentOrder?.payment?.method },
+              { label: 'Delivery Type',  value: currentOrder?.delivery?.type || deliveryType },
               { label: 'Amount Paid',    value: `₹${currentOrder?.billing?.totalPayable?.toFixed(2)}`, accent: 'text-primary font-bold' },
               { label: 'Delivery To',    value: `${currentOrder?.delivery?.address?.line1}, ${currentOrder?.delivery?.address?.city}`, truncate: true },
             ].map(({ label, value, accent, truncate }) => (
@@ -1455,15 +1439,48 @@ export default function CartPage() {
                     </motion.div>
                   )}
 
-                  {/* Step 3 — Address */}
+                  {/* Step 3 — Address & Delivery */}
                   {step === 'address' && (
                     <motion.div key="address-form" ref={addressRef} custom={slideDir} variants={slideVariants} initial="enter" animate="center" exit="exit"
                                 className="card p-6">
                       <div className="flex items-center gap-2 mb-6 border-b border-base-300 pb-4">
                         <MapPin className="w-5 h-5 text-primary" />
-                        <h2 className="text-lg font-bold font-montserrat">Delivery Address</h2>
+                        <h2 className="text-lg font-bold font-montserrat">Delivery Details</h2>
                       </div>
+                      
                       <AddressForm address={address} onChange={handleAddressChange} errors={addressErrors} />
+
+                      {/* Delivery Speed Selection */}
+                      <div className="pt-6 mt-6 border-t border-base-200">
+                        <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-base-content/50 mb-3">
+                          <Truck className="w-3 h-3 text-primary/60" /> Delivery Speed
+                        </label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className={`relative flex flex-col p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                            deliveryType === 'Standard' ? 'border-primary bg-primary/5' : 'border-base-200 hover:border-primary/30 hover:bg-base-200/50'
+                          }`}>
+                            <input type="radio" name="deliverySpeed" value="Standard" checked={deliveryType === 'Standard'} onChange={() => setDeliveryType('Standard')} className="hidden" />
+                            <span className="text-xs font-black text-base-content">Standard</span>
+                            <span className="text-[10px] font-semibold text-base-content/50 uppercase mt-1">2-4 Days</span>
+                            <span className="text-[11px] font-black text-primary mt-1">
+                              {deliveryPricing?.delivery?.standard?.isFree ? 'FREE' : `₹${deliveryPricing?.delivery?.standard?.charge ?? 0}`}
+                            </span>
+                            {deliveryType === 'Standard' && <div className="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-primary" />}
+                          </label>
+
+                          <label className={`relative flex flex-col p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                            deliveryType === 'Express' ? 'border-primary bg-primary/5' : 'border-base-200 hover:border-primary/30 hover:bg-base-200/50'
+                          }`}>
+                            <input type="radio" name="deliverySpeed" value="Express" checked={deliveryType === 'Express'} onChange={() => setDeliveryType('Express')} className="hidden" />
+                            <span className="text-xs font-black text-base-content flex items-center gap-1"><Zap className="w-3 h-3 text-warning fill-warning" /> Express</span>
+                            <span className="text-[10px] font-semibold text-base-content/50 uppercase mt-1">same day / next day</span>
+                            <span className="text-[11px] font-black text-primary mt-1">
+                              {deliveryPricing?.delivery?.express?.isFree ? 'FREE' : `₹${deliveryPricing?.delivery?.express?.charge ?? 49}`}
+                            </span>
+                            {deliveryType === 'Express' && <div className="absolute top-3 right-3 w-2.5 h-2.5 rounded-full bg-primary" />}
+                          </label>
+                        </div>
+                      </div>
                     </motion.div>
                   )}
 
@@ -1526,7 +1543,16 @@ export default function CartPage() {
                     <h2 className="text-[10px] font-bold uppercase tracking-widest text-base-content/40 mb-5 flex items-center gap-1.5">
                       <ReceiptText className="w-4 h-4" /> Bill Summary
                     </h2>
-                    <BillSummary billSummary={billSummary} subscriptionDiscount={pharmacyDiscount} coupon={coupon} paymentMethod={paymentMethod} />
+                    <BillSummary 
+                      billSummary={billSummary} 
+                      subscriptionDiscount={pharmacyDiscount} 
+                      coupon={coupon} 
+                      paymentMethod={paymentMethod} 
+                      deliveryCharge={deliveryCharge}
+                      platformFee={platformFee}
+                      deliveryType={deliveryType}
+                      deliveryPricing={deliveryPricing}
+                    />
                   </section>
 
                   {rxPresent && (
@@ -1612,7 +1638,7 @@ export default function CartPage() {
                       <div className="flex gap-3">
                         <button onClick={() => goToStep('address')} className="btn btn-outline border-base-300 text-base-content" disabled={isProcessingPayment}>Back</button>
                         <button onClick={handlePlaceOrder}
-                                disabled={isActing || isProcessingPayment || (paymentMethod === 'Wallet' && (!walletData?.isActive || walletBalance < finalPayable))}
+                                disabled={isActing || isProcessingPayment || deliveryPricingLoading || (paymentMethod === 'Wallet' && (!walletData?.isActive || walletBalance < finalPayable))}
                                 className="btn btn-primary-cta flex-1">
                           {(isActing || isProcessingPayment)
                             ? <><Loader2 className="w-4 h-4 animate-spin mr-1" /> Processing…</>

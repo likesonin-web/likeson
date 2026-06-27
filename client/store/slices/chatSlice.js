@@ -1,27 +1,9 @@
-/**
- * store/slices/chatSlice.js
- * Fixes applied:
- *  - socketMessagesRead: was zeroing unreadCount but NOT decrementing totalUnread correctly
- *    (was subtracting prev which could be stale). Now uses a guard.
- *  - socketMessagesDelivered: was bulk-updating ALL messages in conversation with deliveredAt.
- *    Fix: only update messages sent by current user that don't have deliveredAt yet.
- *    (We don't know currentUserId here — solved by only storing deliveredAt on sender-side
- *     messages via the getMessages API which already attaches it. Socket event just stores
- *     the timestamp for the conversation level.)
- *  - socketNewMessage: bump totalUnread only when not active AND message not from self
- *  - fetchMessages hasMore: was checking >= 50 hardcoded. Use returned length vs requested limit.
- *  - ensureConvoMessages: safe init
- *  - sendTextMessage: socket path doesn't go through thunk — handled in useChat. Thunk only
- *    for REST fallback. No double-upsert issue.
- */
-
 import {
   createSlice,
   createAsyncThunk,
   createEntityAdapter,
   createSelector,
 } from '@reduxjs/toolkit';
-import API from '../api';
 import toast from 'react-hot-toast';
 import chatService from '../../services/chatService';
 
@@ -40,42 +22,46 @@ const messagesAdapter = createEntityAdapter({
 // ─── Initial state ────────────────────────────────────────────────────────────
 
 const initialState = {
-  conversations:      conversationsAdapter.getInitialState(),
+  conversations:        conversationsAdapter.getInitialState(),
   conversationsLoading: false,
-  conversationsMeta:  { total: 0, page: 1, pages: 1 },
+  conversationsMeta:    { total: 0, page: 1, pages: 1 },
 
   activeConversationId: null,
 
-  // { [conversationId]: EntityState<Message> }
   messagesByConversation: {},
-  messagesLoadingMap:     {},   // { [conversationId]: bool }
-  messagesCursorMap:      {},   // { [conversationId]: oldestMessageId | null }
-  messagesHasMoreMap:     {},   // { [conversationId]: bool }
+  messagesLoadingMap:     {},
+  messagesCursorMap:      {},
+  messagesHasMoreMap:     {},
 
-  pinnedMessages:     {},   // { [conversationId]: Message[] }
-  mediaByConversation:{},   // { [conversationId]: Message[] }
-  searchResults:      {},   // { [conversationId]: Message[] }
-  searchQuery:        '',
-  searchLoading:      false,
+  pinnedMessages:      {},
+  mediaByConversation: {},
+  searchResults:       {},
+  searchQuery:         '',
+  searchLoading:       false,
 
   totalUnread:  0,
   blockedUsers: [],
+  typingUsers:  {},
 
-  typingUsers: {},           // { [conversationId]: userId[] }
-
-  activeCall:   null,        // { callId, channelName, token, uid, appId, type, conversationId }
-  incomingCall: null,        // { callId, conversationId, type, channelName, appId, initiator }
-  callHistory:  [],
+  activeCall:      null,
+  incomingCall:    null,
+  callHistory:     [],
   callHistoryMeta: { total: 0, page: 1, pages: 1 },
 
-  rtmToken:    null,
+  rtmToken:     null,
   rtmExpiresAt: null,
 
-  presence:        {},       // { [userId]: { isOnline, lastseen } }
-  uploadProgress:  {},       // { [conversationId]: 0-100 }
+  presence:       {},
+  uploadProgress: {},
+  currentUserId:  null,
 
-  // Track current user id for reducer logic (set on login)
-  currentUserId: null,
+  // --- NEW: Added for specific/admin lookup integrations ---
+  roleLinkedLoading: false,
+  adminConversations: [],
+  adminConversationsMeta: { total: 0, page: 1, pages: 1 },
+  adminCalls: [],
+  adminCallsMeta: { total: 0, page: 1, pages: 1 },
+  adminMessages: {}, // { [conversationId]: messages[] }
 
   error: null,
 };
@@ -95,7 +81,7 @@ const ensureConvoMessages = (state, conversationId) => {
 // ASYNC THUNKS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── Conversations ─────────────────────────────────────────────────────────────
+// ── A. Conversations ─────────────────────────────────────────────────────────
 
 export const fetchConversations = createAsyncThunk(
   'chat/fetchConversations',
@@ -103,9 +89,7 @@ export const fetchConversations = createAsyncThunk(
     try {
       const { data } = await chatService.getConversations(params);
       return data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -115,9 +99,7 @@ export const startDirectConversation = createAsyncThunk(
     try {
       const { data } = await chatService.createDirectConversation(targetUserId);
       return data.conversation;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -127,9 +109,17 @@ export const startGroupConversation = createAsyncThunk(
     try {
       const { data } = await chatService.createGroupConversation(payload);
       return data.conversation;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+export const startLinkedConversation = createAsyncThunk(
+  'chat/startLinkedConversation',
+  async (payload, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.createLinkedConversation(payload);
+      return data.conversation;
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -139,9 +129,7 @@ export const fetchConversationById = createAsyncThunk(
     try {
       const { data } = await chatService.getConversation(conversationId);
       return data.conversation;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -151,9 +139,7 @@ export const updateGroupInfo = createAsyncThunk(
     try {
       const { data } = await chatService.updateGroupConversation(conversationId, payload);
       return data.conversation;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -163,9 +149,7 @@ export const addMembers = createAsyncThunk(
     try {
       const { data } = await chatService.addGroupMembers(conversationId, memberIds);
       return data.conversation;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -175,9 +159,7 @@ export const removeMember = createAsyncThunk(
     try {
       const { data } = await chatService.removeGroupMember(conversationId, memberId);
       return data.conversation;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -187,9 +169,17 @@ export const toggleMemberAdmin = createAsyncThunk(
     try {
       const { data } = await chatService.updateMemberAdminStatus(conversationId, memberId, isAdmin);
       return data.conversation;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+export const blockConversationThunk = createAsyncThunk(
+  'chat/blockConversation',
+  async (conversationId, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.blockConversation(conversationId);
+      return data.conversation;
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -199,9 +189,7 @@ export const archiveConversationThunk = createAsyncThunk(
     try {
       await chatService.archiveConversation(conversationId, archive);
       return { conversationId, archive };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -211,9 +199,7 @@ export const muteConversationThunk = createAsyncThunk(
     try {
       await chatService.muteConversation(conversationId, mute, mutedUntil);
       return { conversationId, mute, mutedUntil };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -223,9 +209,7 @@ export const clearConversationThunk = createAsyncThunk(
     try {
       await chatService.clearConversation(conversationId);
       return { conversationId };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -235,13 +219,11 @@ export const fetchConversationMedia = createAsyncThunk(
     try {
       const { data } = await chatService.getConversationMedia(conversationId, params);
       return { conversationId, messages: data.messages };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
-// ── Messages ──────────────────────────────────────────────────────────────────
+// ── B. Messages ───────────────────────────────────────────────────────────────
 
 export const fetchMessages = createAsyncThunk(
   'chat/fetchMessages',
@@ -249,9 +231,7 @@ export const fetchMessages = createAsyncThunk(
     try {
       const { data } = await chatService.getMessages(conversationId, { limit, before });
       return { conversationId, messages: data.messages, before, limit };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -261,9 +241,7 @@ export const sendTextMessage = createAsyncThunk(
     try {
       const { data } = await chatService.sendMessage(conversationId, payload);
       return { conversationId, message: data.message };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -273,9 +251,7 @@ export const sendMediaMessageThunk = createAsyncThunk(
     try {
       const { data } = await chatService.sendMediaMessage(conversationId, file, duration);
       return { conversationId, message: data.message };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -285,9 +261,17 @@ export const markRead = createAsyncThunk(
     try {
       await chatService.markMessagesRead(conversationId);
       return { conversationId };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+export const markDeliveredThunk = createAsyncThunk(
+  'chat/markDelivered',
+  async (conversationId, { rejectWithValue }) => {
+    try {
+      await chatService.markMessagesDelivered(conversationId);
+      return { conversationId };
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -297,9 +281,7 @@ export const fetchPinnedMessages = createAsyncThunk(
     try {
       const { data } = await chatService.getPinnedMessages(conversationId);
       return { conversationId, messages: data.messages };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -309,9 +291,7 @@ export const searchMessagesThunk = createAsyncThunk(
     try {
       const { data } = await chatService.searchMessages(conversationId, q, limit);
       return { conversationId, messages: data.messages, q };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -321,9 +301,7 @@ export const editMessageThunk = createAsyncThunk(
     try {
       const { data } = await chatService.editMessage(messageId, text);
       return { conversationId, message: data.message };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -333,9 +311,17 @@ export const deleteMessageThunk = createAsyncThunk(
     try {
       await chatService.deleteMessage(messageId, scope);
       return { messageId, conversationId, scope };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+export const adminDeleteMessageThunk = createAsyncThunk(
+  'chat/adminDeleteMessage',
+  async ({ messageId, conversationId }, { rejectWithValue }) => {
+    try {
+      await chatService.adminDeleteMessage(messageId);
+      return { messageId, conversationId };
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -345,9 +331,7 @@ export const reactToMessageThunk = createAsyncThunk(
     try {
       const { data } = await chatService.reactToMessage(messageId, emoji);
       return { messageId, conversationId, reactions: data.reactions };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -357,9 +341,7 @@ export const pinMessageThunk = createAsyncThunk(
     try {
       const { data } = await chatService.pinMessage(messageId, pin);
       return { conversationId, message: data.message };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -369,11 +351,11 @@ export const forwardMessageThunk = createAsyncThunk(
     try {
       const { data } = await chatService.forwardMessage(messageId, targetConversationId);
       return { conversationId: targetConversationId, message: data.message };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
+
+// ── C & D. Unread & Blocked ───────────────────────────────────────────────────
 
 export const fetchTotalUnread = createAsyncThunk(
   'chat/fetchTotalUnread',
@@ -381,9 +363,7 @@ export const fetchTotalUnread = createAsyncThunk(
     try {
       const { data } = await chatService.getUnreadCount();
       return data.unreadCount;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -393,9 +373,7 @@ export const fetchBlockedUsers = createAsyncThunk(
     try {
       const { data } = await chatService.getBlockedUsers();
       return data.blockedUsers;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -405,9 +383,7 @@ export const blockUserThunk = createAsyncThunk(
     try {
       const { data } = await chatService.blockUser(targetUserId);
       return data.block;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -417,11 +393,11 @@ export const unblockUserThunk = createAsyncThunk(
     try {
       await chatService.unblockUser(targetUserId);
       return targetUserId;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
+
+// ── E. Calls ──────────────────────────────────────────────────────────────────
 
 export const fetchRtmToken = createAsyncThunk(
   'chat/fetchRtmToken',
@@ -429,9 +405,7 @@ export const fetchRtmToken = createAsyncThunk(
     try {
       const { data } = await chatService.getRtmToken();
       return data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -441,9 +415,7 @@ export const initiateCallThunk = createAsyncThunk(
     try {
       const { data } = await chatService.initiateCall(conversationId, type);
       return { ...data, conversationId, type };
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -453,9 +425,7 @@ export const joinCallThunk = createAsyncThunk(
     try {
       const { data } = await chatService.joinCall(callId);
       return data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -465,9 +435,27 @@ export const endCallThunk = createAsyncThunk(
     try {
       const { data } = await chatService.endCall(callId, status);
       return data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+export const refreshCallTokenThunk = createAsyncThunk(
+  'chat/refreshCallToken',
+  async (callId, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.refreshCallToken(callId);
+      return data;
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+export const fetchCallThunk = createAsyncThunk(
+  'chat/fetchCall',
+  async (callId, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.getCall(callId);
+      return data.call;
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -477,9 +465,19 @@ export const fetchCallHistory = createAsyncThunk(
     try {
       const { data } = await chatService.getCallHistory(params);
       return data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+// ── F. Presence ───────────────────────────────────────────────────────────────
+
+export const fetchSinglePresence = createAsyncThunk(
+  'chat/fetchSinglePresence',
+  async (userId, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.getUserPresence(userId);
+      return { userId, isOnline: data.isOnline, lastseen: data.lastseen };
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -489,9 +487,58 @@ export const fetchPresence = createAsyncThunk(
     try {
       const { data } = await chatService.getBulkPresence(userIds);
       return data.presence;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.message || err.message);
-    }
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+// ── G. Role-Linked Context Fetchers ──────────────────────────────────────────
+
+export const fetchRoleLinkedConversation = createAsyncThunk(
+  'chat/fetchRoleLinkedConversation',
+  async ({ type, id }, { rejectWithValue }) => {
+    try {
+      let req;
+      if (type === 'order') req = chatService.getOrderConversation(id);
+      else if (type === 'booking') req = chatService.getBookingConversation(id);
+      else if (type === 'blood-request') req = chatService.getBloodRequestConversation(id);
+      else if (type === 'lab-test') req = chatService.getLabTestConversation(id);
+      else if (type === 'finance-order') req = chatService.getFinanceOrderConversation(id);
+      
+      const { data } = await req;
+      return data.conversation;
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+// ── H. Admin ──────────────────────────────────────────────────────────────────
+
+export const adminFetchConversationsThunk = createAsyncThunk(
+  'chat/adminFetchConversations',
+  async (params, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.adminGetConversations(params);
+      return data;
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+export const adminFetchMessagesThunk = createAsyncThunk(
+  'chat/adminFetchMessages',
+  async ({ conversationId, params }, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.adminGetMessages(conversationId, params);
+      return { conversationId, messages: data.messages };
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
+  }
+);
+
+export const adminFetchCallsThunk = createAsyncThunk(
+  'chat/adminFetchCalls',
+  async (params, { rejectWithValue }) => {
+    try {
+      const { data } = await chatService.adminGetCalls(params);
+      return data;
+    } catch (err) { return rejectWithValue(err.response?.data?.message || err.message); }
   }
 );
 
@@ -504,9 +551,12 @@ const chatSlice = createSlice({
   initialState,
 
   reducers: {
-    // Set current user id (called after login)
     setCurrentUserId(state, { payload }) {
       state.currentUserId = payload;
+    },
+
+    clearCurrentUserId(state) {
+      state.currentUserId = null;
     },
 
     setActiveConversation(state, { payload: conversationId }) {
@@ -519,7 +569,7 @@ const chatSlice = createSlice({
       state.activeConversationId = null;
     },
 
-    // ── Socket: new message ─────────────────────────────────────────────────
+    // ── Socket event reducers ────────────────────────────────────────────────
     socketNewMessage(state, { payload: { conversationId, message } }) {
       ensureConvoMessages(state, conversationId);
       messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
@@ -535,14 +585,15 @@ const chatSlice = createSlice({
         };
         convo.updatedAt = message.createdAt;
 
-        // FIX: only bump unread if this convo is NOT active AND message is not from self
-        const isActive   = state.activeConversationId === conversationId;
-        const senderId   = message.sender?._id || message.sender;
-        const isFromSelf = senderId?.toString() === state.currentUserId;
+        const isActive = state.activeConversationId === conversationId;
+        const senderId = message.sender?._id || message.sender;
 
-        if (!isActive && !isFromSelf) {
-          convo.unreadCount    = (convo.unreadCount || 0) + 1;
-          state.totalUnread    = Math.max(0, state.totalUnread + 1);
+        if (state.currentUserId && !isActive) {
+          const isFromSelf = senderId?.toString() === state.currentUserId?.toString();
+          if (!isFromSelf) {
+            convo.unreadCount = (convo.unreadCount || 0) + 1;
+            state.totalUnread = Math.max(0, state.totalUnread + 1);
+          }
         }
       }
     },
@@ -556,8 +607,7 @@ const chatSlice = createSlice({
       if (!state.messagesByConversation[conversationId]) return;
       if (scope === 'for_all') {
         messagesAdapter.updateOne(state.messagesByConversation[conversationId], {
-          id:      messageId,
-          changes: { deletedForAll: true, text: null, isDeleted: true, media: null },
+          id: messageId, changes: { deletedForAll: true, text: null, isDeleted: true, media: null },
         });
       }
     },
@@ -569,21 +619,16 @@ const chatSlice = createSlice({
       });
     },
 
-    // FIX: socketMessagesRead — zero unread for conversation, adjust totalUnread correctly
-    socketMessagesRead(state, { payload: { conversationId, readBy } }) {
+    socketMessagesRead(state, { payload: { conversationId } }) {
       const convo = state.conversations.entities[conversationId];
       if (convo) {
-        const prev           = convo.unreadCount || 0;
-        convo.unreadCount    = 0;
-        state.totalUnread    = Math.max(0, state.totalUnread - prev);
+        const prev        = convo.unreadCount || 0;
+        convo.unreadCount = 0;
+        state.totalUnread = Math.max(0, state.totalUnread - prev);
       }
     },
 
-    // FIX: socketMessagesDelivered — store deliveredAt at conversation level only
-    // Don't bulk-update all messages (we don't have currentUserId in reducer safely).
-    // The per-message deliveredAt is fetched fresh from server via getMessages.
-    socketMessagesDelivered(state, { payload: { conversationId, deliveredTo, deliveredAt } }) {
-      // Update all messages in this conversation that were sent and have no deliveredAt
+    socketMessagesDelivered(state, { payload: { conversationId, deliveredAt } }) {
       if (!state.messagesByConversation[conversationId]) return;
       const ids = state.messagesByConversation[conversationId].ids;
       const updates = ids
@@ -597,17 +642,13 @@ const chatSlice = createSlice({
     },
 
     socketUserTyping(state, { payload: { conversationId, userId, isTyping } }) {
-      if (!state.typingUsers[conversationId]) {
-        state.typingUsers[conversationId] = [];
-      }
+      if (!state.typingUsers[conversationId]) state.typingUsers[conversationId] = [];
       if (isTyping) {
         if (!state.typingUsers[conversationId].includes(userId)) {
           state.typingUsers[conversationId].push(userId);
         }
       } else {
-        state.typingUsers[conversationId] = state.typingUsers[conversationId].filter(
-          (id) => id !== userId
-        );
+        state.typingUsers[conversationId] = state.typingUsers[conversationId].filter((id) => id !== userId);
       }
     },
 
@@ -615,14 +656,11 @@ const chatSlice = createSlice({
       state.presence[userId] = { isOnline, lastseen };
     },
 
-    socketIncomingCall(state, { payload }) {
-      state.incomingCall = payload;
-    },
+    socketIncomingCall(state, { payload }) { state.incomingCall = payload; },
 
     socketCallParticipantJoined(state, { payload }) {
       if (state.activeCall) {
         if (!state.activeCall.participants) state.activeCall.participants = [];
-        // Avoid duplicate
         const exists = state.activeCall.participants.some((p) => p.userId === payload.userId);
         if (!exists) state.activeCall.participants.push(payload);
       }
@@ -648,13 +686,8 @@ const chatSlice = createSlice({
       messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
     },
 
-    clearIncomingCall(state) {
-      state.incomingCall = null;
-    },
-
-    clearActiveCall(state) {
-      state.activeCall = null;
-    },
+    clearIncomingCall(state) { state.incomingCall = null; },
+    clearActiveCall(state)   { state.activeCall = null; },
 
     upsertConversation(state, { payload: conversation }) {
       conversationsAdapter.upsertOne(state.conversations, conversation);
@@ -668,22 +701,18 @@ const chatSlice = createSlice({
     setUploadProgress(state, { payload: { conversationId, progress } }) {
       state.uploadProgress[conversationId] = progress;
     },
-
     clearUploadProgress(state, { payload: conversationId }) {
       delete state.uploadProgress[conversationId];
     },
-
     clearError(state) {
       state.error = null;
     },
   },
 
   extraReducers: (builder) => {
-    // fetchConversations
+    // ── Conversations
     builder
-      .addCase(fetchConversations.pending, (state) => {
-        state.conversationsLoading = true;
-      })
+      .addCase(fetchConversations.pending, (state) => { state.conversationsLoading = true; })
       .addCase(fetchConversations.fulfilled, (state, { payload }) => {
         state.conversationsLoading = false;
         conversationsAdapter.setAll(state.conversations, payload.conversations);
@@ -694,23 +723,14 @@ const chatSlice = createSlice({
         state.error = payload;
       });
 
-    // startDirectConversation / startGroupConversation
     builder
-      .addCase(startDirectConversation.fulfilled, (state, { payload }) => {
-        conversationsAdapter.upsertOne(state.conversations, payload);
-      })
+      .addCase(startDirectConversation.fulfilled, (state, { payload }) => { conversationsAdapter.upsertOne(state.conversations, payload); })
       .addCase(startGroupConversation.fulfilled, (state, { payload }) => {
         conversationsAdapter.upsertOne(state.conversations, payload);
         toast.success('Group created');
-      });
-
-    // fetchConversationById
-    builder.addCase(fetchConversationById.fulfilled, (state, { payload }) => {
-      conversationsAdapter.upsertOne(state.conversations, payload);
-    });
-
-    // updateGroupInfo / addMembers / removeMember / toggleMemberAdmin
-    builder
+      })
+      .addCase(startLinkedConversation.fulfilled, (state, { payload }) => { conversationsAdapter.upsertOne(state.conversations, payload); })
+      .addCase(fetchConversationById.fulfilled, (state, { payload }) => { conversationsAdapter.upsertOne(state.conversations, payload); })
       .addCase(updateGroupInfo.fulfilled, (state, { payload }) => {
         conversationsAdapter.upsertOne(state.conversations, payload);
         toast.success('Group updated');
@@ -719,19 +739,22 @@ const chatSlice = createSlice({
         conversationsAdapter.upsertOne(state.conversations, payload);
         toast.success('Members added');
       })
-      .addCase(removeMember.fulfilled, (state, { payload }) => {
+      .addCase(removeMember.fulfilled, (state, { payload }) => { conversationsAdapter.upsertOne(state.conversations, payload); })
+      .addCase(toggleMemberAdmin.fulfilled, (state, { payload }) => { conversationsAdapter.upsertOne(state.conversations, payload); })
+      .addCase(blockConversationThunk.fulfilled, (state, { payload }) => {
         conversationsAdapter.upsertOne(state.conversations, payload);
-      })
-      .addCase(toggleMemberAdmin.fulfilled, (state, { payload }) => {
-        conversationsAdapter.upsertOne(state.conversations, payload);
+        toast.success('Conversation blocked');
       });
 
-    // archiveConversation
     builder.addCase(archiveConversationThunk.fulfilled, (state, { payload: { conversationId, archive } }) => {
       if (archive) conversationsAdapter.removeOne(state.conversations, conversationId);
+      toast.success(archive ? 'Chat archived' : 'Chat unarchived');
     });
 
-    // clearConversation
+    builder.addCase(muteConversationThunk.fulfilled, (state, { payload: { mute } }) => {
+      toast.success(mute ? 'Chat muted' : 'Chat unmuted');
+    });
+
     builder.addCase(clearConversationThunk.fulfilled, (state, { payload: { conversationId } }) => {
       if (state.messagesByConversation[conversationId]) {
         state.messagesByConversation[conversationId] = messagesAdapter.getInitialState();
@@ -739,40 +762,42 @@ const chatSlice = createSlice({
       toast.success('Chat cleared');
     });
 
-    // fetchConversationMedia
     builder.addCase(fetchConversationMedia.fulfilled, (state, { payload: { conversationId, messages } }) => {
       state.mediaByConversation[conversationId] = messages;
     });
 
-    // fetchMessages
+    // ── Role-Specific Context Lookup
     builder
-      .addCase(fetchMessages.pending, (state, { meta: { arg } }) => {
-        state.messagesLoadingMap[arg.conversationId] = true;
+      .addCase(fetchRoleLinkedConversation.pending, (state) => { state.roleLinkedLoading = true; })
+      .addCase(fetchRoleLinkedConversation.fulfilled, (state, { payload }) => {
+        state.roleLinkedLoading = false;
+        conversationsAdapter.upsertOne(state.conversations, payload);
+        state.activeConversationId = payload._id; 
       })
+      .addCase(fetchRoleLinkedConversation.rejected, (state) => { state.roleLinkedLoading = false; });
+
+    // ── Messages
+    builder
+      .addCase(fetchMessages.pending, (state, { meta: { arg } }) => { state.messagesLoadingMap[arg.conversationId] = true; })
       .addCase(fetchMessages.fulfilled, (state, { payload }) => {
-        const { conversationId, messages, before, limit } = payload;
+        const { conversationId, messages, limit } = payload;
         ensureConvoMessages(state, conversationId);
         state.messagesLoadingMap[conversationId] = false;
         messagesAdapter.upsertMany(state.messagesByConversation[conversationId], messages);
 
-        // FIX: use actual returned count vs requested limit (not hardcoded 50)
         state.messagesHasMoreMap[conversationId] = messages.length >= (limit || 50);
-        if (messages.length > 0) {
-          state.messagesCursorMap[conversationId] = messages[0]._id; // oldest
-        }
+        if (messages.length > 0) state.messagesCursorMap[conversationId] = messages[0]._id;
       })
       .addCase(fetchMessages.rejected, (state, { meta: { arg }, payload }) => {
         state.messagesLoadingMap[arg.conversationId] = false;
         state.error = payload;
       });
 
-    // sendTextMessage (REST fallback)
     builder.addCase(sendTextMessage.fulfilled, (state, { payload: { conversationId, message } }) => {
       ensureConvoMessages(state, conversationId);
       messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
     });
 
-    // sendMediaMessage
     builder
       .addCase(sendMediaMessageThunk.fulfilled, (state, { payload: { conversationId, message } }) => {
         ensureConvoMessages(state, conversationId);
@@ -784,7 +809,6 @@ const chatSlice = createSlice({
         toast.error('Upload failed');
       });
 
-    // markRead
     builder.addCase(markRead.fulfilled, (state, { payload: { conversationId } }) => {
       const convo = state.conversations.entities[conversationId];
       if (convo) {
@@ -794,12 +818,10 @@ const chatSlice = createSlice({
       }
     });
 
-    // fetchPinnedMessages
     builder.addCase(fetchPinnedMessages.fulfilled, (state, { payload: { conversationId, messages } }) => {
       state.pinnedMessages[conversationId] = messages;
     });
 
-    // searchMessages
     builder
       .addCase(searchMessagesThunk.pending, (state) => { state.searchLoading = true; })
       .addCase(searchMessagesThunk.fulfilled, (state, { payload: { conversationId, messages, q } }) => {
@@ -809,13 +831,11 @@ const chatSlice = createSlice({
       })
       .addCase(searchMessagesThunk.rejected, (state) => { state.searchLoading = false; });
 
-    // editMessage
     builder.addCase(editMessageThunk.fulfilled, (state, { payload: { conversationId, message } }) => {
       if (!state.messagesByConversation[conversationId]) return;
       messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
     });
 
-    // deleteMessage
     builder.addCase(deleteMessageThunk.fulfilled, (state, { payload: { messageId, conversationId, scope } }) => {
       if (!state.messagesByConversation[conversationId]) return;
       if (scope === 'for_all') {
@@ -827,7 +847,14 @@ const chatSlice = createSlice({
       }
     });
 
-    // reactToMessage
+    builder.addCase(adminDeleteMessageThunk.fulfilled, (state, { payload: { messageId, conversationId } }) => {
+      if (!state.messagesByConversation[conversationId]) return;
+      messagesAdapter.updateOne(state.messagesByConversation[conversationId], {
+        id: messageId, changes: { deletedForAll: true, text: null, media: null },
+      });
+      toast.success('Message deleted by admin');
+    });
+
     builder.addCase(reactToMessageThunk.fulfilled, (state, { payload: { messageId, conversationId, reactions } }) => {
       if (!state.messagesByConversation[conversationId]) return;
       messagesAdapter.updateOne(state.messagesByConversation[conversationId], {
@@ -835,29 +862,21 @@ const chatSlice = createSlice({
       });
     });
 
-    // pinMessage
     builder.addCase(pinMessageThunk.fulfilled, (state, { payload: { conversationId, message } }) => {
       if (!state.messagesByConversation[conversationId]) return;
       messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
     });
 
-    // forwardMessage
     builder.addCase(forwardMessageThunk.fulfilled, (state, { payload: { conversationId, message } }) => {
       ensureConvoMessages(state, conversationId);
       messagesAdapter.upsertOne(state.messagesByConversation[conversationId], message);
       toast.success('Message forwarded');
     });
 
-    // fetchTotalUnread
-    builder.addCase(fetchTotalUnread.fulfilled, (state, { payload }) => {
-      state.totalUnread = payload;
-    });
+    builder.addCase(fetchTotalUnread.fulfilled, (state, { payload }) => { state.totalUnread = payload; });
 
-    // block / unblock
     builder
-      .addCase(fetchBlockedUsers.fulfilled, (state, { payload }) => {
-        state.blockedUsers = payload;
-      })
+      .addCase(fetchBlockedUsers.fulfilled, (state, { payload }) => { state.blockedUsers = payload; })
       .addCase(blockUserThunk.fulfilled, (state, { payload }) => {
         state.blockedUsers.push(payload);
         toast.success('User blocked');
@@ -869,56 +888,67 @@ const chatSlice = createSlice({
         toast.success('User unblocked');
       });
 
-    // calls
+    // ── Calls
     builder
       .addCase(fetchRtmToken.fulfilled, (state, { payload }) => {
-        state.rtmToken    = payload.rtmToken;
+        state.rtmToken     = payload.rtmToken;
         state.rtmExpiresAt = payload.expiresAt;
       })
       .addCase(initiateCallThunk.fulfilled, (state, { payload }) => {
-        state.activeCall = {
-          callId:         payload.callId,
-          channelName:    payload.channelName,
-          token:          payload.token,
-          uid:            payload.uid,
-          appId:          payload.appId,
-          type:           payload.type,
-          conversationId: payload.conversationId,
-          expiresAt:      payload.expiresAt,
-        };
+        state.activeCall = { ...payload };
       })
       .addCase(joinCallThunk.fulfilled, (state, { payload }) => {
-        state.activeCall = {
-          callId:      payload.callId,
-          channelName: payload.channelName,
-          token:       payload.token,
-          uid:         payload.uid,
-          appId:       payload.appId,
-          expiresAt:   payload.expiresAt,
-        };
+        state.activeCall = { ...payload };
         state.incomingCall = null;
       })
       .addCase(endCallThunk.fulfilled, (state) => {
         state.activeCall   = null;
         state.incomingCall = null;
       })
+      .addCase(refreshCallTokenThunk.fulfilled, (state, { payload }) => {
+        if(state.activeCall) {
+          state.activeCall.token = payload.token;
+          state.activeCall.expiresAt = payload.expiresAt;
+        }
+      })
+      .addCase(fetchCallThunk.fulfilled, (state, { payload }) => {
+        const idx = state.callHistory.findIndex(c => c._id === payload._id);
+        if (idx >= 0) state.callHistory[idx] = payload;
+        else state.callHistory.unshift(payload);
+      })
       .addCase(fetchCallHistory.fulfilled, (state, { payload }) => {
-        state.callHistory    = payload.calls;
+        state.callHistory     = payload.calls;
         state.callHistoryMeta = { total: payload.total, page: payload.page, pages: payload.pages };
       });
 
-    // presence
+    // ── Presence
+    builder.addCase(fetchSinglePresence.fulfilled, (state, { payload }) => {
+      state.presence[payload.userId] = { isOnline: payload.isOnline, lastseen: payload.lastseen };
+    });
     builder.addCase(fetchPresence.fulfilled, (state, { payload }) => {
       for (const { userId, isOnline, lastseen } of payload) {
         state.presence[userId] = { ...state.presence[userId], isOnline, lastseen };
       }
     });
 
-    // Global reject toast (silent for polling actions)
+    // ── Admin Features
+    builder.addCase(adminFetchConversationsThunk.fulfilled, (state, { payload }) => {
+      state.adminConversations = payload.conversations;
+      state.adminConversationsMeta = { total: payload.total, page: payload.page, pages: payload.pages };
+    });
+    builder.addCase(adminFetchMessagesThunk.fulfilled, (state, { payload }) => {
+      state.adminMessages[payload.conversationId] = payload.messages;
+    });
+    builder.addCase(adminFetchCallsThunk.fulfilled, (state, { payload }) => {
+      state.adminCalls = payload.calls;
+      state.adminCallsMeta = { total: payload.total, page: payload.page, pages: payload.pages };
+    });
+
+    // ── Global Error Toasts
     builder.addMatcher(
       (action) => action.type.startsWith('chat/') && action.type.endsWith('/rejected'),
       (state, action) => {
-        const silent = ['chat/fetchTotalUnread', 'chat/fetchPresence', 'chat/fetchRtmToken'];
+        const silent = ['chat/fetchTotalUnread', 'chat/fetchPresence', 'chat/fetchSinglePresence', 'chat/fetchRtmToken'];
         if (!silent.some((s) => action.type.startsWith(s))) {
           toast.error(action.payload || 'Something went wrong');
         }
@@ -928,30 +958,12 @@ const chatSlice = createSlice({
 });
 
 export const {
-  setCurrentUserId,
-  setActiveConversation,
-  clearActiveConversation,
-  socketNewMessage,
-  socketMessageEdited,
-  socketMessageDeleted,
-  socketMessageReaction,
-  socketMessagesRead,
-  socketMessagesDelivered,
-  socketUserTyping,
-  socketUserPresence,
-  socketIncomingCall,
-  socketCallParticipantJoined,
-  socketCallDeclined,
-  socketCallEnded,
-  socketCallCancelled,
-  socketCallLog,
-  clearIncomingCall,
-  clearActiveCall,
-  upsertConversation,
-  clearSearch,
-  setUploadProgress,
-  clearUploadProgress,
-  clearError,
+  setCurrentUserId, clearCurrentUserId, setActiveConversation, clearActiveConversation,
+  socketNewMessage, socketMessageEdited, socketMessageDeleted, socketMessageReaction,
+  socketMessagesRead, socketMessagesDelivered, socketUserTyping, socketUserPresence,
+  socketIncomingCall, socketCallParticipantJoined, socketCallDeclined, socketCallEnded,
+  socketCallCancelled, socketCallLog, clearIncomingCall, clearActiveCall, upsertConversation,
+  clearSearch, setUploadProgress, clearUploadProgress, clearError,
 } = chatSlice.actions;
 
 export default chatSlice.reducer;
@@ -964,60 +976,50 @@ export const {
   selectAll:  selectAllConversations,
   selectById: selectConversationById,
   selectIds:  selectConversationIds,
-} = conversationsAdapter.getSelectors((state) => state.chat.conversations);
+} = conversationsAdapter.getSelectors((state) => state.chat?.conversations || initialState.conversations);
 
-export const selectActiveConversationId  = (state) => state.chat.activeConversationId;
-export const selectConversationsLoading  = (state) => state.chat.conversationsLoading;
-export const selectConversationsMeta     = (state) => state.chat.conversationsMeta;
-export const selectTotalUnread           = (state) => state.chat.totalUnread;
-export const selectBlockedUsers          = (state) => state.chat.blockedUsers;
-export const selectActiveCall            = (state) => state.chat.activeCall;
-export const selectIncomingCall          = (state) => state.chat.incomingCall;
-export const selectCallHistory           = (state) => state.chat.callHistory;
-export const selectCallHistoryMeta       = (state) => state.chat.callHistoryMeta;
-export const selectRtmToken              = (state) => state.chat.rtmToken;
-export const selectSearchQuery           = (state) => state.chat.searchQuery;
-export const selectSearchLoading         = (state) => state.chat.searchLoading;
-export const selectChatError             = (state) => state.chat.error;
+export const selectActiveConversationId  = (state) => state.chat?.activeConversationId;
+export const selectConversationsLoading  = (state) => state.chat?.conversationsLoading;
+export const selectConversationsMeta     = (state) => state.chat?.conversationsMeta;
+export const selectRoleLinkedLoading     = (state) => state.chat?.roleLinkedLoading;
+export const selectTotalUnread           = (state) => state.chat?.totalUnread;
+export const selectBlockedUsers          = (state) => state.chat?.blockedUsers;
+export const selectActiveCall            = (state) => state.chat?.activeCall;
+export const selectIncomingCall          = (state) => state.chat?.incomingCall;
+export const selectCallHistory           = (state) => state.chat?.callHistory;
+export const selectCallHistoryMeta       = (state) => state.chat?.callHistoryMeta;
+export const selectRtmToken              = (state) => state.chat?.rtmToken;
+export const selectSearchQuery           = (state) => state.chat?.searchQuery;
+export const selectSearchLoading         = (state) => state.chat?.searchLoading;
+export const selectChatError             = (state) => state.chat?.error;
+
+// Admin selectors
+export const selectAdminConversations      = (state) => state.chat?.adminConversations;
+export const selectAdminConversationsMeta  = (state) => state.chat?.adminConversationsMeta;
+export const selectAdminCalls              = (state) => state.chat?.adminCalls;
+export const selectAdminCallsMeta          = (state) => state.chat?.adminCallsMeta;
+export const selectAdminMessages           = (conversationId) => (state) => state.chat?.adminMessages?.[conversationId] || [];
 
 export const selectActiveConversation = createSelector(
   [selectAllConversations, selectActiveConversationId],
   (conversations, id) => conversations.find((c) => c._id === id) || null
 );
 
-// Per-conversation selectors (used by standalone hooks above)
 export const selectMessagesByConversation = (conversationId) =>
   createSelector(
-    (state) => state.chat.messagesByConversation[conversationId],
+    (state) => state.chat?.messagesByConversation?.[conversationId],
     (entityState) => {
       if (!entityState) return [];
       return messagesAdapter.getSelectors().selectAll(entityState);
     }
   );
 
-export const selectMessagesLoading  = (conversationId) => (state) =>
-  state.chat.messagesLoadingMap[conversationId] || false;
-
-export const selectMessagesHasMore  = (conversationId) => (state) =>
-  state.chat.messagesHasMoreMap[conversationId] ?? true;
-
-export const selectMessagesCursor   = (conversationId) => (state) =>
-  state.chat.messagesCursorMap[conversationId] || null;
-
-export const selectPinnedMessages   = (conversationId) => (state) =>
-  state.chat.pinnedMessages[conversationId] || [];
-
-export const selectConversationMedia = (conversationId) => (state) =>
-  state.chat.mediaByConversation[conversationId] || [];
-
-export const selectSearchResults    = (conversationId) => (state) =>
-  state.chat.searchResults[conversationId] || [];
-
-export const selectTypingUsers      = (conversationId) => (state) =>
-  state.chat.typingUsers[conversationId] || [];
-
-export const selectUserPresence     = (userId) => (state) =>
-  state.chat.presence[userId] || { isOnline: false, lastseen: null };
-
-export const selectUploadProgress   = (conversationId) => (state) =>
-  state.chat.uploadProgress[conversationId] || 0;
+export const selectMessagesLoading  = (conversationId) => (state) => state.chat?.messagesLoadingMap?.[conversationId] || false;
+export const selectMessagesHasMore  = (conversationId) => (state) => state.chat?.messagesHasMoreMap?.[conversationId] ?? true;
+export const selectMessagesCursor   = (conversationId) => (state) => state.chat?.messagesCursorMap?.[conversationId] || null;
+export const selectPinnedMessages   = (conversationId) => (state) => state.chat?.pinnedMessages?.[conversationId] || [];
+export const selectConversationMedia = (conversationId) => (state) => state.chat?.mediaByConversation?.[conversationId] || [];
+export const selectSearchResults    = (conversationId) => (state) => state.chat?.searchResults?.[conversationId] || [];
+export const selectTypingUsers      = (conversationId) => (state) => state.chat?.typingUsers?.[conversationId] || [];
+export const selectUserPresence     = (userId) => (state) => state.chat?.presence?.[userId] || { isOnline: false, lastseen: null };
+export const selectUploadProgress   = (conversationId) => (state) => state.chat?.uploadProgress?.[conversationId] || 0;

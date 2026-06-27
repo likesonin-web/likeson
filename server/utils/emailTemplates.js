@@ -1738,3 +1738,96 @@ export const buildBloodIssuedEmail = ({ userName, requestId, bloodGroup, compone
   </td></tr>
 </table></td></tr></table>
 </body></html>`;
+
+
+// Email HTML templates for Support Ticket system
+// Pass to existing sendEmail utility
+
+export function ticketCreatedEmail({ ticketNumber, subject, department, priority, recipientName }) {
+  return {
+    subject: `[${ticketNumber}] Support Ticket Created – ${subject}`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px">
+        <h2 style="color:#0f766e">Ticket Created Successfully</h2>
+        <p>Hi <strong>${recipientName}</strong>,</p>
+        <p>Your support ticket has been received. Our team will respond within the SLA window.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0">
+          <tr><td style="padding:8px;background:#f9fafb;font-weight:bold">Ticket #</td><td style="padding:8px">${ticketNumber}</td></tr>
+          <tr><td style="padding:8px;background:#f9fafb;font-weight:bold">Subject</td><td style="padding:8px">${subject}</td></tr>
+          <tr><td style="padding:8px;background:#f9fafb;font-weight:bold">Department</td><td style="padding:8px">${department.replace(/_/g,' ')}</td></tr>
+          <tr><td style="padding:8px;background:#f9fafb;font-weight:bold">Priority</td><td style="padding:8px">${priority}</td></tr>
+        </table>
+        <p style="color:#6b7280;font-size:13px">You can track your ticket status through the Likeson app.</p>
+        <hr style="border:none;border-top:1px solid #e5e7eb">
+        <p style="color:#9ca3af;font-size:12px">Likeson Healthcare Support · Do not reply to this email</p>
+      </div>`,
+  };
+}
+
+export function ticketAssignedEmail({ ticketNumber, subject, adminName, recipientName }) {
+  return {
+    subject: `[${ticketNumber}] Your ticket has been assigned`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px">
+        <h2 style="color:#0f766e">Ticket Assigned</h2>
+        <p>Hi <strong>${recipientName}</strong>,</p>
+        <p>Ticket <strong>${ticketNumber}</strong> – <em>${subject}</em> has been assigned to <strong>${adminName}</strong> who will assist you shortly.</p>
+        <p style="color:#9ca3af;font-size:12px">Likeson Healthcare Support</p>
+      </div>`,
+  };
+}
+
+export function ticketResolvedEmail({ ticketNumber, subject, recipientName }) {
+  return {
+    subject: `[${ticketNumber}] Your ticket has been resolved`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px">
+        <h2 style="color:#0f766e">Ticket Resolved</h2>
+        <p>Hi <strong>${recipientName}</strong>,</p>
+        <p>We're happy to inform you that ticket <strong>${ticketNumber}</strong> – <em>${subject}</em> has been marked as resolved.</p>
+        <p>If your issue persists, you can reopen the ticket from the app within 7 days.</p>
+        <p>We'd also love your feedback — please rate your support experience in the app.</p>
+        <p style="color:#9ca3af;font-size:12px">Likeson Healthcare Support</p>
+      </div>`,
+  };
+}
+
+export function ticketClosedEmail({ ticketNumber, subject, recipientName }) {
+  return {
+    subject: `[${ticketNumber}] Ticket closed`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px">
+        <h2 style="color:#374151">Ticket Closed</h2>
+        <p>Hi <strong>${recipientName}</strong>,</p>
+        <p>Ticket <strong>${ticketNumber}</strong> – <em>${subject}</em> has been closed. Thank you for contacting Likeson Healthcare Support.</p>
+        <p style="color:#9ca3af;font-size:12px">Likeson Healthcare Support</p>
+      </div>`,
+  };
+}
+
+export function ticketEscalatedEmail({ ticketNumber, subject, recipientName }) {
+  return {
+    subject: `[${ticketNumber}] Ticket escalated – Priority action required`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:24px;border:1px solid #fef3c7;border-radius:8px;background:#fffbeb">
+        <h2 style="color:#b45309">⚠ Ticket Escalated</h2>
+        <p>Hi <strong>${recipientName}</strong>,</p>
+        <p>Ticket <strong>${ticketNumber}</strong> – <em>${subject}</em> has been escalated for priority handling. Our senior team will attend to this immediately.</p>
+        <p style="color:#9ca3af;font-size:12px">Likeson Healthcare Support</p>
+      </div>`,
+  };
+}
+
+export function mentionAlertEmail({ ticketNumber, subject, mentionerName, recipientName }) {
+  return {
+    subject: `[${ticketNumber}] You were mentioned in a support ticket`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px">
+        <h2 style="color:#0f766e">You were mentioned</h2>
+        <p>Hi <strong>${recipientName}</strong>,</p>
+        <p><strong>${mentionerName}</strong> mentioned you in ticket <strong>${ticketNumber}</strong> – <em>${subject}</em>.</p>
+        <p>Please log in to the Likeson admin panel to review and respond.</p>
+        <p style="color:#9ca3af;font-size:12px">Likeson Healthcare Support</p>
+      </div>`,
+  };
+}

@@ -35,6 +35,7 @@ import {
   PHARMACY_PROFILE_LINKS,
   PHARMACY_SHORTCUTS,
 } from "@/constants/pharmacy";
+import WelcomePage from "./WelcomePage";
 
 // ── Command search flat list (built from PHARMACY_DASHBOARD_LINKS) ──────────
 const PHARMACY_SEARCH_LINKS = PHARMACY_DASHBOARD_LINKS.flatMap((section) =>
@@ -255,6 +256,7 @@ const PharmacyDashboard = ({ children }) => {
   const [openMenus,     setOpenMenus]     = useState({});
   const [searchQuery,   setSearchQuery]   = useState("");
   const [isSearchOpen,  setIsSearchOpen]  = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
 
   // init
   useEffect(() => {
@@ -289,7 +291,7 @@ const PharmacyDashboard = ({ children }) => {
     [user]
   );
 
-  // filtered search results
+  // Filtered search results
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return PHARMACY_SEARCH_LINKS.slice(0, 12);
     const q = searchQuery.toLowerCase();
@@ -299,6 +301,12 @@ const PharmacyDashboard = ({ children }) => {
         l.section.toLowerCase().includes(q)
     ).slice(0, 15);
   }, [searchQuery]);
+
+  // Check if we are on the root dashboard route to render the WelcomePage
+  const isWelcomeRoute = useMemo(
+    () => ["/pharmacy-store", "/pharmacy-store/", "/pharmacy/dashboard"].includes(pathname),
+    [pathname]
+  );
 
   // Guard — only pharmacy role
   if (user && user.role !== "pharmacy") {
@@ -329,7 +337,9 @@ const PharmacyDashboard = ({ children }) => {
   }
 
   // Current page label
-  const pageLabel = pathname.split("/").filter(Boolean).pop()?.replace(/-/g, " ") || "Dashboard";
+  const pageLabel = isWelcomeRoute
+    ? "Welcome"
+    : pathname.split("/").filter(Boolean).pop()?.replace(/-/g, " ") || "Dashboard";
 
   return (
     // Apply pharmacy theme wrapper — picks up [data-theme="pharmacy"] CSS vars
@@ -377,7 +387,7 @@ const PharmacyDashboard = ({ children }) => {
                   <Pill size={16} className="text-primary-content" />
                 </div>
                 <div>
-                  <Link href="/pharmacy/dashboard">
+                  <Link href="/pharmacy-store">
                     <span className="font-black text-sm tracking-tight text-base-content">
                       LIKESON
                     </span>
@@ -548,67 +558,90 @@ const PharmacyDashboard = ({ children }) => {
               </motion.button>
             </Link>
 
-            {/* Profile dropdown */}
-            <div className="group relative">
-              {/* Avatar trigger */}
-              <div className="w-9 h-9 rounded-xl p-[2px] cursor-pointer shadow-md transition-transform hover:scale-105 bg-gradient-to-tr from-primary to-secondary">
+            {/* State-Controlled Profile Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setIsProfileOpen((prev) => !prev)}
+                className="w-9 h-9 rounded-xl p-[2px] cursor-pointer shadow-md transition-transform hover:scale-105 bg-gradient-to-tr from-primary to-secondary block focus:outline-none"
+                aria-label="Toggle profile menu"
+              >
                 <img
                   src={pharmacyAvatar}
                   alt="Pharmacy user"
                   className="w-full h-full rounded-[10px] object-cover bg-base-300"
                 />
-              </div>
+              </button>
 
-              {/* Dropdown */}
-              <div className="absolute right-0 top-full pt-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-250 z-50">
-                <div className="w-60 bg-base-200 border border-base-300 rounded-2xl shadow-2xl p-2 backdrop-blur-2xl">
-                  {/* User info */}
-                  <div className="px-4 py-3 mb-1.5 bg-primary/6 rounded-xl border border-primary/10">
-                    <p className="text-xs font-black tracking-tight text-base-content truncate">
-                      {user?.name || "Pharmacist"}
-                    </p>
-                    <p className="text-[9px] font-black text-primary uppercase tracking-[0.18em] mt-0.5">
-                      Pharmacy Staff
-                    </p>
-                  </div>
-                  {/* Links */}
-                  {PROFILE_MENU.map((pl, pi) => (
-                    <Link
-                      key={pi}
-                      href={pl.href}
-                      className="flex items-center gap-3 px-3.5 py-2.5 text-[10px] font-bold uppercase text-base-content/55 hover:bg-base-100 hover:text-primary rounded-xl transition-all"
-                    >
-                      <span className="text-base-content/40">{pl.icon}</span>
-                      {pl.name}
-                    </Link>
-                  ))}
-                  {/* Logout */}
-                  <button
-                    onClick={handleLogout}
-                    className="w-full flex items-center gap-3 px-3.5 py-2.5 text-[10px] font-black text-error border-t border-base-300 mt-1.5 pt-3 rounded-xl hover:bg-error/8 uppercase tracking-widest transition-all"
+              {/* Click outside backdrop for mobile closing */}
+              {isProfileOpen && (
+                <div 
+                  className="fixed inset-0 z-40" 
+                  onClick={() => setIsProfileOpen(false)} 
+                />
+              )}
+
+              <AnimatePresence>
+                {isProfileOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute right-0 top-full pt-3 z-50 origin-top-right"
                   >
-                    <LogOut size={14} /> Sign Out
-                  </button>
-                </div>
-              </div>
+                    <div className="w-60 bg-base-200 border border-base-300 rounded-2xl shadow-2xl p-2 backdrop-blur-2xl">
+                      {/* User info */}
+                      <div className="px-4 py-3 mb-1.5 bg-primary/6 rounded-xl border border-primary/10">
+                        <p className="text-xs font-black tracking-tight text-base-content truncate">
+                          {user?.name || "Pharmacist"}
+                        </p>
+                        <p className="text-[9px] font-black text-primary uppercase tracking-[0.18em] mt-0.5">
+                          Pharmacy Staff
+                        </p>
+                      </div>
+                      {/* Links */}
+                      {PROFILE_MENU.map((pl, pi) => (
+                        <Link
+                          key={pi}
+                          href={pl.href}
+                          onClick={() => setIsProfileOpen(false)}
+                          className="flex items-center gap-3 px-3.5 py-2.5 text-[10px] font-bold uppercase text-base-content/55 hover:bg-base-100 hover:text-primary rounded-xl transition-all"
+                        >
+                          <span className="text-base-content/40">{pl.icon}</span>
+                          {pl.name}
+                        </Link>
+                      ))}
+                      {/* Logout */}
+                      <button
+                        onClick={() => {
+                          setIsProfileOpen(false);
+                          handleLogout();
+                        }}
+                        className="w-full flex items-center gap-3 px-3.5 py-2.5 text-[10px] font-black text-error border-t border-base-300 mt-1.5 pt-3 rounded-xl hover:bg-error/8 uppercase tracking-widest transition-all"
+                      >
+                        <LogOut size={14} /> Sign Out
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
         </header>
 
         {/* ── Page body ───────────────────────────────────────────────── */}
-        <div className="flex-1 w-full max-w-[1700px] mx-auto px-4   py-5">
+        <div className="flex-1 w-full max-w-[1700px] mx-auto px-4 py-5">
 
           {/* Breadcrumb */}
           <nav className="mb-5 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-base-content/25">
-            <Link href="/pharmacy/dashboard" className="hover:text-primary transition-colors">
+            <Link href="/pharmacy-store" className="hover:text-primary transition-colors">
               Pharmacy
             </Link>
             <ChevronRight size={11} />
-            <Link href="/pharmacy/orders" className="hover:text-primary transition-colors hidden sm:inline">
-              {pathname.split("/").filter(Boolean).slice(-2, -1)[0]?.replace(/-/g, " ") || ""}
-            </Link>
-            {pathname.split("/").filter(Boolean).length > 2 && (
+            {!isWelcomeRoute && pathname.split("/").filter(Boolean).length > 2 && (
               <>
+                <Link href={`/${pathname.split("/")[1]}/${pathname.split("/")[2]}`} className="hover:text-primary transition-colors hidden sm:inline">
+                  {pathname.split("/").filter(Boolean).slice(-2, -1)[0]?.replace(/-/g, " ") || ""}
+                </Link>
                 <ChevronRight size={11} className="hidden sm:inline" />
               </>
             )}
@@ -620,7 +653,7 @@ const PharmacyDashboard = ({ children }) => {
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.35, ease: "easeOut" }}
-            className="relative rounded-3xl border border-base-300 bg-base-200/35 min-h-[76vh]  p-5 shadow-inner overflow-hidden backdrop-blur-sm"
+            className="relative rounded-3xl border border-base-300 bg-base-200/35 min-h-[76vh] p-5 shadow-inner overflow-hidden backdrop-blur-sm"
           >
             {/* Decorative pharmacy cross watermark */}
             <div
@@ -635,7 +668,10 @@ const PharmacyDashboard = ({ children }) => {
               aria-hidden="true"
               className="absolute top-0 right-0 w-full h-full bg-primary/5 blur-[120px] rounded-full pointer-events-none"
             />
-            {children}
+            
+            {/* Dynamic Content Rendering */}
+            {isWelcomeRoute ? <WelcomePage /> : children}
+            
           </motion.div>
         </div>
 

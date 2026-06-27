@@ -17,6 +17,8 @@
     "@jitsi/react-sdk": "^1.4.4",
     "@mapbox/polyline": "^1.2.1",
     "@sendgrid/mail": "^8.1.6",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "agora-access-token": "^2.0.4",
     "agora-token": "^2.0.5",
     "archiver": "^7.0.1",
     "axios": "^1.14.0",

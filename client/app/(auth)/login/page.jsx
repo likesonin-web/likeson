@@ -729,43 +729,62 @@ const handleGoogleLogin = useCallback(() => {
         className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 bg-base-100 rounded-md overflow-hidden shadow border border-base-300 min-h-[700px]"
       >
         {/* ── LEFT: BRAND PANEL ─────────────────────────────────────────── */}
-        <aside className="hidden lg:block relative overflow-hidden group" aria-hidden="true">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="https://images.pexels.com/photos/7659690/pexels-photo-7659690.jpeg"
-            alt=""
-            className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-            loading="lazy"
-            decoding="async"
-          />
-          <div className="absolute inset-0 bg-gradient-to-br from-primary/90 via-primary/40 to-transparent" />
-          <div className="absolute inset-0 p-16 flex flex-col justify-between text-white z-10">
-            <div>
-              <div className="inline-flex p-3 bg-white/20 backdrop-blur-md rounded-2xl mb-6">
-                <Heart className="w-8 h-8 fill-white" />
-              </div>
-              <h1 className="text-5xl font-poppins font-black tracking-tighter leading-none mb-4">
-                Likeson <br /> Healthcare
-              </h1>
-              <p className="text-white/80 font-poppins font-medium max-w-xs text-md">
-                Trusted partner for medical transport, home care, and clinical support.
-              </p>
-            </div>
-            <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-1 bg-white rounded-full" />
-                <p className="text-[10px] font-poppins font-black uppercase tracking-[0.3em] opacity-60">
-                  System Operational
-                </p>
-              </div>
-              <blockquote className="bg-white/10 backdrop-blur-md p-6 rounded-3xl border border-white/10">
-                <p className="text-sm font-poppins font-bold italic">
-                  &ldquo;Empowering lives through accessible and rapid medical response systems.&rdquo;
-                </p>
-              </blockquote>
-            </div>
-          </div>
-        </aside>
+       <aside className="hidden lg:flex relative overflow-hidden bg-primary/40 flex-col justify-between p-12 text-white" aria-hidden="true">
+  {/* ── BACKGROUND ── */}
+  {/* Using a clean hospital/architectural image for a more clinical, professional vibe */}
+  {/* eslint-disable-next-line @next/next/no-img-element */}
+  <img
+    src="https://images.unsplash.com/photo-1519494026892-80bbd2d6fd0d?q=80&w=2053&auto=format&fit=crop"
+    alt="Medical facility corridor"
+    className="absolute inset-0 w-full h-full object-cover opacity-40   mix-blend-overlay"
+    loading="lazy"
+    decoding="async"
+  />
+  {/* Subtle gradient to ensure text readability at the top and bottom */}
+  <div className="absolute inset-0 bg-gradient-to-t from-primary/90 via-transparent to-primary/40" />
+
+  {/* ── TOP: BRANDING & HERO COPY ── */}
+  <div className="relative z-10">
+    <div className="flex items-center gap-3 mb-12">
+      <img src="/Logo.ico" alt="Likeson Logo" className="w-10 h-10 rounded-full" />
+      <span className="text-2xl font-poppins font-black tracking-tight">Likeson.</span>
+    </div>
+
+    <h1 className="text-4xl lg:text-5xl font-poppins font-black tracking-tighter leading-[1.1] mb-6">
+      Advanced <br /> Healthcare <br /> <span className="text-white/70">Delivered.</span>
+    </h1>
+    <p className="text-white/80 font-poppins text-sm md:text-base max-w-sm leading-relaxed">
+      Your trusted partner for immediate medical transport, dedicated home care, and comprehensive clinical support systems.
+    </p>
+  </div>
+
+  {/* ── BOTTOM: TRUST SIGNALS & STATS ── */}
+  <div className="relative z-10 mt-12 grid grid-cols-2 gap-8">
+    {/* Stat 1 */}
+    <div className="space-y-1 border-l-2 border-white/20 pl-4">
+      <h4 className="text-3xl font-poppins font-black">24/7</h4>
+      <p className="text-[10px] font-poppins font-bold uppercase tracking-widest text-white/60">
+        Rapid Response
+      </p>
+    </div>
+    
+    {/* Stat 2 */}
+    <div className="space-y-1 border-l-2 border-white/20 pl-4">
+      <h4 className="text-3xl font-poppins font-black">10k+</h4>
+      <p className="text-[10px] font-poppins font-bold uppercase tracking-widest text-white/60">
+        Patients Served
+      </p>
+    </div>
+
+    {/* Security Badge */}
+    <div className="col-span-2 pt-4">
+      <div className="inline-flex items-center gap-2 text-xs font-poppins font-bold text-white/90 bg-white/10 px-4 py-2.5 rounded-lg backdrop-blur-md border border-white/10">
+        <ShieldAlert size={16} className="text-green-400" />
+        Secure & Fully Compliant System
+      </div>
+    </div>
+  </div>
+</aside>
 
         {/* ── RIGHT: AUTH PANEL ─────────────────────────────────────────── */}
         <section className="p-8 sm:p-16 flex flex-col justify-center bg-base-100">

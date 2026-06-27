@@ -15,8 +15,8 @@ import {
   CreditCard, Wallet, Minus, Plus, CheckCheck,
   BadgePercent, CircleSlash, Loader2, Ticket,
   Building2, Upload, FileImage, AlertTriangle,
-  ChevronLeftCircle, Stethoscope, MapPin, Phone,
-  User, Hash, Home, Landmark,
+  MapPin, Phone, User, Hash, Home, Landmark,
+  Truck
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Container from '../../../components/ui/Container';
@@ -27,7 +27,7 @@ import Link from 'next/link';
 import {
   fetchMedicines,
   clearMedicineError,
-  selectAllMedicines,
+  selectMedicines,
   selectMedicineLoading,
   selectMedicinePagination,
   selectMedicineError,
@@ -44,13 +44,13 @@ import {
   selectCoupon,
   selectCouponLoading,
   selectCouponError,
+  fetchDeliveryPricing,
+  selectDeliveryPricing,
+  selectDeliveryPricingLoading,
 } from '@/store/slices/pharmacyOrderSlice';
 
 import { selectWalletBalance } from '@/store/slices/walletSlice';
-
-import {
-  uploadSingleFile,
-} from '@/store/slices/uploadSlice';
+import { uploadSingleFile } from '@/store/slices/uploadSlice';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -58,12 +58,12 @@ const CATEGORIES = ['Tablet', 'Capsule', 'Syrup', 'Injection', 'Ointment', 'Drop
 const SCHEDULES  = ['H', 'H1', 'G', 'X', 'None'];
 
 const SORT_OPTIONS = [
-  { label: 'Name (A–Z)',       value: 'brandName_asc'   },
-  { label: 'Name (Z–A)',       value: 'brandName_desc'  },
-  { label: 'Price: Low–High',  value: 'mrp_asc'         },
-  { label: 'Price: High–Low',  value: 'mrp_desc'        },
-  { label: 'Newest First',     value: 'createdAt_desc'  },
-  { label: 'Most Popular',     value: 'popularity_desc' },
+  { label: 'Name (A–Z)',       value: 'brandName_asc'     },
+  { label: 'Name (Z–A)',       value: 'brandName_desc'    },
+  { label: 'Price: Low–High',  value: 'referenceMrp_asc'  },
+  { label: 'Price: High–Low',  value: 'referenceMrp_desc' },
+  { label: 'Newest First',     value: 'createdAt_desc'    },
+  { label: 'Most Popular',     value: 'popularity_desc'   },
 ];
 
 const CATEGORY_ICONS = {
@@ -120,7 +120,7 @@ const openRazorpayModal = ({ rzpKey, rzpOrderId, amount, name, description }) =>
     if (typeof window === 'undefined' || !window.Razorpay) {
       reject(new Error('Razorpay SDK not loaded. Please refresh.')); return;
     }
-const key = RZP_KEY_PUBLIC;
+    const key = RZP_KEY_PUBLIC;
     if (!key) { reject(new Error('Razorpay key missing.')); return; }
     const rzp = new window.Razorpay({
       key, order_id: rzpOrderId, amount: Math.round(amount * 100),
@@ -190,11 +190,15 @@ const ScheduleBadge = ({ schedule }) => {
 
 const MedicineStatus = ({ medicine }) => {
   const isDiscontinued = medicine.isDiscontinued;
-  const totalStock = (medicine.inventory || []).reduce(
-    (sum, inv) => sum + (inv.stockQuantity || 0), 0
-  );
-  const outOfStock = !isDiscontinued && totalStock === 0;
+  const hasInventory = Array.isArray(medicine.inventory) && medicine.inventory.length > 0;
+  
+  const totalStock = hasInventory 
+    ? medicine.inventory.reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0)
+    : null;
+    
+  const outOfStock = !isDiscontinued && totalStock !== null && totalStock <= 0;
   const label      = isDiscontinued ? 'DISCONTINUED' : outOfStock ? 'OUT OF STOCK' : 'IN STOCK';
+  
   const colorClass = isDiscontinued || outOfStock
     ? 'bg-error/10 text-error border-error/20'
     : 'bg-success/20 text-success border-success/20';
@@ -228,8 +232,8 @@ const SkeletonCard = ({ viewMode }) => (
 // ─── PrescriptionUploadModal ──────────────────────────────────────────────────
 
 const PrescriptionUploadModal = ({ medicine, onUpload, onSkip, onClose, isUploading }) => {
-  const [file,        setFile]        = useState(null);
-  const [previewUrl,  setPreviewUrl]  = useState(null);
+  const [file,         setFile]        = useState(null);
+  const [previewUrl,   setPreviewUrl]  = useState(null);
   const fileInputRef = useRef(null);
 
   const handleFileChange = (e) => {
@@ -268,7 +272,6 @@ const PrescriptionUploadModal = ({ medicine, onUpload, onSkip, onClose, isUpload
         exit={{ scale: 0.92, opacity: 0 }} transition={{ type: 'spring', stiffness: 380, damping: 30 }}
         className="w-full max-w-md bg-base-100 rounded-2xl shadow-2xl overflow-hidden border border-base-200"
       >
-        {/* Header */}
         <div className="px-6 py-5 border-b border-base-200 bg-gradient-to-r from-warning/8 to-transparent">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-3">
@@ -289,7 +292,6 @@ const PrescriptionUploadModal = ({ medicine, onUpload, onSkip, onClose, isUpload
         </div>
 
         <div className="p-6 space-y-4">
-          {/* Info Banner */}
           <div className="flex gap-3 p-4 rounded-xl bg-info/5 border border-info/20">
             <Info className="w-4 h-4 text-info shrink-0 mt-0.5" />
             <p className="text-[11px] text-base-content/70 leading-relaxed font-medium">
@@ -298,7 +300,6 @@ const PrescriptionUploadModal = ({ medicine, onUpload, onSkip, onClose, isUpload
             </p>
           </div>
 
-          {/* Upload Zone */}
           <div className="space-y-1.5">
             <FieldLabel icon={FileImage} label="Prescription Document" hint="Max 5 MB" />
             <div
@@ -350,7 +351,6 @@ const PrescriptionUploadModal = ({ medicine, onUpload, onSkip, onClose, isUpload
           </p>
         </div>
 
-        {/* Footer */}
         <div className="px-6 py-4 border-t border-base-200 flex gap-3">
           <button
             onClick={onSkip}
@@ -463,16 +463,33 @@ const BuyNowModal = ({
 }) => {
   const dispatch = useDispatch();
   const isActing = useSelector(selectPharmacyActionLoading);
+  
+  // Local Delivery Pricing Fetch
+  const deliveryPricing = useSelector(selectDeliveryPricing);
+  const deliveryPricingLoading = useSelector(selectDeliveryPricingLoading);
 
   const [paymentMethod, setPaymentMethod] = useState('Razorpay');
+  const [deliveryType, setDeliveryType]   = useState('Standard');
   const [step,          setStep]          = useState('address');
   const [address, setAddress] = useState({
     fullName: '', line1: '', landmark: '',
     city: 'Vijayawada', pincode: '', phone: '',
   });
 
-  const finalTotal           = coupon?.code ? (coupon.finalTotal ?? baseTotal) : baseTotal;
-  const isWalletInsufficient = paymentMethod === 'Wallet' && (walletBalance ?? 0) < finalTotal;
+  const subAndCouponTotal = coupon?.code ? (coupon.finalTotal ?? baseTotal) : baseTotal;
+  
+  // Fetch pricing whenever the sub/coupon total changes
+  useEffect(() => {
+    dispatch(fetchDeliveryPricing({ orderTotal: subAndCouponTotal, deliveryType: 'Standard' }));
+  }, [dispatch, subAndCouponTotal]);
+
+  const platformFee = deliveryPricing?.platformFee ?? 5;
+  const deliveryCharge = deliveryType === 'Express' 
+    ? (deliveryPricing?.delivery?.express?.charge ?? 0)
+    : (deliveryPricing?.delivery?.standard?.charge ?? 0);
+
+  const grandTotal           = subAndCouponTotal + deliveryCharge + platformFee;
+  const isWalletInsufficient = paymentMethod === 'Wallet' && (walletBalance ?? 0) < grandTotal;
   const isAddressValid       = address.line1.trim() && address.pincode.trim() && address.fullName.trim();
 
   const handleFieldChange = useCallback((e) => {
@@ -486,7 +503,7 @@ const BuyNowModal = ({
 
     const payload = {
       medicineId: med._id, quantity, storeId,
-      address, paymentMethod,
+      address, paymentMethod, deliveryType,
       ...(coupon?.code && { couponCode: coupon.code }),
       ...(prescriptionImageUrl && { prescription: { imageUrl: prescriptionImageUrl } }),
     };
@@ -526,10 +543,10 @@ const BuyNowModal = ({
         onSuccess(verified.order ?? verified);
       }
     } catch {
-      // thunk already shows toast via rejectWithValue
+      // handled by thunk
     }
   }, [
-    dispatch, med, quantity, storeId, address, paymentMethod,
+    dispatch, med, quantity, storeId, address, paymentMethod, deliveryType,
     coupon, isAddressValid, isWalletInsufficient, walletBalance,
     prescriptionImageUrl, onSuccess, onClose,
   ]);
@@ -572,7 +589,6 @@ const BuyNowModal = ({
         exit={{ y: 60, opacity: 0 }} transition={{ type: 'spring', stiffness: 380, damping: 32 }}
         className="w-full max-w-lg bg-base-100 rounded-2xl shadow-2xl overflow-hidden border border-base-200"
       >
-        {/* Header */}
         <div className="px-6 py-5 border-b border-base-200 bg-gradient-to-r from-primary/5 to-transparent">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -583,12 +599,11 @@ const BuyNowModal = ({
               <p className="text-[10px] text-base-content/40 font-semibold mt-0.5 uppercase tracking-wider">
                 {med.brandName} · Qty {quantity}
               </p>
-              {/* Price display */}
               <div className="flex items-center gap-2 mt-1">
                 {coupon?.code ? (
                   <>
                     <span className="line-through text-[11px] text-base-content/30 font-semibold">₹{baseTotal?.toFixed(2)}</span>
-                    <span className="text-sm font-black text-success">₹{finalTotal?.toFixed(2)}</span>
+                    <span className="text-sm font-black text-success">₹{subAndCouponTotal?.toFixed(2)}</span>
                     <span className="text-[9px] bg-success/15 text-success font-bold px-1.5 py-0.5 rounded-md">
                       SAVED ₹{coupon.discountAmount?.toFixed(2)}
                     </span>
@@ -613,7 +628,6 @@ const BuyNowModal = ({
           </div>
         </div>
 
-        {/* Step Tabs */}
         <div className="flex border-b border-base-200 bg-base-200/40">
           {['address', 'payment'].map((s, i) => (
             <button key={s}
@@ -635,24 +649,20 @@ const BuyNowModal = ({
 
         <div className="p-5 space-y-4 max-h-[58vh] overflow-y-auto">
 
-          {/* ── Step 1: Address ── */}
+          {/* ── Step 1: Address & Delivery Mode ── */}
           {step === 'address' && (
-            <div className="space-y-4">
+            <div className="space-y-5">
               <div className="flex items-center gap-2 p-3 rounded-xl bg-primary/5 border border-primary/10">
                 <MapPin className="w-3.5 h-3.5 text-primary shrink-0" />
                 <p className="text-[10px] font-semibold text-primary/80">
                   Enter your delivery address. Fields marked <span className="text-error">*</span> are required.
                 </p>
               </div>
+              
               <div className="grid grid-cols-2 gap-3">
                 {addressFields.map((field) => (
                   <div key={field.name} className={field.colSpan === 2 ? 'col-span-2' : 'col-span-1'}>
-                    <FieldLabel
-                      icon={field.icon}
-                      label={field.label}
-                      required={field.required}
-                      hint={field.hint}
-                    />
+                    <FieldLabel icon={field.icon} label={field.label} required={field.required} hint={field.hint} />
                     <input
                       name={field.name}
                       value={address[field.name]}
@@ -664,6 +674,36 @@ const BuyNowModal = ({
                   </div>
                 ))}
               </div>
+
+              {/* Delivery Speed Selection */}
+              <div className="pt-2 border-t border-base-200">
+                <FieldLabel icon={Truck} label="Delivery Speed" />
+                <div className="grid grid-cols-2 gap-3 mt-2">
+                  <label className={`relative flex flex-col p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                    deliveryType === 'Standard' ? 'border-primary bg-primary/5' : 'border-base-200 hover:border-primary/30 hover:bg-base-200/50'
+                  }`}>
+                    <input type="radio" name="deliverySpeed" value="Standard" checked={deliveryType === 'Standard'} onChange={() => setDeliveryType('Standard')} className="hidden" />
+                    <span className="text-[11px] font-black text-base-content">Standard</span>
+                    <span className="text-[9px] font-semibold text-base-content/50 mt-1">2-4 Hours</span>
+                    <span className="text-[10px] font-black text-primary mt-1">
+                      {deliveryPricing?.delivery?.standard?.isFree ? 'FREE' : `₹${deliveryPricing?.delivery?.standard?.charge ?? 0}`}
+                    </span>
+                    {deliveryType === 'Standard' && <div className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-primary" />}
+                  </label>
+
+                  <label className={`relative flex flex-col p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                    deliveryType === 'Express' ? 'border-primary bg-primary/5' : 'border-base-200 hover:border-primary/30 hover:bg-base-200/50'
+                  }`}>
+                    <input type="radio" name="deliverySpeed" value="Express" checked={deliveryType === 'Express'} onChange={() => setDeliveryType('Express')} className="hidden" />
+                    <span className="text-[11px] font-black text-base-content flex items-center gap-1"><Zap className="w-3 h-3 text-warning fill-warning" /> Express</span>
+                    <span className="text-[9px] font-semibold text-base-content/50 mt-1">30-60 Mins</span>
+                    <span className="text-[10px] font-black text-primary mt-1">
+                      {deliveryPricing?.delivery?.express?.isFree ? 'FREE' : `₹${deliveryPricing?.delivery?.express?.charge ?? 49}`}
+                    </span>
+                    {deliveryType === 'Express' && <div className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-primary" />}
+                  </label>
+                </div>
+              </div>
             </div>
           )}
 
@@ -671,7 +711,7 @@ const BuyNowModal = ({
           {step === 'payment' && (
             <div className="space-y-4">
               <CouponInput
-                orderTotal={baseTotal} coupon={coupon}
+                orderTotal={subAndCouponTotal} coupon={coupon}
                 couponLoading={couponLoading} couponError={couponError}
                 onApply={onApplyCoupon} onRemove={onRemoveCoupon}
               />
@@ -681,7 +721,7 @@ const BuyNowModal = ({
               <div className="space-y-2">
                 <FieldLabel icon={CreditCard} label="Payment Method" />
                 {PAYMENT_METHODS.map(({ id, label, icon: Icon, desc }) => {
-                  const insufficient = id === 'Wallet' && (walletBalance ?? 0) < finalTotal;
+                  const insufficient = id === 'Wallet' && (walletBalance ?? 0) < grandTotal;
                   return (
                     <button key={id}
                       onClick={() => !insufficient && setPaymentMethod(id)}
@@ -725,13 +765,14 @@ const BuyNowModal = ({
                     <span>{med.brandName} × {quantity}</span>
                     <span className="font-bold">₹{baseTotal?.toFixed(2)}</span>
                   </div>
+                  
                   <AnimatePresence>
                     {coupon?.code && (
                       <motion.div
                         initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
                       >
-                        <div className="flex justify-between text-xs text-success font-bold">
+                        <div className="flex justify-between text-xs text-success font-bold mt-1">
                           <span className="flex items-center gap-1">
                             <BadgePercent className="w-3 h-3" /> {coupon.code}
                           </span>
@@ -740,17 +781,29 @@ const BuyNowModal = ({
                       </motion.div>
                     )}
                   </AnimatePresence>
+                  
+                  <div className="flex justify-between text-xs text-base-content/60 font-medium mt-1">
+                    <span>Delivery ({deliveryType})</span>
+                    <span>{deliveryCharge > 0 ? `₹${deliveryCharge.toFixed(2)}` : 'FREE'}</span>
+                  </div>
+                  
+                  <div className="flex justify-between text-xs text-base-content/60 font-medium mt-1">
+                    <span>Platform Fee</span>
+                    <span>₹{platformFee.toFixed(2)}</span>
+                  </div>
+
                   {med.isPrescriptionRequired && (
-                    <div className="flex justify-between text-xs">
+                    <div className="flex justify-between text-xs mt-1">
                       <span className="text-base-content/50">Prescription</span>
                       <span className={`font-bold ${prescriptionImageUrl ? 'text-success' : 'text-warning'}`}>
                         {prescriptionImageUrl ? '✓ Uploaded' : '⚠ Pending'}
                       </span>
                     </div>
                   )}
-                  <div className="flex justify-between text-xs font-black text-base-content border-t border-base-300/60 pt-2 mt-1">
-                    <span>Total Payable</span>
-                    <span className="text-primary text-sm">₹{finalTotal?.toFixed(2)}</span>
+
+                  <div className="flex justify-between text-xs font-black text-base-content border-t border-base-300/60 pt-2 mt-2">
+                    <span>Grand Total</span>
+                    <span className="text-primary text-sm">₹{grandTotal?.toFixed(2)}</span>
                   </div>
                 </div>
               </div>
@@ -758,7 +811,6 @@ const BuyNowModal = ({
           )}
         </div>
 
-        {/* Footer */}
         <div className="px-5 py-4 border-t border-base-200 flex gap-3 bg-base-200/30">
           {step === 'address' ? (
             <>
@@ -782,7 +834,7 @@ const BuyNowModal = ({
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={isActing || isWalletInsufficient}
+                disabled={isActing || isWalletInsufficient || deliveryPricingLoading}
                 className="flex-1 btn-primary-cta py-2.5 text-xs rounded-xl flex items-center justify-center gap-2 disabled:opacity-40"
               >
                 {isActing ? (
@@ -790,9 +842,9 @@ const BuyNowModal = ({
                 ) : paymentMethod === 'COD' ? (
                   <><Package className="w-4 h-4" /> Place Order</>
                 ) : paymentMethod === 'Wallet' ? (
-                  <><Wallet className="w-4 h-4" /> Pay ₹{finalTotal?.toFixed(2)}</>
+                  <><Wallet className="w-4 h-4" /> Pay ₹{grandTotal?.toFixed(2)}</>
                 ) : (
-                  <><CreditCard className="w-4 h-4" /> Pay ₹{finalTotal?.toFixed(2)}</>
+                  <><CreditCard className="w-4 h-4" /> Pay ₹{grandTotal?.toFixed(2)}</>
                 )}
               </button>
             </>
@@ -815,7 +867,6 @@ const OrderSuccessModal = ({ order, onClose, onViewOrders }) => (
       exit={{ scale: 0.88, opacity: 0 }} transition={{ type: 'spring', stiffness: 380, damping: 26 }}
       className="w-full max-w-sm bg-base-100 rounded-2xl shadow-2xl overflow-hidden border border-base-200"
     >
-      {/* Success banner */}
       <div className="bg-gradient-to-br from-success/10 to-success/5 px-6 pt-8 pb-6 text-center border-b border-base-200">
         <div className="w-16 h-16 rounded-2xl bg-success/15 flex items-center justify-center mx-auto mb-4 shadow-sm">
           <CheckCircle2 className="w-9 h-9 text-success" />
@@ -827,7 +878,6 @@ const OrderSuccessModal = ({ order, onClose, onViewOrders }) => (
       </div>
 
       <div className="p-5 space-y-2">
-        {/* Details */}
         <div className="space-y-2 text-xs">
           <div className="flex items-center justify-between py-2 border-b border-base-200/60">
             <span className="text-base-content/50 font-medium flex items-center gap-1.5">
@@ -864,7 +914,7 @@ const OrderSuccessModal = ({ order, onClose, onViewOrders }) => (
           )}
 
           <div className="flex items-center justify-between py-2">
-            <span className="text-base-content/50 font-medium">Total Paid</span>
+            <span className="text-base-content/50 font-medium">Grand Total</span>
             <span className="font-black text-primary text-base">₹{order?.billing?.totalPayable?.toFixed(2)}</span>
           </div>
         </div>
@@ -894,12 +944,14 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
   const CategoryIcon = CATEGORY_ICONS[medicine.category] ?? Pill;
   const isListView   = viewMode === 'list';
 
+  // Make sure we only show outOfStock if inventory exists but is fully depleted
+  const hasInventory = Array.isArray(medicine.inventory) && medicine.inventory.length > 0;
   const totalStock = useMemo(
-    () => (medicine.inventory || []).reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0),
-    [medicine.inventory]
+    () => hasInventory ? medicine.inventory.reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0) : null,
+    [medicine.inventory, hasInventory]
   );
 
-  const isOutOfStock = medicine.isDiscontinued || totalStock === 0;
+  const isOutOfStock = medicine.isDiscontinued || (totalStock !== null && totalStock <= 0);
   const isThisActing = isActingId === medicine._id;
   const needsRx      = medicine.isPrescriptionRequired;
 
@@ -918,7 +970,6 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
         isListView ? 'md:flex-row md:items-stretch' : ''
       }`}
     >
-      {/* ── Visual Header ── */}
       <div className={`relative bg-gradient-to-br from-base-200 to-base-300 shrink-0 overflow-hidden ${
         isListView ? 'w-full md:w-52 min-h-[11rem]' : 'h-48'
       }`}>
@@ -935,7 +986,6 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
           </div>
         )}
 
-        {/* Category tag top-left */}
         <div className="absolute top-2.5 left-2.5 flex flex-col gap-1.5">
           <span className="bg-base-100/80 backdrop-blur-md text-base-content/70 text-[9px] font-black px-2 py-0.5 rounded-lg shadow-sm border border-base-200/60 uppercase tracking-wider">
             {medicine.category}
@@ -955,7 +1005,6 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
           <Heart size={14} />
         </button>
 
-        {/* Quick View Overlay */}
         <AnimatePresence>
           {isHovered && !isListView && (
             <motion.div
@@ -975,9 +1024,7 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
         </AnimatePresence>
       </div>
 
-      {/* ── Body ── */}
       <div className="flex-1 p-4 flex flex-col">
-        {/* Title Row */}
         <div className="flex justify-between items-start mb-2 gap-2">
           <div className="space-y-0.5 min-w-0 flex-1">
             <h3 className="text-sm font-black text-base-content leading-tight group-hover:text-primary transition-colors truncate tracking-tight">
@@ -990,7 +1037,6 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
           <ScheduleBadge schedule={medicine.schedule} />
         </div>
 
-        {/* Meta chips */}
         <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
           {medicine.dosage && (
             <span className="flex items-center gap-1 text-[9px] text-base-content/55 font-bold bg-base-200 px-2 py-0.5 rounded-lg">
@@ -1011,14 +1057,12 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
           )}
         </div>
 
-        {/* Store name */}
         {storeName && (
           <div className="flex items-center gap-1 text-[9px] text-base-content/35 font-bold mb-2 truncate">
             <Building2 size={9} className="shrink-0" /> {storeName}
           </div>
         )}
 
-        {/* Rx warning */}
         {needsRx && (
           <div className="flex items-center gap-1.5 mb-2.5 px-2.5 py-1.5 rounded-lg bg-warning/5 border border-warning/20">
             <AlertTriangle size={10} className="text-warning shrink-0" />
@@ -1028,7 +1072,6 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
           </div>
         )}
 
-        {/* Indications */}
         {medicine.indications?.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-2.5">
             {medicine.indications.slice(0, 2).map((ind, idx) => (
@@ -1039,7 +1082,6 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
           </div>
         )}
 
-        {/* Salt chips */}
         {medicine.saltComposition?.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-2.5">
             {medicine.saltComposition.slice(0, 2).map((salt, idx) => (
@@ -1050,29 +1092,27 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
           </div>
         )}
 
-        {/* ── Footer: Price + Actions ── */}
         <div className="mt-auto pt-3 border-t border-base-200/70">
-          {/* Price Row */}
           <div className="flex items-center justify-between mb-3">
             <div>
               <div className="flex items-baseline gap-1.5">
-             {(() => {
-  const base   = bestInv?.pricePerUnit ?? medicine.mrp;
-  const gstPct = medicine.gstPercentage ?? 0;
-  const final  = parseFloat((base * (1 + gstPct / 100)).toFixed(2));
-  return (
-    <>
-      <span className="text-lg font-black text-primary tracking-tight">
-        ₹{final}
-      </span>
-      {gstPct > 0 && (
-        <span className="text-[9px] text-base-content/30 font-bold">
-          incl. {gstPct}% GST
-        </span>
-      )}
-    </>
-  );
-})()}
+              {(() => {
+                const base   = bestInv?.pricePerUnit ?? medicine.referenceMrp ?? 0;
+                const gstPct = medicine.gstPercentage ?? 0;
+                const final  = parseFloat((base * (1 + gstPct / 100)).toFixed(2));
+                return (
+                  <>
+                    <span className="text-lg font-black text-primary tracking-tight">
+                      ₹{final}
+                    </span>
+                    {gstPct > 0 && (
+                      <span className="text-[9px] text-base-content/30 font-bold">
+                        incl. {gstPct}% GST
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
               </div>
               <p className="text-[9px] font-bold text-success flex items-center gap-1">
                 <ShieldCheck size={9} /> Verified Authentic
@@ -1088,7 +1128,6 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
             </button>
           </div>
 
-          {/* ── Add to Cart / Buy Now ── */}
           {!isOutOfStock ? (
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -1131,7 +1170,6 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail, onAddToCart, onBuyNow,
   );
 };
 
-// Memoize
 const MemoMedicineCard = MemoizedMedicineCard(MedicineCard);
 
 function MemoizedMedicineCard(Component) {
@@ -1148,7 +1186,6 @@ function MemoizedMedicineCard(Component) {
 
 const FilterContent = ({ filters, updateFilters, resetFilters, activeFiltersCount }) => (
   <div className="space-y-7">
-    {/* Header */}
     <div className="flex items-center justify-between pb-3 border-b border-base-200">
       <h2 className="text-[10px] font-black uppercase tracking-[0.25em] flex items-center gap-2 text-base-content/50">
         <SlidersHorizontal size={12} /> Refine Results
@@ -1160,7 +1197,6 @@ const FilterContent = ({ filters, updateFilters, resetFilters, activeFiltersCoun
       )}
     </div>
 
-    {/* Category */}
     <div>
       <FieldLabel icon={Tag} label="Medicine Category" />
       <div className="grid grid-cols-1 gap-1.5 mt-2">
@@ -1194,7 +1230,6 @@ const FilterContent = ({ filters, updateFilters, resetFilters, activeFiltersCoun
       </div>
     </div>
 
-    {/* Schedule */}
     <div>
       <FieldLabel icon={ShieldAlert} label="Drug Schedule" hint="Regulatory class" />
       <div className="grid grid-cols-2 gap-2 mt-2">
@@ -1222,7 +1257,6 @@ const FilterContent = ({ filters, updateFilters, resetFilters, activeFiltersCoun
       </div>
     </div>
 
-    {/* Toggles */}
     <div className="space-y-2.5">
       <FieldLabel icon={Filter} label="Quick Filters" />
       {[
@@ -1251,7 +1285,6 @@ const FilterContent = ({ filters, updateFilters, resetFilters, activeFiltersCoun
       ))}
     </div>
 
-    {/* Safety Note */}
     <div className="p-3.5 bg-primary/4 rounded-xl border border-primary/10">
       <div className="flex gap-2.5">
         <ShieldAlert size={14} className="text-primary shrink-0 mt-0.5" />
@@ -1270,7 +1303,7 @@ export default function MedicinePage({ router }) {
   const dispatch = useDispatch();
 
   // ── Selectors ──
-  const medicines     = useSelector(selectAllMedicines);
+  const medicines     = useSelector(selectMedicines);
   const loading       = useSelector(selectMedicineLoading);
   const pagination    = useSelector(selectMedicinePagination);
   const error         = useSelector(selectMedicineError);
@@ -1280,6 +1313,9 @@ export default function MedicinePage({ router }) {
   const couponError   = useSelector(selectCouponError);
   const walletBalance = useSelector(selectWalletBalance);
   const isUploading   = useSelector((s) => s.upload.isUploading);
+  
+  const mySub                   = useSelector(selectMySubscription);
+  const subscriptionDiscountPct = mySub?.limits?.pharmacyDiscountPercent ?? 0;
 
   // ── UI State ──
   const [search,        setSearch]        = useState('');
@@ -1345,7 +1381,11 @@ export default function MedicinePage({ router }) {
   const executeAddToCart = useCallback(async (medicine, prescriptionImageUrl = null) => {
     const bestInv = getBestInventory(medicine.inventory);
     const storeId = extractStoreId(bestInv?.storeId);
-    if (!storeId) { toast.error('No store available for this medicine.'); return; }
+    if (!storeId && Array.isArray(medicine.inventory) && medicine.inventory.length > 0) { 
+      toast.error('No store available for this medicine.'); 
+      return; 
+    }
+    
     setActingMedId(medicine._id);
     try {
       await dispatch(addToCart({
@@ -1376,10 +1416,11 @@ export default function MedicinePage({ router }) {
 
   const handleBuyNow = useCallback((medicine) => {
     const bestInv = getBestInventory(medicine.inventory);
-    if (!extractStoreId(bestInv?.storeId)) {
+    if (!extractStoreId(bestInv?.storeId) && Array.isArray(medicine.inventory) && medicine.inventory.length > 0) {
       toast.error('No store available for this medicine.');
       return;
     }
+    
     dispatch(clearCoupon());
     setRxUploadedUrl(null);
     if (medicine.isPrescriptionRequired) {
@@ -1446,20 +1487,16 @@ export default function MedicinePage({ router }) {
 
   const buyNowBestInv  = useMemo(() => getBestInventory(buyNowMed?.inventory), [buyNowMed]);
   const buyNowStoreId  = useMemo(() => extractStoreId(buyNowBestInv?.storeId), [buyNowBestInv]);
-// Add selector at top of MedicinePage component
-const mySub               = useSelector(selectMySubscription);
-const subscriptionDiscountPct = mySub?.limits?.pharmacyDiscountPercent ?? 0;
 
-// Fix buyNowBaseTotal
-const buyNowBaseTotal = useMemo(() => {
-  if (!buyNowMed) return 0;
-  const price   = buyNowBestInv?.pricePerUnit ?? buyNowMed.mrp;
-  const gstPct  = buyNowMed.gstPercentage ?? 0;
-  const priceWithGst = parseFloat((price * (1 + gstPct / 100)).toFixed(2));
-  const raw     = priceWithGst * buyNowQty;
-  const disc    = raw * (subscriptionDiscountPct / 100);
-  return parseFloat((raw - disc).toFixed(2));
-}, [buyNowMed, buyNowBestInv, buyNowQty, subscriptionDiscountPct]);
+  const buyNowBaseTotal = useMemo(() => {
+    if (!buyNowMed) return 0;
+    const price   = buyNowBestInv?.pricePerUnit ?? buyNowMed.referenceMrp ?? 0;
+    const gstPct  = buyNowMed.gstPercentage ?? 0;
+    const priceWithGst = parseFloat((price * (1 + gstPct / 100)).toFixed(2));
+    const raw     = priceWithGst * buyNowQty;
+    const disc    = raw * (subscriptionDiscountPct / 100);
+    return parseFloat((raw - disc).toFixed(2));
+  }, [buyNowMed, buyNowBestInv, buyNowQty, subscriptionDiscountPct]);
 
   const activeFiltersCount = useMemo(() => {
     let count = filters.categories.length + filters.schedules.length;
@@ -1477,7 +1514,7 @@ const buyNowBaseTotal = useMemo(() => {
 
   return (
     <Container>
-      <div  data-theme="customer" className="min-h-screen bg-base-100 mt-4 text-base-content">
+      <div data-theme="customer" className="min-h-screen bg-base-100 mt-4 text-base-content">
 
         {/* ── Hero Ad Slot ── */}
         <Ads page="Medicine_Store" slot="Hero_Banner" />
@@ -1504,10 +1541,9 @@ const buyNowBaseTotal = useMemo(() => {
               Verified authentic · Fast delivery · Schedule-compliant
             </p>
           </div>
-          {/* Stats strip */}
           <div className="hidden md:flex items-center gap-4">
             {[
-              { label: 'Products', value: pagination.totalItems ?? '—' },
+              { label: 'Products', value: pagination.total ?? '—' },
               { label: 'Categories', value: CATEGORIES.length },
               { label: 'Stores', value: '3+' },
             ].map(stat => (
@@ -1547,7 +1583,6 @@ const buyNowBaseTotal = useMemo(() => {
             </div>
 
             <div className="flex flex-wrap md:flex-nowrap gap-2">
-
               {/* View Toggle */}
               <div className="hidden md:flex bg-base-200 p-1 rounded-xl border border-base-200 gap-0.5">
                 {[
@@ -1697,8 +1732,8 @@ const buyNowBaseTotal = useMemo(() => {
                   ) : (
                     <>
                       Showing <span className="text-base-content font-black">{medicines.length}</span>
-                      {pagination.totalItems > medicines.length && (
-                        <> of <span className="text-base-content font-black">{pagination.totalItems}</span></>
+                      {pagination.total > medicines.length && (
+                        <> of <span className="text-base-content font-black">{pagination.total}</span></>
                       )} products
                     </>
                   )}
@@ -1864,7 +1899,7 @@ const buyNowBaseTotal = useMemo(() => {
                 <div className="px-5 py-4 border-t border-base-200 flex flex-col gap-2.5">
                   <button onClick={() => setIsSidebarOpen(false)}
                     className="w-full h-11 bg-primary text-primary-content rounded-xl font-bold text-xs uppercase tracking-widest shadow-sm hover:brightness-110 transition-all">
-                    View {pagination.totalItems ?? ''} Results
+                    View {pagination.total ?? ''} Results
                   </button>
                   {activeFiltersCount > 0 && (
                     <button onClick={() => { resetFilters(); setIsSidebarOpen(false); }}

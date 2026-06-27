@@ -12,6 +12,7 @@ import {
   Building2,
   CheckCircle2,
   AlertCircle,
+  UserCheck,
 } from "lucide-react";
 import { Field, Inp, Sel, SCard, AvailPill } from "./atoms";
 import { SubCoverageBanner, DiagSubBanner } from "./banners";
@@ -65,7 +66,6 @@ export function StepProvider({
     if (isDiag && !labs?.length) onLoadLabs(form.labCity || "");
   }, [isDiag]);
 
-  // Auto-search labs as the user types a city (debounced)
   useEffect(() => {
     if (!isDiag) return;
     const t = setTimeout(() => {
@@ -74,13 +74,11 @@ export function StepProvider({
     return () => clearTimeout(t);
   }, [form.labCity, isDiag]);
 
-  // Auto-load hospitals when this step opens (no Find button anymore)
   useEffect(() => {
     if (!isDiag && !isOnline && !hospitals?.length && !hospitalsLoading)
       onLoadHospitals(form.hospSearch || "");
   }, [isDiag, isOnline]);
 
-  // Auto-search hospitals as the user types a city (debounced)
   useEffect(() => {
     if (isDiag || isOnline) return;
     const t = setTimeout(() => {
@@ -833,6 +831,7 @@ export function StepProvider({
               Checking follow-up eligibility…
             </div>
           )}
+
           {followUpCheck && (
             <motion.div
               initial={{ opacity: 0, y: 4 }}
@@ -865,6 +864,27 @@ export function StepProvider({
                     </p>
                   </>
                 )}
+              </div>
+            </motion.div>
+          )}
+
+          {/* ── Patient identity requirement notice (eligible only) ─────── */}
+          {followUpCheck?.isEligible && (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-start gap-2 p-2.5 rounded-xl border border-warning/30 bg-warning/5"
+            >
+              <UserCheck size={13} className="text-warning flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-[11px] font-black text-warning leading-tight" style={PP}>
+                  Patient name & phone must match original consultation
+                </p>
+                <p className="text-[10px] text-warning/70 font-semibold mt-0.5 leading-snug" style={PP}>
+                  Enter exact details in the Patient step. Mismatch = booking
+                  rejected and follow-up fee charged. Original patient:{" "}
+                  <strong>{followUpCheck.originalPatientName ?? "on file"}</strong>.
+                </p>
               </div>
             </motion.div>
           )}

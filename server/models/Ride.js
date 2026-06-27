@@ -10,11 +10,29 @@ const generateRideCode = customAlphabet(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RIDE MODEL — Likeson.in
+//
+// CHANGE SUMMARY (architecture redesign pass):
+//   - REMOVED embedded `stops[]` and `waypoints[]` — they modeled the same
+//     concept twice with overlapping enums. Replaced by the standalone
+//     RideStop collection, referenced here via `currentStopId`.
+//   - REMOVED `activeNavigationTarget` enum — exact "enum-based navigation"
+//     pattern the workflow spec says to eliminate. Replaced by
+//     `currentStopId` pointing at a real RideStop document.
+//   - REMOVED `pickupOtp` / `pickupOtpVerifiedAt` — OTP now lives per-stop on
+//     RideStop.otp, since multi-stop rides (pharmacy/lab/blood bank/hospital)
+//     each need their own OTP, not just the initial pickup.
+//   - `rideStage` is now a derived projection of `status` (+ currentStop's
+//     type), synced in pre-save. Previously it was a second, independently
+//     settable state machine that nothing ever actually synced — a live
+//     drift bug. Kept as a field (backward-compatible for existing readers)
+//     but no longer independently writable from outside this hook.
+//   - Driver/CA replacement does NOT spawn a new Ride document. Same Ride,
+//     `driver` field reassigned, history captured in AssignmentHistory.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const RIDE_TYPES = [
   "patient",
-  "care_assistant",   // ✅ exists
+  "care_assistant",
   "diagnostic_tech",
   "pharmacy_delivery",
   "blood_bank",
@@ -35,6 +53,19 @@ export const RIDE_STATUSES = [
   "no_driver_found",
 ];
 
+export const RIDE_STAGES = [
+  "searching_driver",
+  "driver_to_care_assistant",
+  "driver_to_patient",
+  "patient_onboard",
+  "care_assistant_joined",
+  "enroute_hospital",
+  "hospital_reached",
+  "return_trip",
+  "completed",
+  "cancelled",
+];
+
 export const RIDE_VEHICLE_CLASSES = [
   "two_wheeler",
   "four_wheeler",
@@ -43,8 +74,25 @@ export const RIDE_VEHICLE_CLASSES = [
 
 export const RIDE_CANCEL_ACTORS = ["customer", "driver", "admin", "system"];
 
-// Max declined drivers stored per ride — prevents unbounded array growth (#11)
+// Max declined drivers stored per ride — prevents unbounded array growth.
 const MAX_DECLINED_DRIVERS = 50;
+
+// status → rideStage derivation map. Single source of truth = `status`;
+// `rideStage` is a read-friendly projection, never independently set.
+const STATUS_TO_STAGE = {
+  requested: "searching_driver",
+  searching: "searching_driver",
+  driver_assigned: "searching_driver",
+  driver_accepted: "driver_to_patient",
+  driver_en_route: "driver_to_patient",
+  driver_arrived: "driver_to_patient",
+  otp_verified: "patient_onboard",
+  in_progress: "enroute_hospital",
+  at_stop: "enroute_hospital",
+  completed: "completed",
+  cancelled: "cancelled",
+  no_driver_found: "cancelled",
+};
 
 // ── Sub-Schemas ───────────────────────────────────────────────────────────────
 
@@ -62,25 +110,9 @@ const rideGeoPointSchema = new Schema(
   { _id: false },
 );
 
-const stopSchema = new Schema(
-  {
-    sequence: { type: Number, required: true },
-    location: { type: rideGeoPointSchema, required: true },
-    purpose: {
-      type: String,
-      enum: [
-        "pharmacy_pickup",
-        "hospital_gate",
-        "lab_collection",
-        "blood_bank",
-        "other",
-      ],
-    },
-    waitMinutes: { type: Number, default: 0 },
-    isCompleted: { type: Boolean, default: false },
-  },
-  { _id: true },
-);
+// REMOVED: stopSchema (was embedded stops[] — overlapped with waypoints[]).
+// REMOVED: inline waypoints[] embedded array definition.
+// Both responsibilities now live in the standalone RideStop collection.
 
 const vehicleSnapshotSchema = new Schema(
   {
@@ -124,6 +156,10 @@ const rideFareBreakdownSchema = new Schema(
     taxes: { type: Number, default: 0, min: 0 },
     discount: { type: Number, default: 0, min: 0 },
     totalFare: { type: Number, default: 0, min: 0 },
+    // NOTE: driverEarnings/agencyEarnings are a DISPLAY CACHE only.
+    // Settlement source of truth is PartnerWallet/PartnerSettlement, computed
+    // from PlatformPricingConfig + actual route data. Never wire payout logic
+    // directly off these two fields.
     driverEarnings: { type: Number, default: 0, min: 0 },
     agencyEarnings: { type: Number, default: 0, min: 0 },
     ratePerKm: { type: Number, default: 0 },
@@ -176,7 +212,7 @@ const rideSchema = new Schema(
     rideCode: {
       type: String,
       unique: true,
-      sparse: true, // FIX #10: sparse prevents null duplicate key collision
+      sparse: true,
       uppercase: true,
       trim: true,
       index: true,
@@ -189,13 +225,11 @@ const rideSchema = new Schema(
       index: true,
     },
 
-    // FIX #8: vehicleClass NOT required at schema level.
-    // It is derived in pre-save from vehicleSnapshot.vehicleType when not provided.
-    // Callers SHOULD provide it at creation; pre-save fills it as fallback.
     vehicleClass: {
       type: String,
       enum: RIDE_VEHICLE_CLASSES,
-      // required removed — pre-save derives it if missing
+      // required intentionally omitted — pre-save derives it from
+      // vehicleSnapshot when not provided at creation.
     },
 
     // ── Booking Link ──────────────────────────────────────────────────────────
@@ -208,68 +242,40 @@ const rideSchema = new Schema(
 
     isReturnRide: { type: Boolean, default: false },
 
-    activeNavigationTarget: {
-      type: String,
-      enum: [
-        "pickup_care_assistant",
-        "pickup_patient",
-        "dropoff_hospital",
-        "dropoff_destination",
-        "return_pickup",
-      ],
-      default: "pickup_patient",
+    // CHANGE: currentStopId replaces activeNavigationTarget. Points at a real
+    // RideStop document instead of a fixed enum string — adding a new stop
+    // type (e.g. a future BLOOD_BANK variant) no longer requires a schema
+    // migration here.
+    currentStopId: {
+      type: Schema.Types.ObjectId,
+      ref: "RideStop",
+      default: null,
+      index: true,
     },
 
+    // CHANGE: tracks which RouteVersion is currently active for this ride.
+    // Every recalculation (destination change, missed join point, admin
+    // recalc) creates a new RouteVersion rather than mutating route data in
+    // place — full version history preserved.
+    activeRouteVersionId: {
+      type: Schema.Types.ObjectId,
+      ref: "RouteVersion",
+      default: null,
+      index: true,
+    },
+
+    // CHANGE: rideStage is now a derived projection of `status` (+ current
+    // stop type where relevant), synced in pre-save below. Kept as a field
+    // for backward API compatibility but should not be $set directly from
+    // application code — write `status` instead and let this follow.
     rideStage: {
       type: String,
-      enum: [
-        "searching_driver",
-        "driver_to_care_assistant",
-        "driver_to_patient",
-        "patient_onboard",
-        "care_assistant_joined",
-        "enroute_hospital",
-        "hospital_reached",
-        "return_trip",
-        "completed",
-        "cancelled",
-      ],
+      enum: RIDE_STAGES,
       default: "searching_driver",
       index: true,
     },
 
-    waypoints: {
-      type: [
-        {
-          type: {
-            type: String,
-            enum: [
-              "care_assistant_join",
-              "pharmacy_pickup",
-              "hospital_gate",
-              "lab_collection",
-              "blood_bank",
-              "other",
-            ],
-            required: true,
-          },
-          location: {
-            type: { type: String, enum: ["Point"], default: "Point" },
-            coordinates: { type: [Number], required: true },
-            address: { type: String, default: "" },
-            label: { type: String, default: "" },
-          },
-          pickupFirst: { type: Boolean, default: false },
-          isCompleted: { type: Boolean, default: false },
-          completedAt: { type: Date, default: null },
-          meta: { type: Schema.Types.Mixed, default: null },
-        },
-      ],
-      default: [],
-    },
-
     // ── Driver & Vehicle ──────────────────────────────────────────────────────
-    // Ride.driver → Driver._id (NOT User._id). See socket service for why this matters.
     driver: {
       type: Schema.Types.ObjectId,
       ref: "Driver",
@@ -309,10 +315,7 @@ const rideSchema = new Schema(
       required: true,
     },
 
-    stops: {
-      type: [stopSchema],
-      default: [],
-    },
+    // REMOVED: stops[], waypoints[] — see RideStop collection.
 
     // ── Live Position ─────────────────────────────────────────────────────────
     liveLocation: {
@@ -337,13 +340,10 @@ const rideSchema = new Schema(
     actualDistanceKm: { type: Number, default: 0 },
     actualDurationMin: { type: Number, default: 0 },
 
-    // ── OTP ───────────────────────────────────────────────────────────────────
-    pickupOtp: {
-      type: String,
-      select: false,
-    },
-
-    pickupOtpVerifiedAt: { type: Date },
+    // REMOVED: pickupOtp, pickupOtpVerifiedAt — OTP now lives per-stop on
+    // RideStop.otp (each stop type — patient pickup, pharmacy, lab, hospital —
+    // needs its own independent verification, a single ride-level field
+    // could not represent that).
 
     // ── Fare ─────────────────────────────────────────────────────────────────
     fare: {
@@ -364,7 +364,6 @@ const rideSchema = new Schema(
 
     driverSearchAttempts: { type: Number, default: 0 },
 
-    // FIX #11: declinedDrivers capped at MAX_DECLINED_DRIVERS in pre-save
     declinedDrivers: [{ type: Schema.Types.ObjectId, ref: "Driver" }],
 
     cancellation: {
@@ -450,13 +449,9 @@ rideSchema.pre("validate", function () {
     }
   }
 
-  // stops must have unique sequence numbers
-  if (this.stops?.length > 0) {
-    const seqs = this.stops.map((s) => s.sequence);
-    if (new Set(seqs).size !== seqs.length) {
-      throw new Error("Ride stops must have unique sequence numbers");
-    }
-  }
+  // REMOVED: stops[] unique-sequence validation — sequence uniqueness is now
+  // enforced at the database level by RideStop's compound unique index
+  // {ride, routeVersion, sequence}.
 
   // Cannot have both transportPartner and soloPartner
   if (this.transportPartner && this.soloPartner) {
@@ -506,15 +501,38 @@ rideSchema.pre("save", async function () {
     }
   }
 
+  // CHANGE: rideStage derivation. `status` is the single source of truth;
+  // rideStage is recomputed here every time status or currentStopId changes,
+  // closing the drift gap that existed when rideStage was independently
+  // settable and nothing ever actually synced it.
+  if (this.isModified("status") || this.isModified("currentStopId")) {
+    let stage = STATUS_TO_STAGE[this.status] ?? this.rideStage;
+
+    if (
+      this.currentStopId &&
+      ["driver_accepted", "driver_en_route", "driver_arrived"].includes(
+        this.status,
+      )
+    ) {
+      const RideStop = mongoose.model("RideStop");
+      const stop = await RideStop.findById(this.currentStopId)
+        .select("stopType")
+        .lean();
+      if (stop?.stopType === "CARE_ASSISTANT_JOIN") {
+        stage = "driver_to_care_assistant";
+      }
+    }
+
+    this.rideStage = stage;
+  }
+
   // Sync isRated
   if (this.isModified("rating") && this.rating?.rating) {
     this.isRated = true;
     this.rating.ratedAt = this.rating.ratedAt ?? now;
   }
 
-  // FIX #8: Derive vehicleClass from vehicleSnapshot if not already set.
-  // Runs regardless of whether vehicleSnapshot was just modified —
-  // so creation without vehicleClass but with vehicleSnapshot works.
+  // Derive vehicleClass from vehicleSnapshot if not already set.
   if (!this.vehicleClass && this.vehicleSnapshot?.vehicleType) {
     const twoWheelerTypes = ["Bike", "Scooter", "Motorcycle"];
     this.vehicleClass = twoWheelerTypes.includes(
@@ -524,7 +542,6 @@ rideSchema.pre("save", async function () {
       : "four_wheeler";
   }
 
-  // Also sync vehicleClass from vehicleSnapshot.vehicleClass if present
   if (!this.vehicleClass && this.vehicleSnapshot?.vehicleClass) {
     this.vehicleClass = this.vehicleSnapshot.vehicleClass;
   }
@@ -553,12 +570,11 @@ rideSchema.pre("save", async function () {
     }
   }
 
-  // FIX #11: Cap declinedDrivers array to prevent unbounded growth
+  // Cap declinedDrivers array to prevent unbounded growth
   if (
     this.isModified("declinedDrivers") &&
     this.declinedDrivers.length > MAX_DECLINED_DRIVERS
   ) {
-    // Keep the most recent MAX_DECLINED_DRIVERS — oldest dropped
     this.declinedDrivers = this.declinedDrivers.slice(-MAX_DECLINED_DRIVERS);
   }
 });
@@ -608,17 +624,44 @@ rideSchema.statics.findByBooking = function (bookingId) {
   return this.find({ booking: bookingId }).sort({ createdAt: 1 });
 };
 
+/**
+ * replaceDriver — swap the driver on an in-flight ride WITHOUT spawning a new
+ * Ride document. Caller is responsible for wrapping this together with the
+ * matching AssignmentHistory insert in the same DB transaction.
+ */
+rideSchema.statics.replaceDriver = async function (
+  rideId,
+  newDriverId,
+  { reason, performedBy } = {},
+) {
+  const ride = await this.findById(rideId);
+  if (!ride) throw new Error("Ride not found");
+
+  ride.driver = newDriverId;
+  ride.driverSnapshot = null; // force re-snapshot on next save
+  ride.updatedBy = performedBy ?? null;
+  await ride.save();
+
+  return ride;
+};
+
 // ── Indexes ───────────────────────────────────────────────────────────────────
 
-rideSchema.index({ pickup: "2dsphere" }, { sparse: true });
-rideSchema.index({ dropoff: "2dsphere" }, { sparse: true });
+// CHANGE: dropped 2dsphere indexes on `pickup` / `dropoff` — these are
+// terminal points queried once at creation, then essentially static. Paying
+// geo-index maintenance cost on every write for two rarely-requeried fields
+// is wasted cost at million-ride scale. `liveLocation` keeps its 2dsphere
+// index since that one genuinely is hot-queried for the live map.
 rideSchema.index({ liveLocation: "2dsphere" });
 rideSchema.index({ driver: 1, status: 1 });
 rideSchema.index({ booking: 1, rideType: 1 });
 rideSchema.index({ status: 1, scheduledPickupAt: 1 });
+rideSchema.index({ status: 1, rideStage: 1 });
 rideSchema.index({ transportPartner: 1, status: 1 });
 rideSchema.index({ soloPartner: 1, status: 1 });
 rideSchema.index({ scheduledPickupAt: 1 });
+rideSchema.index({ currentStopId: 1 });
+rideSchema.index({ activeRouteVersionId: 1 });
 rideSchema.index({ createdAt: -1 });
 
 const Ride = mongoose.model("Ride", rideSchema);

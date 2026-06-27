@@ -22,6 +22,7 @@ import {
   Route, IndianRupee, Award, Target, Activity, ChevronRight,
   AlertCircle, Bike,
 } from "lucide-react";
+import BackButton from "../../../../components/BackButton";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = {
@@ -359,7 +360,8 @@ export default function StatsPage() {
   return (
     <div data-theme="solodriverpartner" className="min-h-screen bg-base-100 text-base-content px-4 sm:px-6 lg:px-8 py-8">
       <div className="max-w-7xl mx-auto space-y-8">
-
+                <BackButton className=' my-2 rounded-md px-3' />
+          
         {/* Header */}
         <motion.div initial={{ opacity:0, y:-14 }} animate={{ opacity:1, y:0 }} transition={{ duration:0.45 }}
           className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

@@ -1,422 +1,269 @@
 'use client';
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'framer-motion';
-import {
-  Reply, Smile, MoreVertical, Edit2, Trash2, Pin,
-  Forward, Copy, Check, CheckCheck, AlertCircle,
-  Play, Download, FileText, MapPin, Phone, Video,
-} from 'lucide-react';
-import { useChat } from '@/hooks/useChat';
-import { formatTime, getInitials } from '@/lib/chatUtils';
-import { EmojiPicker } from './ChatWidgets';
 
-const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+import { useState, useRef } from 'react';
+import { Pin, Pencil, Play, FileText, MapPin, PhoneMissed, Phone, Video, Download } from 'lucide-react';
+import { motion } from 'framer-motion';
+import Avatar from './Avatar';
+import MessageStatusIcon from './MessageStatusIcon';
+import MessageActionsMenu from './MessageActionsMenu';
+import { formatMessageTime, formatDuration } from '@/lib/chatHelpers';
+import { useLongPress } from '@/hooks/useLongPress';
 
-export default function MessageBubble({ message, isMine, showAvatar, conversation, onReply, currentUserId }) {
-  const { deleteMessage, editMessage, reactToMessage, pinMessage } = useChat();
+export default function MessageBubble({
+  message, isOwn, showAvatar, permissions,
+  onReply, onEdit, onDelete, onReact, onPin, onForward, onJumpToReply,
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState(null);
+  const bubbleRef = useRef(null);
 
-  const [menuOpen, setMenuOpen]   = useState(false);
-  const [emojiOpen, setEmojiOpen] = useState(false);
-  const [editing, setEditing]     = useState(false);
-  const [editText, setEditText]   = useState(message.text || '');
-  const [copied, setCopied]       = useState(false);
-  const [menuPos, setMenuPos]     = useState({ top: 0, left: 0 });
-  const [emojiPos, setEmojiPos]   = useState({ top: 0, left: 0 });
+  const openMenu = (e) => {
+    e?.preventDefault?.();
+    const rect = bubbleRef.current?.getBoundingClientRect();
+    setMenuPos(rect ? { x: isOwn ? rect.right : rect.left, y: rect.bottom } : null);
+    setMenuOpen(true);
+  };
 
-  const bubbleRef   = useRef(null);
-  const menuBtnRef  = useRef(null);
-  const emojiBtnRef = useRef(null);
+  const longPress = useLongPress(openMenu);
 
-  // Close on outside click
-  useEffect(() => {
-    if (!menuOpen && !emojiOpen) return;
-    const handler = (e) => {
-      // Don't close if clicking inside portal menus themselves
-      if (e.target.closest('[data-chat-portal]')) return;
-      setMenuOpen(false);
-      setEmojiOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [menuOpen, emojiOpen]);
-
-  // BUG3 FIX: Position context menu using fixed coords from button position
-  const openMenu = useCallback((e) => {
-    e.stopPropagation();
-    setEmojiOpen(false);
-    const rect = menuBtnRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    // Menu width ~192px, height ~280px approx
-    const menuW = 192;
-    const menuH = 280;
-    let top  = rect.bottom + 4;
-    let left = isMine ? rect.right - menuW : rect.left;
-    if (top + menuH > vh) top = rect.top - menuH - 4;
-    if (left + menuW > vw) left = vw - menuW - 8;
-    if (left < 8) left = 8;
-    setMenuPos({ top, left });
-    setMenuOpen((v) => !v);
-  }, [isMine]);
-
-  const openEmoji = useCallback((e) => {
-    e.stopPropagation();
-    setMenuOpen(false);
-    const rect = (emojiBtnRef.current || bubbleRef.current)?.getBoundingClientRect();
-    if (!rect) return;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const pickerW = 288;
-    const pickerH = 256;
-    let top  = rect.top - pickerH - 8;
-    let left = isMine ? rect.right - pickerW : rect.left;
-    if (top < 8) top = rect.bottom + 8;
-    if (left + pickerW > vw) left = vw - pickerW - 8;
-    if (left < 8) left = 8;
-    setEmojiPos({ top, left });
-    setEmojiOpen((v) => !v);
-  }, [isMine]);
-
-  if (message.deletedForAll) {
+  // System notices
+  if (message.type === 'system') {
     return (
-      <div className={`msg-deleted-row ${isMine ? 'msg-deleted-row-mine' : ''}`}>
-        <span className="msg-deleted-pill">
-          <AlertCircle size={12} /> Message deleted
+      <div className="flex justify-center my-2">
+        <span className="text-[11px] px-3 py-1 rounded-full bg-base-200 text-base-content/55">
+          {message.text}
         </span>
       </div>
     );
   }
 
-  if (message.type === 'call_log') return <CallLogBubble message={message} />;
-
-  if (message.type === 'system') {
+  // Call log
+  if (message.type === 'call_log') {
+    const log = message.callLog || {};
+    const missed = ['missed', 'declined', 'cancelled'].includes(log.status);
     return (
-      <div className="msg-system-row">
-        <span className="msg-system-pill">{message.text}</span>
+      <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'} my-1`}>
+        <div className="flex items-center gap-2 px-3 py-2 rounded-field bg-base-200 text-xs text-base-content/70">
+          {missed ? (
+            <PhoneMissed className="w-4 h-4 text-error" />
+          ) : log.callType === 'video' ? (
+            <Video className="w-4 h-4 text-primary" />
+          ) : (
+            <Phone className="w-4 h-4 text-primary" />
+          )}
+          <span className="capitalize">
+            {log.callType} call · {missed ? log.status : formatDuration(log.duration)}
+          </span>
+        </div>
       </div>
     );
   }
 
-  const handleReact = (emoji) => {
-    reactToMessage(message._id, conversation._id, emoji);
-    setEmojiOpen(false);
-    setMenuOpen(false);
-  };
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(message.text || '');
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-    setMenuOpen(false);
-  };
-
-  const handleEditSave = () => {
-    if (editText.trim() && editText !== message.text) {
-      editMessage(message._id, conversation._id, editText.trim());
-    }
-    setEditing(false);
-  };
-
-  const senderName   = message.sender?.name || 'Unknown';
-  const senderAvatar = message.sender?.avatar;
-  const reactions    = message.reactions || [];
-
-  const reactionGroups = reactions.reduce((acc, r) => {
-    if (!acc[r.emoji]) acc[r.emoji] = [];
-    acc[r.emoji].push(r.user);
-    return acc;
-  }, {});
+  const deleted = message.deletedForAll || message.isDeleted;
 
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 10, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-      className={`msg-row ${isMine ? 'msg-row-mine' : 'msg-row-theirs'}`}
-    >
-      {/* Avatar col */}
-      {!isMine && (
-        <div className="msg-avatar-col">
-          {showAvatar ? (
-            senderAvatar ? (
-              <img src={senderAvatar} alt={senderName} className="msg-avatar-img" />
-            ) : (
-              <div className="msg-avatar-fallback"><span>{getInitials(senderName)}</span></div>
-            )
-          ) : (
-            <div className="msg-avatar-spacer" />
+    <div className={`flex gap-2 my-1 ${isOwn ? 'justify-end' : 'justify-start'}`}>
+      {!isOwn && (
+        <div className="w-8 shrink-0 self-end">
+          {showAvatar && (
+            <Avatar src={message.sender?.avatar} name={message.sender?.name} size="xs" />
           )}
         </div>
       )}
 
-      {/* Bubble group */}
-      <div className={`msg-bubble-group ${isMine ? 'msg-bubble-group-mine' : ''}`}>
-        {!isMine && showAvatar && conversation.type === 'group' && (
-          <span className="msg-sender-name">{senderName}</span>
+      <div
+        className="max-w-[78%] sm:max-w-[65%] flex flex-col"
+        style={{ alignItems: isOwn ? 'flex-end' : 'flex-start' }}
+      >
+        {!isOwn && showAvatar && message.sender?.name && (
+          <span className="text-[11px] font-semibold text-primary px-1 mb-0.5">
+            {message.sender.name}
+          </span>
         )}
 
-        {/* Reply preview inside bubble */}
-        {message.replyTo && (
-          <div className={`msg-reply-preview-bubble ${isMine ? 'msg-reply-preview-mine' : ''}`}>
-            <div className="msg-reply-bar" />
-            <div>
-              <span className="msg-reply-sender">{message.replyTo.sender?.name || 'Unknown'}</span>
-              <p className="msg-reply-text">
+        <motion.div
+          ref={bubbleRef}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          {...longPress}
+          onContextMenu={openMenu}
+          className={`relative group px-3 py-2 rounded-field text-sm leading-relaxed break-words cursor-pointer select-text ${
+            isOwn
+              ? 'bg-primary text-primary-content rounded-br-sm'
+              : 'bg-base-200 text-base-content rounded-bl-sm'
+          }`}
+        >
+          {/* Reply quote */}
+          {message.replyTo && !deleted && (
+            <button
+              type="button"
+              onClick={() => onJumpToReply?.(message.replyTo._id || message.replyTo)}
+              className={`block w-full text-left mb-1.5 px-2 py-1 rounded border-l-2 text-xs ${
+                isOwn
+                  ? 'border-primary-content/50 bg-primary-content/10'
+                  : 'border-primary bg-base-100/60'
+              }`}
+            >
+              <span className="font-semibold block truncate">
+                {message.replyTo.sender?.name || 'Message'}
+              </span>
+              <span className="opacity-75 block truncate">
                 {message.replyTo.type === 'text'
-                  ? message.replyTo.text?.slice(0, 80)
+                  ? message.replyTo.text
                   : `[${message.replyTo.type}]`}
-              </p>
-            </div>
-          </div>
-        )}
+              </span>
+            </button>
+          )}
 
-        {/* BUG3 FIX: Hover action row — positioned outside bubble, state-driven visibility */}
-        <div className="msg-row-inner" ref={bubbleRef}>
-          {/* Action buttons row — only shown on hover via CSS group */}
-          <div className={`msg-hover-actions ${isMine ? 'msg-hover-actions-mine' : ''}`}>
-            <button ref={emojiBtnRef} onClick={openEmoji} className="msg-quick-btn" title="React">
-              <Smile size={14} />
-            </button>
-            <button onClick={() => onReply(message)} className="msg-quick-btn" title="Reply">
-              <Reply size={14} />
-            </button>
-            <button ref={menuBtnRef} onClick={openMenu} className="msg-quick-btn" title="More">
-              <MoreVertical size={14} />
-            </button>
+          <MessageBody message={message} deleted={deleted} isOwn={isOwn} />
+
+          {/* Meta row */}
+          <div
+            className={`flex items-center gap-1 mt-1 text-[10px] ${
+              isOwn ? 'text-primary-content/70 justify-end' : 'text-base-content/45'
+            }`}
+          >
+            {message.isEdited && !deleted && <Pencil className="w-2.5 h-2.5" />}
+            {message.isPinned && <Pin className="w-2.5 h-2.5" />}
+            <span>{formatMessageTime(message.createdAt)}</span>
+            {isOwn && !deleted && <MessageStatusIcon message={message} />}
           </div>
 
-          {/* Bubble */}
-          <div className={`msg-bubble ${isMine ? 'msg-bubble-mine' : 'msg-bubble-theirs'}`}>
-            {editing ? (
-              <div className="msg-edit-wrap">
-                <input
-                  autoFocus
-                  value={editText}
-                  onChange={(e) => setEditText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleEditSave();
-                    if (e.key === 'Escape') setEditing(false);
-                  }}
-                  className="msg-edit-input"
-                />
-                <div className="msg-edit-actions">
-                  <button onClick={() => setEditing(false)} className="msg-edit-cancel">Cancel</button>
-                  <button onClick={handleEditSave} className="msg-edit-save">Save</button>
-                </div>
-              </div>
-            ) : (
-              <MessageContent message={message} isMine={isMine} />
-            )}
-
-            {/* Meta */}
-            <div className={`msg-meta ${isMine ? 'msg-meta-mine' : ''}`}>
-              {message.isEdited && <span className="msg-edited-label">edited</span>}
-              <span className="msg-time">{formatTime(message.createdAt)}</span>
-              {isMine && (
-                <span className="msg-status">
-                  {message.readAt ? (
-                    <CheckCheck size={13} className="msg-status-read" />
-                  ) : message.deliveredAt ? (
-                    <CheckCheck size={13} className="msg-status-delivered" />
-                  ) : (
-                    <Check size={13} className="msg-status-sent" />
-                  )}
+          {/* Reactions */}
+          {message.reactions?.length > 0 && (
+            <div
+              className={`absolute -bottom-3 ${isOwn ? 'right-2' : 'left-2'} flex bg-base-100 border border-base-300 rounded-full px-1.5 py-0.5 shadow-sm gap-0.5 z-10`}
+            >
+              {[...new Set(message.reactions.map((r) => r.emoji))].slice(0, 4).map((emoji) => (
+                <span key={emoji} className="text-xs">{emoji}</span>
+              ))}
+              {message.reactions.length > 1 && (
+                <span className="text-[10px] text-base-content/50 ml-0.5">
+                  {message.reactions.length}
                 </span>
               )}
             </div>
-          </div>
-        </div>
-
-        {/* Reactions */}
-        {Object.keys(reactionGroups).length > 0 && (
-          <div className={`msg-reactions ${isMine ? 'msg-reactions-mine' : ''}`}>
-            {Object.entries(reactionGroups).map(([emoji, users]) => {
-              const myReacted = users.some((u) => {
-                const uid = u?._id?.toString() || u?.toString();
-                return uid === currentUserId?.toString();
-              });
-              return (
-                <button
-                  key={emoji}
-                  onClick={() => handleReact(emoji)}
-                  className={`msg-reaction-chip ${myReacted ? 'msg-reaction-chip-active' : ''}`}
-                >
-                  {emoji} <span>{users.length}</span>
-                </button>
-              );
-            })}
-            <button onClick={openEmoji} className="msg-reaction-add">
-              <Smile size={12} />
-            </button>
-          </div>
-        )}
+          )}
+        </motion.div>
       </div>
 
-      {/* BUG3 FIX: Context menu rendered in portal at fixed screen position */}
-      {typeof window !== 'undefined' && createPortal(
-        <AnimatePresence>
-          {menuOpen && (
-            <motion.div
-              data-chat-portal
-              initial={{ opacity: 0, scale: 0.92 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.92 }}
-              transition={{ duration: 0.1 }}
-              style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, zIndex: 9999 }}
-              className="msg-context-menu"
-            >
-              {/* Quick reactions */}
-              <div className="msg-context-reactions">
-                {QUICK_REACTIONS.map((e) => (
-                  <button key={e} onClick={() => handleReact(e)} className="msg-context-emoji-btn">{e}</button>
-                ))}
-              </div>
-              <div className="msg-context-divider" />
-
-              <button className="msg-context-item" onClick={() => { onReply(message); setMenuOpen(false); }}>
-                <Reply size={14} /> Reply
-              </button>
-              {message.type === 'text' && (
-                <button className="msg-context-item" onClick={handleCopy}>
-                  {copied ? <Check size={14} /> : <Copy size={14} />}
-                  {copied ? 'Copied!' : 'Copy text'}
-                </button>
-              )}
-              <button className="msg-context-item" onClick={() => {
-                pinMessage(message._id, conversation._id, !message.isPinned);
-                setMenuOpen(false);
-              }}>
-                <Pin size={14} /> {message.isPinned ? 'Unpin' : 'Pin message'}
-              </button>
-              {isMine && message.type === 'text' && (
-                <button className="msg-context-item" onClick={() => { setEditing(true); setMenuOpen(false); }}>
-                  <Edit2 size={14} /> Edit message
-                </button>
-              )}
-              <div className="msg-context-divider" />
-              <button
-                className="msg-context-item msg-context-danger"
-                onClick={() => {
-                  deleteMessage(message._id, conversation._id, isMine ? 'for_all' : 'for_me');
-                  setMenuOpen(false);
-                }}
-              >
-                <Trash2 size={14} />
-                {isMine ? 'Delete for everyone' : 'Delete for me'}
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>,
-        document.body
+      {menuOpen && (
+        <MessageActionsMenu
+          message={message}
+          isOwn={isOwn}
+          deleted={deleted}
+          permissions={permissions}
+          position={menuPos}
+          onClose={() => setMenuOpen(false)}
+          onReply={() => { onReply?.(message); setMenuOpen(false); }}
+          onEdit={() => { onEdit?.(message); setMenuOpen(false); }}
+          onDelete={(scope) => { onDelete?.(message, scope); setMenuOpen(false); }}
+          onReact={(emoji) => { onReact?.(message, emoji); setMenuOpen(false); }}
+          onPin={() => { onPin?.(message); setMenuOpen(false); }}
+          onForward={() => { onForward?.(message); setMenuOpen(false); }}
+        />
       )}
-
-      {/* BUG3 FIX: Emoji picker in portal at computed position */}
-      {typeof window !== 'undefined' && createPortal(
-        <AnimatePresence>
-          {emojiOpen && (
-            <div
-              data-chat-portal
-              style={{ position: 'fixed', top: emojiPos.top, left: emojiPos.left, zIndex: 9999 }}
-            >
-              <EmojiPicker onSelect={handleReact} onClose={() => setEmojiOpen(false)} />
-            </div>
-          )}
-        </AnimatePresence>,
-        document.body
-      )}
-    </motion.div>
+    </div>
   );
 }
 
-// ─── Content renderers ────────────────────────────────────────────────────────
+function MessageBody({ message, deleted, isOwn }) {
+  if (deleted) {
+    return <p className="italic opacity-60 text-sm">This message was deleted</p>;
+  }
 
-function MessageContent({ message, isMine }) {
   switch (message.type) {
-    case 'text':
-      return <p className="msg-text">{message.text}</p>;
-
     case 'image':
       return (
-        <div className="msg-media-wrap">
-          <img src={message.media?.url} alt="Image" className="msg-media-img" loading="lazy" />
+        <div className="relative group/img">
+          <img
+            src={message.media?.url}
+            alt={message.media?.fileName || 'photo'}
+            className="rounded-field max-w-full max-h-72 object-cover cursor-pointer block"
+            loading="lazy"
+            onClick={() => window.open(message.media?.url, '_blank')}
+          />
+          <a
+            href={message.media?.url}
+            download
+            target="_blank"
+            rel="noopener noreferrer"
+            className="absolute top-2 right-2 btn btn-circle btn-xs bg-black/40 text-white opacity-0 group-hover/img:opacity-100 transition-opacity"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Download className="w-3 h-3" />
+          </a>
         </div>
       );
 
     case 'video':
       return (
-        <div className="msg-media-wrap msg-media-video">
-          <video src={message.media?.url} controls className="msg-media-img" poster={message.media?.thumbnail} />
-        </div>
+        <video
+          src={message.media?.url}
+          controls
+          className="rounded-field max-w-full max-h-72 block"
+          preload="metadata"
+        />
       );
 
     case 'audio':
       return (
-        <div className="msg-audio-wrap">
-          <audio src={message.media?.url} controls className="msg-audio-player" />
-          {message.media?.duration > 0 && (
-            <span className="msg-audio-duration">
-              {Math.floor(message.media.duration / 60)}:{String(Math.round(message.media.duration % 60)).padStart(2, '0')}
-            </span>
-          )}
+        <div className="flex items-center gap-2 min-w-[200px] py-1">
+          <Play className="w-4 h-4 shrink-0 opacity-70" />
+          <audio src={message.media?.url} controls className="h-8 flex-1 min-w-0" />
         </div>
       );
 
     case 'file':
       return (
-        <a href={message.media?.url} target="_blank" rel="noreferrer" className="msg-file-wrap">
-          <FileText size={22} className="msg-file-icon" />
-          <div className="msg-file-info">
-            <span className="msg-file-name">{message.media?.fileName || 'File'}</span>
-            {message.media?.size && <span className="msg-file-size">{formatBytes(message.media.size)}</span>}
+        <a
+          href={message.media?.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          download
+          className={`flex items-center gap-2 px-2 py-2 rounded-field min-w-[160px] ${
+            isOwn ? 'bg-primary-content/10' : 'bg-base-100'
+          }`}
+        >
+          <FileText className="w-5 h-5 shrink-0 text-primary" />
+          <div className="min-w-0">
+            <p className="text-xs font-medium truncate">{message.media?.fileName || 'Download file'}</p>
+            {message.media?.size && (
+              <p className="text-[10px] opacity-60">
+                {(message.media.size / 1024).toFixed(0)} KB
+              </p>
+            )}
           </div>
-          <Download size={16} className="msg-file-download" />
+          <Download className="w-4 h-4 shrink-0 opacity-60 ml-auto" />
         </a>
       );
 
     case 'location':
       return (
-        <div className="msg-location-wrap">
-          <MapPin size={18} className="msg-location-icon" />
-          <div>
-            <p className="msg-location-label">Location shared</p>
-            {message.location?.address && <p className="msg-location-address">{message.location.address}</p>}
-          </div>
+        <a
+          href={`https://maps.google.com/?q=${message.location?.coordinates?.[1]},${message.location?.coordinates?.[0]}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2"
+        >
+          <MapPin className="w-5 h-5 shrink-0 text-error" />
+          <span className="text-xs underline">{message.location?.address || 'View location'}</span>
+        </a>
+      );
+
+    case 'order_card':
+      return (
+        <div className="text-xs space-y-1">
+          <p className="font-bold">Order update</p>
+          <pre className="whitespace-pre-wrap break-words text-[11px] opacity-80">
+            {typeof message.cardPayload === 'string'
+              ? message.cardPayload
+              : JSON.stringify(message.cardPayload, null, 1)}
+          </pre>
         </div>
       );
 
     default:
-      return <p className="msg-text">{message.text || `[${message.type}]`}</p>;
+      return <p className="whitespace-pre-wrap">{message.text}</p>;
   }
-}
-
-function CallLogBubble({ message }) {
-  const { callLog } = message;
-  const Icon = callLog?.callType === 'video' ? Video : Phone;
-  const colorClass = {
-    answered: 'msg-call-answered',
-    missed:   'msg-call-missed',
-    declined: 'msg-call-declined',
-    cancelled:'msg-call-cancelled',
-  }[callLog?.status] || '';
-
-  return (
-    <div className="msg-system-row">
-      <div className={`msg-call-pill ${colorClass}`}>
-        <Icon size={14} />
-        <span>
-          {callLog?.callType === 'video' ? 'Video' : 'Voice'} call · {callLog?.status}
-          {callLog?.duration > 0 && ` · ${Math.floor(callLog.duration / 60)}:${String(callLog.duration % 60).padStart(2,'0')}`}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function formatBytes(b) {
-  if (b < 1024) return `${b} B`;
-  if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
-  return `${(b / 1048576).toFixed(1)} MB`;
 }

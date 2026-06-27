@@ -516,45 +516,7 @@ const SuperAdminDashboard = ({ children }) => {
           </motion.div>
         </section>
 
-        {/* Footer */}
-        <footer className="p-6">
-          <div className="flex flex-col xl:flex-row items-center justify-between gap-6 p-6 border border-base-300 rounded-[2rem] bg-base-200/50">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary">
-                <Command size={20} />
-              </div>
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.3em] text-base-content/60">
-                  Likeson Operations
-                </p>
-                <p className="text-[9px] font-bold text-base-content/20 uppercase">
-                  v3.4.0 High-Priority Hub
-                </p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full xl:w-auto">
-              {[
-                { name: "Analytics",        icon: <AreaChart size={18} />, href: "/super-admin/analytics" },
-                { name: "Infrastructure",   icon: <Hospital size={18} />,  href: "/super-admin/infra" },
-                { name: "Audit History",    icon: <History size={18} />,   href: "/super-admin/history" },
-                { name: "System Terminal",  icon: <Terminal size={18} />,  href: "/super-admin/terminal" },
-              ].map((sc, idx) => (
-                <Link
-                  key={idx}
-                  href={sc.href}
-                  className="flex items-center gap-4 px-5 py-4 bg-base-100/50 border border-base-300 rounded-2xl hover:border-primary/50 hover:bg-primary/5 transition-all group"
-                >
-                  <span className="text-primary group-hover:scale-110 transition-transform">
-                    {sc.icon}
-                  </span>
-                  <span className="text-[10px] font-black text-base-content/40 group-hover:text-base-content uppercase tracking-widest">
-                    {sc.name}
-                  </span>
-                </Link>
-              ))}
-            </div>
-          </div>
-        </footer>
+       
       </main>
 
       {/* ── Command / Search overlay ───────────────────────────────────── */}

@@ -239,7 +239,8 @@ router.post('/staff/invite', protect, authorize('pharmacy', 'admin', 'superadmin
     // 1. Determine Store ID (If pharmacist, use their managed store. If admin, expect ID in body)
     let targetStoreId;
     if (req.user.role === 'pharmacy') {
-      const profile = await PharmacyProfile.findOne({ user: req.user._id });
+       
+const profile = await PharmacyProfile.findOne({ user: req.user._id }).session(session);
       if (!profile) throw new Error("Account not associated with an active store.");
       targetStoreId = profile.assignedStore;
     } else {

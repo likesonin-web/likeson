@@ -19,6 +19,7 @@ import {
   selectLoading,
   selectError,
 } from "@/store/slices/soloDriverSlice";
+import BackButton from "../../../../components/BackButton";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -159,7 +160,8 @@ export default function AccountSettingsPage() {
 
   return (
     <div className="space-y-6 relative pb-8">
-
+              <BackButton className=' my-2 rounded-md px-3' />
+        
       {/* ── Page Header ── */}
       <motion.div variants={fadeUp} initial="hidden" animate="visible" className="flex items-center justify-between flex-wrap gap-4">
         <div>

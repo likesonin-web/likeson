@@ -26,6 +26,7 @@ import {
   selectError,
   selectSocketConnected,
 } from '@/store/slices/operationsSlice';
+import BackButton from '../../../../components/BackButton';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -567,7 +568,8 @@ export default function SoloDriverBookings() {
 
   return (
     <div className="min-h-screen bg-base-100 flex flex-col font-poppins">
-
+            <BackButton className=' my-2 rounded-md px-3' />
+      
       {/* ── HEADER ── */}
       <div className="bg-base-200 border-b border-base-300 px-4 pb-0" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
 

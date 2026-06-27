@@ -5,26 +5,16 @@ const { Schema } = mongoose;
 /**
  * Driver Model — Likeson.in
  *
- * Two driver types:
- *   Type A — Agency driver:  ownerAgency = TransportPartner, soloPartner = null
- *   Type B — Solo driver:    ownerAgency = null, soloPartner = SoloDriverPartner
- * Exactly one of {ownerAgency, soloPartner} set — enforced in pre-save.
+ * AGENCY DRIVERS ONLY (ownerAgency = TransportPartner).
+ * SoloDriverPartner is a completely separate entity — no Driver doc needed.
  *
  * MONEY — Driver holds NO payout/wallet fields.
- *   Agency drivers (Type A): TransportPartner is the settling entity.
- *     Platform credits PartnerWallet(partner=TransportPartner.user, partnerRole='transportpartner').
- *     Agency pays its drivers off-platform. Do NOT create PartnerWallet /
- *     PartnerCollectionLiability records against a Driver — they attach to
- *     the owning TransportPartner instead.
- *   Solo drivers (Type B): SoloDriverPartner is the settling entity
- *     (same PartnerWallet pattern, partnerRole='solodriverpartner').
- *   This Driver doc is dispatch/ops data only — location, status, KYC,
- *   performance, rewards. Never read/write earnings here.
+ *   Platform credits PartnerWallet(partner=TransportPartner.user, partnerRole='transportpartner').
+ *   Agency pays its drivers off-platform. Do NOT create PartnerWallet /
+ *   PartnerCollectionLiability records against a Driver — attach to ownerAgency instead.
  *
- * VEHICLE — lives in standalone `Vehicle` collection (ownerType/ownerId
- * polymorphic ref), not embedded anywhere. assignedVehicleId below points
- * to a Vehicle._id (works identically for agency and solo drivers — solo
- * driver's single Vehicle doc has ownerType='SoloDriverPartner').
+ * VEHICLE — lives in standalone `Vehicle` collection (ownerType='TransportPartner',
+ * ownerId=ownerAgency._id). assignedVehicleId points to Vehicle._id.
  *
  * SECTIONS
  *  §1  Sub-schemas
@@ -33,7 +23,7 @@ const { Schema } = mongoose;
  *  §4  Indexes
  *  §5  Virtuals
  *  §6  Pre-save middleware
- *  §7  Post-save hook — sync agency driver counters (agency drivers only)
+ *  §7  Post-save hook — sync agency driver counters
  *  §8  Instance methods
  *  §9  Statics
  */
@@ -106,9 +96,8 @@ const medicalFitnessSchema = new Schema(
 );
 
 /**
- * driverBankSchema — KYC display only (e.g. "driver's personal account
- * on file" for agency record-keeping). NOT used for platform payout.
- * accountNumber select:false; no payout flow reads this collection.
+ * driverBankSchema — KYC display only (driver's personal account on file
+ * for agency record-keeping). NOT used for platform payout.
  */
 const driverBankSchema = new Schema(
   {
@@ -139,7 +128,6 @@ const driverBadgeSchema = new Schema(
         'RIDES_1000', 'TOP_RATED', 'PERFECT_WEEK', 'SPEED_KING',
         'ZERO_CANCEL_MONTH', 'SAFE_DRIVER', 'NIGHT_OWL', 'LONG_HAUL',
         'VERIFIED_DRIVER', 'LOYAL_DRIVER_1Y', 'LOYAL_DRIVER_2Y', 'EARLY_ADOPTER',
-        'SOLO_PARTNER',
       ],
       required: true,
     },
@@ -153,9 +141,8 @@ const driverBadgeSchema = new Schema(
 );
 
 /**
- * driverCoinTxnSchema — REWARDS coins, NOT money. Separate system from
- * PartnerWalletTransaction (real-money ledger). Coins are a gamification
- * layer (redeemable for perks), never convertible to wallet balance.
+ * driverCoinTxnSchema — REWARDS coins, NOT money. Separate from
+ * PartnerWalletTransaction (real-money ledger on TransportPartner).
  */
 const driverCoinTxnSchema = new Schema(
   {
@@ -199,10 +186,9 @@ const driverRewardSchema = new Schema(
 );
 
 /**
- * driverEarningLogSchema — DISPLAY ONLY. NOT a wallet, NOT a ledger.
- * Agency driver money settles into ownerAgency's (TransportPartner)
- * PartnerWallet. This log just shows the driver app: "you drove this leg,
- * here's what it contributed, has your agency paid you yet (off-platform)."
+ * driverEarningLogSchema — DISPLAY ONLY. NOT a wallet.
+ * Agency driver money settles into ownerAgency's (TransportPartner) PartnerWallet.
+ * This log shows the driver app what rides contributed — agency pays off-platform.
  */
 const driverEarningLogSchema = new Schema(
   {
@@ -234,23 +220,20 @@ const driverSchema = new Schema(
       index:    true,
     },
 
+    /**
+     * ownerAgency — required. Driver belongs to a TransportPartner agency.
+     * SoloDriverPartner does NOT create Driver docs.
+     */
     ownerAgency: {
-      type:    Schema.Types.ObjectId,
-      ref:     'TransportPartner',
-      default: null,
-      index:   true,
-    },
-
-    soloPartner: {
-      type:    Schema.Types.ObjectId,
-      ref:     'SoloDriverPartner',
-      default: null,
-      index:   true,
+      type:     Schema.Types.ObjectId,
+      ref:      'TransportPartner',
+      required: [true, 'Agency (ownerAgency) is required for all drivers'],
+      index:    true,
     },
 
     /**
      * assignedVehicleId — points to Vehicle._id in the standalone Vehicle
-     * collection (works for both agency and solo drivers identically).
+     * collection (ownerType='TransportPartner').
      */
     assignedVehicleId: {
       type:    Schema.Types.ObjectId,
@@ -261,7 +244,7 @@ const driverSchema = new Schema(
 
     /**
      * Denormalised vehicle snapshot, synced from Vehicle on assignment.
-     * Display/dispatch only — never the source of truth for verification.
+     * Display/dispatch only — never source of truth for verification.
      */
     assignedVehicleSnapshot: {
       vehicleCode:        { type: String },
@@ -318,7 +301,7 @@ const driverSchema = new Schema(
     // ── Medical Fitness ───────────────────────────────────────────────────────
     medicalFitness: { type: medicalFitnessSchema, default: () => ({}) },
 
-    // ── Bank (record-keeping only — NOT payout source, see driverBankSchema) ──
+    // ── Bank (record-keeping only — NOT payout source) ────────────────────────
     bankDetails: { type: driverBankSchema, default: () => ({}) },
 
     // ── Emergency Contact ─────────────────────────────────────────────────────
@@ -360,7 +343,7 @@ const driverSchema = new Schema(
       cancellationRate:     { type: Number, default: 0 },
       avgPickupTimeMinutes: { type: Number, default: 0 },
       totalDistanceKm:      { type: Number, default: 0 },
-      totalEarnings:        { type: Number, default: 0 }, // analytics cache only — re-derive from BookingPartnerAllocation, never hand-incremented
+      totalEarnings:        { type: Number, default: 0 }, // analytics cache — re-derive from BookingPartnerAllocation
       monthlyRides:         { type: Number, default: 0 },
       lastRideAt:           { type: Date },
       performanceTier: {
@@ -390,11 +373,10 @@ const driverSchema = new Schema(
 
     currentRide: { type: Schema.Types.ObjectId, ref: 'Ride', default: null },
 
- rewards: { type: driverRewardSchema, default: () => ({}) },
+    rewards: { type: driverRewardSchema, default: () => ({}) },
 
     // ── Earnings Display (informational only — Driver has NO wallet) ─────────
-    // Real money: agency drivers -> TransportPartner.PartnerWallet,
-    //             solo drivers   -> SoloDriverPartner.PartnerWallet.
+    // Real money → TransportPartner.PartnerWallet.
     earningsSummary: {
       pendingTotal:  { type: Number, default: 0, min: 0 },
       receivedTotal: { type: Number, default: 0, min: 0 },
@@ -449,12 +431,6 @@ driverSchema.virtual('aadhaarMasked').get(function () {
   return last4 ? `XXXX XXXX ${last4}` : null;
 });
 
-driverSchema.virtual('driverType').get(function () {
-  if (this.ownerAgency) return 'agency';
-  if (this.soloPartner) return 'solo';
-  return 'unlinked';
-});
-
 driverSchema.virtual('isDispatchable').get(function () {
   return (
     this.isActive &&
@@ -478,17 +454,9 @@ driverSchema.virtual('hasExpiringCompliance').get(function () {
 // ── §6  Pre-save Middleware ───────────────────────────────────────────────────
 
 driverSchema.pre('save', async function () {
-  if (this.ownerAgency && this.soloPartner) {
-    throw new Error(
-      'A Driver cannot be linked to both an agency (ownerAgency) and a ' +
-      'solo partner (soloPartner) simultaneously.'
-    );
-  }
-  if (!this.ownerAgency && !this.soloPartner) {
-    throw new Error(
-      'A Driver must be linked to either an agency (ownerAgency) or a ' +
-      'solo partner (soloPartner). Both are null.'
-    );
+  // ownerAgency is required — enforced by schema but guard here too
+  if (!this.ownerAgency) {
+    throw new Error('A Driver must be linked to an agency (ownerAgency). Use SoloDriverPartner for self-employed drivers.');
   }
 
   if (!this.driverCode) {
@@ -559,11 +527,9 @@ driverSchema.pre('save', async function () {
   }
 });
 
-// ── §7  Post-save — sync agency driver counters (agency drivers only) ─────────
+// ── §7  Post-save — sync agency driver counters ───────────────────────────────
 
 driverSchema.post('save', async function () {
-  if (!this.ownerAgency) return;
-
   try {
     const [totals] = await mongoose.model('Driver').aggregate([
       { $match: { ownerAgency: this.ownerAgency } },
@@ -595,36 +561,27 @@ driverSchema.post('save', async function () {
 // ── §8  Instance Methods ──────────────────────────────────────────────────────
 
 driverSchema.methods.earnCoins = async function (amount, description, referenceId, referenceModel) {
-  // Gamification coins only. Real-money earnings flow through
-  // PartnerWalletTransaction against TransportPartner/SoloDriverPartner — never here.
   this.rewards.coinBalance      += amount;
   this.rewards.totalCoinsEarned += amount;
   this.rewards.coinTransactions.push({
-    type:           'EARN',
-    amount,
+    type: 'EARN', amount,
     balance:        this.rewards.coinBalance,
-    description,
-    referenceId,
-    referenceModel,
-    expiresAt:      new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+    description, referenceId, referenceModel,
+    expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
   });
   return this.save();
 };
 
 driverSchema.methods.redeemCoins = async function (amount, description, referenceId) {
   if (this.rewards.coinBalance < amount) {
-    throw new Error(
-      `Insufficient coins. Balance: ${this.rewards.coinBalance}, Requested: ${amount}`
-    );
+    throw new Error(`Insufficient coins. Balance: ${this.rewards.coinBalance}, Requested: ${amount}`);
   }
   this.rewards.coinBalance      -= amount;
   this.rewards.totalCoinsRedeem += amount;
   this.rewards.coinTransactions.push({
-    type:           'REDEEM',
-    amount,
+    type: 'REDEEM', amount,
     balance:        this.rewards.coinBalance,
-    description,
-    referenceId,
+    description, referenceId,
     referenceModel: 'Redemption',
   });
   return this.save();
@@ -651,12 +608,11 @@ driverSchema.methods.markEarningsReceived = async function (entryIds = [], marke
     entry.markedBy = markedByUserId;
     receivedNow += entry.amount;
   });
-  this.earningsSummary.pendingTotal = Math.max(0, +(this.earningsSummary.pendingTotal - receivedNow).toFixed(2));
+  this.earningsSummary.pendingTotal  = Math.max(0, +(this.earningsSummary.pendingTotal - receivedNow).toFixed(2));
   this.earningsSummary.receivedTotal = +(this.earningsSummary.receivedTotal + receivedNow).toFixed(2);
   return this.save();
 };
 
-/** Fetch the live Vehicle doc this driver is assigned to (source of truth). */
 driverSchema.methods.getAssignedVehicle = function () {
   if (!this.assignedVehicleId) return null;
   return mongoose.model('Vehicle').findById(this.assignedVehicleId);
@@ -664,15 +620,13 @@ driverSchema.methods.getAssignedVehicle = function () {
 
 /**
  * Assign a vehicle — updates Vehicle.assignedDriver (source of truth) AND
- * this.assignedVehicleId + snapshot (cache). Keeps both sides consistent
- * instead of writing to each independently.
+ * this.assignedVehicleId + snapshot (cache).
  */
 driverSchema.methods.assignVehicle = async function (vehicleId) {
   const Vehicle = mongoose.model('Vehicle');
   const vehicle = await Vehicle.findById(vehicleId);
   if (!vehicle) throw new Error('Vehicle not found');
 
-  // Unassign current vehicle if any
   if (this.assignedVehicleId) {
     await Vehicle.findByIdAndUpdate(this.assignedVehicleId, { assignedDriver: null, assignedAt: null });
   }
@@ -685,10 +639,10 @@ driverSchema.methods.assignVehicle = async function (vehicleId) {
   this.assignedVehicleSnapshot = {
     vehicleCode:        vehicle.vehicleCode,
     registrationNumber: vehicle.registrationNumber,
-    make:                vehicle.make,
-    model:               vehicle.model,
-    vehicleType:         vehicle.vehicleType,
-    color:               vehicle.color,
+    make:               vehicle.make,
+    model:              vehicle.model,
+    vehicleType:        vehicle.vehicleType,
+    color:              vehicle.color,
   };
   return this.save();
 };
@@ -724,12 +678,6 @@ driverSchema.statics.findByAgency = function (agencyId, status) {
   if (status) filter.status = status;
   return this.find(filter).sort({ createdAt: -1 });
 };
-
-driverSchema.statics.findBySoloPartner = function (soloPartnerId) {
-  return this.findOne({ soloPartner: soloPartnerId });
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 const Driver = mongoose.model('Driver', driverSchema);
 export default Driver;

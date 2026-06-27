@@ -1,18 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useRouter, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  MapPin, Power, PowerOff, Clock, Plus, Trash2,
-  Globe, AlertTriangle, CheckCircle2, Loader2, Shield,
-  Navigation, Wifi, WifiOff, TrendingUp, ChevronRight,
-  X, Info, ArrowLeft, Map, Layers, Star,
-  Activity, Zap, ChevronLeft,
+  MapPin, Clock, Plus, Trash2, Globe, AlertTriangle, 
+  CheckCircle2, Loader2, Shield, Navigation, Wifi, WifiOff, 
+  TrendingUp, ChevronRight, X, Info, ArrowLeft, Map, 
+  Layers, Activity, Zap, ChevronLeft, Edit2
 } from "lucide-react";
 
- 
 import {
   fetchDispatchStatus,
   updateDispatchStatus,
@@ -20,6 +18,7 @@ import {
   fetchServiceZones,
   addServiceZone,
   removeServiceZone,
+  updateServiceZone, // NEW: Imported update action
   selectDispatch,
   selectServiceZones,
   selectLoading,
@@ -31,8 +30,6 @@ import {
 } from "@/store/slices/soloDriverSlice";
 
 import Container from "@/components/ui/Container";
-
-const GMAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 
 // ── Animation variants ────────────────────────────────────────────────────────
 const fadeUp = {
@@ -58,6 +55,9 @@ const INDIAN_STATES = [
   "Delhi","Jammu & Kashmir","Ladakh","Puducherry","Chandigarh",
 ];
 
+// ── Google Maps Key ───────────────────────────────────────────────────────────
+const GOOGLE_MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || "AIzaSyBkwZzM-ZJCCHUg5hG5vbT9OSIeUPVi_qw";
+
 // ── Pulse dot ─────────────────────────────────────────────────────────────────
 function PulseDot({ color = "#16a34a", size = 10 }) {
   return (
@@ -74,7 +74,6 @@ function PulseDot({ color = "#16a34a", size = 10 }) {
   );
 }
 
-// ── Field note label helper ───────────────────────────────────────────────────
 function FieldNote({ children }) {
   return (
     <p className="flex items-start gap-1 text-xs text-base-content/45 mt-1 leading-relaxed">
@@ -84,120 +83,6 @@ function FieldNote({ children }) {
   );
 }
 
-// ── Google Maps component ─────────────────────────────────────────────────────
-function ServiceZoneMap({ zones }) {
-  const mapRef      = useRef(null);
-  const mapInstance = useRef(null);
-  const circles     = useRef([]);
-  const markers     = useRef([]);
-  const [loaded, setLoaded] = useState(false);
-
-  const initMap = useCallback(() => {
-    if (!mapRef.current || !window.google) return;
-    mapInstance.current = new window.google.maps.Map(mapRef.current, {
-      center:    { lat: 20.5937, lng: 78.9629 },
-      zoom:      5,
-      mapTypeId: "roadmap",
-      styles: [
-        { featureType: "all",  elementType: "geometry",          stylers: [{ color: "#f1f5f9" }] },
-        { featureType: "all",  elementType: "labels.text.fill",  stylers: [{ color: "#475569" }] },
-        { featureType: "all",  elementType: "labels.text.stroke",stylers: [{ color: "#f8fafc" }] },
-        { featureType: "road", elementType: "geometry",          stylers: [{ color: "#e2e8f0" }] },
-        { featureType: "road.highway", elementType: "geometry",  stylers: [{ color: "#cbd5e1" }] },
-        { featureType: "water",        elementType: "geometry",  stylers: [{ color: "#bae6fd" }] },
-        { featureType: "poi",          elementType: "all",       stylers: [{ visibility: "off" }] },
-        { featureType: "transit",      elementType: "all",       stylers: [{ visibility: "off" }] },
-        { featureType: "administrative.locality", elementType: "labels.text.fill", stylers: [{ color: "#0284c7" }] },
-        { featureType: "landscape",    elementType: "geometry",  stylers: [{ color: "#f8fafc" }] },
-      ],
-      disableDefaultUI: true,
-      zoomControl: true,
-      zoomControlOptions: { position: window.google.maps.ControlPosition.RIGHT_CENTER },
-    });
-    setLoaded(true);
-  }, []);
-
-  useEffect(() => {
-    if (window.google) { initMap(); return; }
-    const id = "gmaps-sdk";
-    if (!document.getElementById(id)) {
-      const script = document.createElement("script");
-      script.id    = id;
-      script.src   = `https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&libraries=geometry`;
-      script.async = true;
-      script.defer = true;
-      script.onload = initMap;
-      document.head.appendChild(script);
-    } else {
-      const check = setInterval(() => {
-        if (window.google) { clearInterval(check); initMap(); }
-      }, 200);
-    }
-  }, [initMap]);
-
-  useEffect(() => {
-    if (!loaded || !mapInstance.current || !window.google) return;
-    circles.current.forEach(c => c.setMap(null));
-    markers.current.forEach(m => m.setMap(null));
-    circles.current = [];
-    markers.current = [];
-    if (!zones?.length) return;
-
-    const geocoder    = new window.google.maps.Geocoder();
-    const bounds      = new window.google.maps.LatLngBounds();
-    const colors      = ["#0284c7","#059669","#d97706","#9333ea","#ea580c","#2563eb"];
-    const activeZones = zones.filter(z => z.isActive);
-
-    activeZones.forEach((zone, i) => {
-      const query = `${zone.city}, ${zone.state}, India`;
-      geocoder.geocode({ address: query }, (results, status) => {
-        if (status !== "OK" || !results?.[0]) return;
-        const pos   = results[0].geometry.location;
-        const color = colors[i % colors.length];
-        const circle = new window.google.maps.Circle({
-          strokeColor: color, strokeOpacity: 0.8, strokeWeight: 2,
-          fillColor: color, fillOpacity: 0.1,
-          map: mapInstance.current, center: pos, radius: (zone.radiusKm || 15) * 1000,
-        });
-        circles.current.push(circle);
-        bounds.extend(pos);
-        const marker = new window.google.maps.Marker({
-          position: pos, map: mapInstance.current, title: `${zone.city}, ${zone.state}`,
-          icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: color, fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
-        });
-        markers.current.push(marker);
-        const info = new window.google.maps.InfoWindow({
-          content: `
-            <div style="background:#fff;color:#1e293b;padding:10px 14px;border-radius:8px;
-                        font-family:system-ui;font-size:13px;border:1px solid ${color}40;min-width:140px;box-shadow:0 4px 12px rgba(0,0,0,0.1)">
-              <div style="font-weight:700;color:${color};margin-bottom:4px">${zone.city}</div>
-              <div style="color:#64748b">${zone.state}</div>
-              <div style="margin-top:6px;color:#0284c7">📍 ${zone.radiusKm || 15} km radius</div>
-              ${zone.pinCodes?.length ? `<div style="margin-top:4px;color:#64748b">📮 ${zone.pinCodes.join(", ")}</div>` : ""}
-            </div>`,
-        });
-        marker.addListener("click", () => info.open(mapInstance.current, marker));
-        if (activeZones.length > 0) mapInstance.current.fitBounds(bounds, { padding: 60 });
-      });
-    });
-  }, [zones, loaded]);
-
-  return (
-    <div className="relative w-full h-full rounded-2xl overflow-hidden">
-      <div ref={mapRef} className="w-full h-full" />
-      {!loaded && (
-        <div className="absolute inset-0 flex items-center justify-center bg-base-200">
-          <div className="flex flex-col items-center gap-3">
-            <Loader2 className="w-8 h-8 animate-spin text-primary" />
-            <span className="text-sm text-base-content/60 font-medium">Loading map…</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Status chip ───────────────────────────────────────────────────────────────
 function StatusChip({ status }) {
   const map = {
     active:         { label: "Active",       cls: "bg-success/15 text-success border-success/30" },
@@ -214,8 +99,8 @@ function StatusChip({ status }) {
   );
 }
 
-// ── Zone card ─────────────────────────────────────────────────────────────────
-function ZoneCard({ zone, onRemove, removing }) {
+// ── Zone card (Updated with Edit Button) ──────────────────────────────────────
+function ZoneCard({ zone, onEdit, onRemove, removing }) {
   const colors  = ["sky","emerald","amber","purple","orange","blue"];
   const idx     = zone._id?.slice(-1).charCodeAt(0) % colors.length || 0;
   const c       = colors[idx];
@@ -232,50 +117,136 @@ function ZoneCard({ zone, onRemove, removing }) {
   return (
     <motion.div
       layout variants={scaleIn} initial="hidden" animate="visible" exit="exit"
-      className="relative group rounded-2xl border border-success/20 bg-success/10 p-4"
+      className="relative group rounded-2xl border border-success/20 bg-success/10 p-5 w-full shadow-sm hover:shadow-md transition-shadow"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
-          <div className={`mt-0.5 flex-shrink-0 w-9 h-9 rounded-xl bg-success/20 border ${col.border} flex items-center justify-center shadow-sm`}>
-            <MapPin className={`w-4 h-4 ${col.text}`} />
+          <div className={`mt-0.5 flex-shrink-0 w-10 h-10 rounded-xl bg-success/20 border ${col.border} flex items-center justify-center shadow-sm`}>
+            <MapPin className={`w-5 h-5 ${col.text}`} />
           </div>
           <div className="min-w-0">
-            <p className="font-bold text-base-content text-sm truncate">{zone.city}</p>
+            <p className="font-bold text-base-content text-base truncate">{zone.city}</p>
             <p className="text-xs text-base-content/60 mt-0.5">{zone.state}</p>
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              <span className={`text-xs px-2 py-0.5 rounded-full bg-success/10 ${col.text} border ${col.border}`}>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <span className={`text-xs px-2.5 py-1 rounded-full bg-success/10 ${col.text} border ${col.border} font-medium`}>
                 {zone.radiusKm || 15} km radius
               </span>
               {zone.pinCodes?.length > 0 && (
-                <span className="text-xs px-2 py-0.5 rounded-full text-base-content/60 border border-base-300">
+                <span className="text-xs px-2.5 py-1 rounded-full text-base-content/60 border border-base-300 font-medium truncate max-w-[120px]" title={zone.pinCodes.join(", ")}>
                   {zone.pinCodes.length} pin{zone.pinCodes.length > 1 ? "s" : ""}
                 </span>
               )}
               {zone.isActive ? (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-success/10 text-emerald-600 border border-emerald-200">Active</span>
+                <span className="text-xs px-2.5 py-1 rounded-full bg-success/10 text-emerald-600 border border-emerald-200 font-medium">Active</span>
               ) : (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-base-200 text-base-content/40 border border-base-300">Inactive</span>
+                <span className="text-xs px-2.5 py-1 rounded-full bg-base-200 text-base-content/40 border border-base-300 font-medium">Inactive</span>
               )}
             </div>
           </div>
         </div>
-        <button
-          onClick={() => onRemove(zone._id)}
-          disabled={removing}
-          className="flex-shrink-0 w-8 h-8 rounded-xl flex items-center justify-center bg-red-50 border border-red-200
-                     text-red-500 hover:bg-red-100 hover:border-red-300 transition-all disabled:opacity-40"
-        >
-          {removing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-        </button>
+        
+        <div className="flex flex-col gap-2 flex-shrink-0">
+          <button
+            onClick={() => onEdit(zone)}
+            className="w-9 h-9 rounded-xl flex items-center justify-center bg-base-200 border border-base-300
+                       text-base-content/70 hover:bg-base-300 transition-all"
+            title="Edit Zone"
+          >
+            <Edit2 className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onRemove(zone._id)}
+            disabled={removing}
+            className="w-9 h-9 rounded-xl flex items-center justify-center bg-red-50 border border-red-200
+                       text-red-500 hover:bg-red-100 hover:border-red-300 transition-all disabled:opacity-40"
+            title="Remove Zone"
+          >
+            {removing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+          </button>
+        </div>
       </div>
     </motion.div>
   );
 }
 
-// ── Add Zone Modal ────────────────────────────────────────────────────────────
-function AddZoneModal({ onClose, onAdd, loading }) {
-  const [form, setForm] = useState({ city: "", state: "", radiusKm: "15", pinCodes: "" });
+// ── Combined Add/Edit Zone Modal with Google Autocomplete ─────────────────────
+function ZoneModal({ initialData, onClose, onSave, loading }) {
+  const isEdit = !!initialData;
+  const [form, setForm] = useState({
+    city: initialData?.city || "",
+    state: initialData?.state || "",
+    radiusKm: initialData?.radiusKm?.toString() || "15",
+    pinCodes: initialData?.pinCodes?.join(", ") || "",
+    isActive: initialData?.isActive ?? true,
+  });
   const [errors, setErrors] = useState({});
+  const cityInputRef = useRef(null);
+
+  // Load Google Maps Script & Initialize Autocomplete
+  useEffect(() => {
+    const initAutocomplete = () => {
+      if (!window.google || !cityInputRef.current) return;
+      const autocomplete = new window.google.maps.places.Autocomplete(cityInputRef.current, {
+        types: ["(regions)"],
+        componentRestrictions: { country: "in" },
+      });
+
+      autocomplete.addListener("place_changed", () => {
+        const place = autocomplete.getPlace();
+        if (!place.address_components) return;
+
+        let selectedCity = "";
+        let selectedState = "";
+        let selectedPincode = "";
+
+        place.address_components.forEach((comp) => {
+          const types = comp.types;
+          if (types.includes("locality")) selectedCity = comp.long_name;
+          if (types.includes("administrative_area_level_1")) selectedState = comp.long_name;
+          if (types.includes("postal_code")) selectedPincode = comp.long_name;
+        });
+
+        // Fallbacks if locality isn't present
+        if (!selectedCity) {
+          const fallback = place.address_components.find(c => c.types.includes("administrative_area_level_2") || c.types.includes("sublocality"));
+          if (fallback) selectedCity = fallback.long_name;
+        }
+
+        setForm(prev => {
+          // If we found a new pincode, append it if it doesn't already exist in the input
+          let newPins = prev.pinCodes;
+          if (selectedPincode && !newPins.includes(selectedPincode)) {
+            newPins = newPins ? `${newPins}, ${selectedPincode}` : selectedPincode;
+          }
+
+          return {
+            ...prev,
+            city: selectedCity || place.name || prev.city,
+            state: INDIAN_STATES.includes(selectedState) ? selectedState : prev.state,
+            pinCodes: newPins
+          };
+        });
+        setErrors(p => ({ ...p, city: "", state: "" }));
+      });
+    };
+
+    if (!window.google) {
+      const existingScript = document.getElementById("google-maps-script");
+      if (!existingScript) {
+        const script = document.createElement("script");
+        script.id = "google-maps-script";
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=places`;
+        script.async = true;
+        script.defer = true;
+        script.onload = initAutocomplete;
+        document.head.appendChild(script);
+      } else {
+        existingScript.addEventListener("load", initAutocomplete);
+      }
+    } else {
+      initAutocomplete();
+    }
+  }, []);
 
   const validate = () => {
     const e = {};
@@ -289,15 +260,32 @@ function AddZoneModal({ onClose, onAdd, loading }) {
   const handleSubmit = () => {
     const e = validate();
     if (Object.keys(e).length) { setErrors(e); return; }
-    const pinCodes = form.pinCodes
-      .split(/[\s,]+/).map(p => p.trim()).filter(p => /^\d{6}$/.test(p));
-    onAdd({ city: form.city.trim(), state: form.state, radiusKm: Number(form.radiusKm), pinCodes });
+    
+    // Clean up pincodes array
+    const pinCodesArray = form.pinCodes
+      .split(/[\s,]+/)
+      .map(p => p.trim())
+      .filter(p => /^\d{6}$/.test(p));
+
+    const payload = {
+      city: form.city.trim(),
+      state: form.state,
+      radiusKm: Number(form.radiusKm),
+      pinCodes: [...new Set(pinCodesArray)], // Remove duplicates
+      isActive: form.isActive
+    };
+
+    if (isEdit) {
+      onSave({ zoneId: initialData._id, ...payload });
+    } else {
+      onSave(payload);
+    }
   };
 
   return (
     <motion.div
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4"
       style={{ background: "rgba(15,23,42,0.4)", backdropFilter: "blur(8px)" }}
       onClick={e => e.target === e.currentTarget && onClose()}
     >
@@ -306,11 +294,13 @@ function AddZoneModal({ onClose, onAdd, loading }) {
         animate={{ y: 0,  opacity: 1, scale: 1    }}
         exit=   {{ y: 40, opacity: 0, scale: 0.95 }}
         transition={{ type: "spring", damping: 28, stiffness: 320 }}
-        className="w-full max-w-md rounded-2xl border border-base-300 bg-base-100 p-6 shadow-2xl"
+        className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-base-300 bg-base-100 p-6 shadow-2xl"
       >
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h3 className="text-lg font-bold text-base-content">Add Service Zone</h3>
+            <h3 className="text-lg font-bold text-base-content">
+              {isEdit ? "Edit Service Zone" : "Add Service Zone"}
+            </h3>
             <p className="text-xs text-base-content/60 mt-0.5">Define a city/area where you accept rides</p>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-xl flex items-center justify-center bg-base-200 hover:bg-base-300 text-base-content/60 transition-all">
@@ -319,20 +309,21 @@ function AddZoneModal({ onClose, onAdd, loading }) {
         </div>
 
         <div className="space-y-5">
-          {/* City */}
+          {/* City (Autocomplete) */}
           <div>
-            <label className="text-xs font-semibold text-base-content mb-1.5 block">City *</label>
+            <label className="text-xs font-semibold text-base-content mb-1.5 block">Search Area / City *</label>
             <input
+              ref={cityInputRef}
               value={form.city}
               onChange={e => { setForm(p => ({ ...p, city: e.target.value })); setErrors(p => ({ ...p, city: "" })); }}
-              placeholder="e.g. Vijayawada"
+              placeholder="Search for a place (e.g. Proddatur)"
               className={`w-full px-4 py-2.5 rounded-xl bg-base-200 border text-base-content text-sm placeholder:text-base-content/30
                          outline-none focus:ring-2 focus:ring-primary/30 transition-all
                          ${errors.city ? "border-error/60" : "border-base-300 focus:border-primary/60"}`}
             />
             {errors.city
               ? <p className="text-xs text-error mt-1">{errors.city}</p>
-              : <FieldNote>Enter the city name where you want to accept ride requests.</FieldNote>
+              : <FieldNote>Type an area name. State and primary pincode will auto-fill.</FieldNote>
             }
           </div>
 
@@ -349,10 +340,7 @@ function AddZoneModal({ onClose, onAdd, loading }) {
               <option value="">Select state…</option>
               {INDIAN_STATES.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            {errors.state
-              ? <p className="text-xs text-error mt-1">{errors.state}</p>
-              : <FieldNote>Select the Indian state this city belongs to.</FieldNote>
-            }
+            {errors.state && <p className="text-xs text-error mt-1">{errors.state}</p>}
           </div>
 
           {/* Radius */}
@@ -368,27 +356,40 @@ function AddZoneModal({ onClose, onAdd, loading }) {
             <div className="flex justify-between text-xs text-base-content/40 mt-1">
               <span>1 km</span><span>100 km</span>
             </div>
-            {errors.radiusKm
-              ? <p className="text-xs text-error mt-1">{errors.radiusKm}</p>
-              : <FieldNote>How far from the city center you are willing to pick up passengers. Larger radius = more ride chances.</FieldNote>
-            }
           </div>
 
           {/* Pin Codes */}
           <div>
             <label className="text-xs font-semibold text-base-content mb-1.5 block">
-              Pin Codes <span className="text-base-content/40 font-normal">(optional)</span>
+              Coverage Pin Codes
             </label>
-            <input
+            <textarea
               value={form.pinCodes}
+              rows={2}
               onChange={e => setForm(p => ({ ...p, pinCodes: e.target.value }))}
-              placeholder="520001, 520002, 520003"
+              placeholder="e.g. 520001, 520002"
               className="w-full px-4 py-2.5 rounded-xl bg-base-200 border border-base-300 focus:border-primary/60
                          text-base-content text-sm placeholder:text-base-content/30 outline-none focus:ring-2
-                         focus:ring-primary/30 transition-all"
+                         focus:ring-primary/30 transition-all resize-none"
             />
-            <FieldNote>Comma-separated 6-digit pin codes to restrict pickups to specific localities. Leave blank for full city coverage.</FieldNote>
+            <FieldNote>
+              The primary pincode is added automatically based on search. Finding all surrounding pincodes based on a radius requires manual entry or a specialized spatial database.
+            </FieldNote>
           </div>
+
+          {/* Active Toggle (Edit Only) */}
+          {isEdit && (
+            <div className="flex items-center justify-between p-3 rounded-xl bg-base-200 border border-base-300">
+              <div>
+                <p className="text-sm font-semibold text-base-content">Zone Status</p>
+                <p className="text-xs text-base-content/50">Temporarily disable this zone without deleting it</p>
+              </div>
+              <ToggleSwitch
+                checked={form.isActive}
+                onChange={(val) => setForm(p => ({ ...p, isActive: val }))}
+              />
+            </div>
+          )}
         </div>
 
         <div className="flex gap-3 mt-6">
@@ -401,8 +402,8 @@ function AddZoneModal({ onClose, onAdd, loading }) {
             className="flex-1 py-2.5 rounded-xl bg-primary text-primary-content text-sm font-bold flex items-center justify-center gap-2
                        hover:brightness-110 disabled:opacity-50 transition-all"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            {loading ? "Adding…" : "Add Zone"}
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : isEdit ? <MapPin className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+            {loading ? "Saving…" : isEdit ? "Update Zone" : "Add Zone"}
           </button>
         </div>
       </motion.div>
@@ -444,26 +445,23 @@ export default function AvailabilityServiceZones() {
   };
   const section = getSection();
 
-  // ── Correct selectors aligned with soloDriverSlice ──────────────────────────
-  // dispatch object: { status, isDispatchable, isBlocked, isPaused, pausedUntil,
-  //                    partnershipStatus, onboardingComplete, kycVerified,
-  //                    vehicleVerified, currentRide, shift, lastLocationUpdate }
-  const dispatch_data   = useSelector(selectDispatch);          // full GET /dispatch/status payload
-  const serviceZones    = useSelector(selectServiceZones);       // Array<zone> from GET /service-zones
-  const currentStatus   = useSelector(selectDispatchStatus);     // dispatch.status || profile.status
-  const isOnline        = useSelector(selectIsOnline);           // status === 'Available'
-  const isDispatchReady = useSelector(selectIsDispatchReady);    // dispatch.isDispatchable
-  const partnerStatus   = useSelector(selectPartnershipStatus);  // dispatch.partnershipStatus
+  const dispatch_data   = useSelector(selectDispatch);          
+  const serviceZones    = useSelector(selectServiceZones);       
+  const currentStatus   = useSelector(selectDispatchStatus);     
+  const isOnline        = useSelector(selectIsOnline);           
+  const isDispatchReady = useSelector(selectIsDispatchReady);    
+  const partnerStatus   = useSelector(selectPartnershipStatus);  
 
   const loadingDispatch      = useSelector(selectLoading("dispatch"));
   const loadingToggle        = useSelector(selectLoading("updateDispatchStatus"));
   const loadingZones         = useSelector(selectLoading("serviceZones"));
   const loadingAddZone       = useSelector(selectLoading("addZone"));
+  const loadingUpdateZone    = useSelector(selectLoading("updateZone"));
   const loadingRemoveZone    = useSelector(selectLoading("removeZone"));
   const errorToggle          = useSelector(selectError("updateDispatchStatus"));
 
-  const [removingId,   setRemovingId]   = useState(null);
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [removingId,     setRemovingId]     = useState(null);
+  const [modalState,     setModalState]     = useState({ show: false, data: null });
 
   // Initial data fetch
   useEffect(() => {
@@ -472,25 +470,28 @@ export default function AvailabilityServiceZones() {
   }, [dispatch]);
 
   useEffect(() => {
-    if (section === "add") setShowAddModal(true);
-    else setShowAddModal(false);
+    if (section === "add") setModalState({ show: true, data: null });
+    else setModalState({ show: false, data: null });
   }, [section]);
 
   // ── Toggle handler ───────────────────────────────────────────────────────────
-  // Router accepts: 'Available' | 'Offline' | 'On-Break'
   const handleToggle = async (val) => {
     const newStatus = val ? "Available" : "Offline";
-    // Optimistic update: setDispatchStatusOptimistic(status) updates state.dispatch.status
     dispatch(setDispatchStatusOptimistic(newStatus));
-    const result = await dispatch(updateDispatchStatus(newStatus));
-    // Re-sync on any result to stay in truth
+    await dispatch(updateDispatchStatus(newStatus));
     dispatch(fetchDispatchStatus());
   };
 
-  const handleAddZone = async (payload) => {
-    const result = await dispatch(addServiceZone(payload));
+  const handleSaveZone = async (payload) => {
+    let result;
+    if (payload.zoneId) {
+      result = await dispatch(updateServiceZone(payload));
+    } else {
+      result = await dispatch(addServiceZone(payload));
+    }
+
     if (!result.error) {
-      setShowAddModal(false);
+      setModalState({ show: false, data: null });
       if (pathname?.includes("/add")) router.push(pathname.replace("/add", ""));
       dispatch(fetchServiceZones());
     }
@@ -504,7 +505,7 @@ export default function AvailabilityServiceZones() {
   };
 
   const handleCloseModal = () => {
-    setShowAddModal(false);
+    setModalState({ show: false, data: null });
     if (pathname?.includes("/add")) router.back();
   };
 
@@ -513,8 +514,6 @@ export default function AvailabilityServiceZones() {
   // Derived
   const activeZones = Array.isArray(serviceZones) ? serviceZones.filter(z => z.isActive).length : 0;
   const totalKm     = Array.isArray(serviceZones) ? serviceZones.reduce((a, z) => a + (z.radiusKm || 15), 0) : 0;
-
-  // dispatch.status: "Available" | "Offline" | "On-Break" | "On-Trip"
   const dispatchStatusLabel = currentStatus || "—";
 
   return (
@@ -664,14 +663,6 @@ export default function AvailabilityServiceZones() {
                               : "Not receiving ride requests. Go online to start earning."}
                           </p>
 
-                          {/* Dispatch readiness flags
-                              dispatch_data fields from GET /dispatch/status:
-                                onboardingComplete → dispatch_data.onboardingComplete
-                                kycVerified        → dispatch_data.kycVerified
-                                vehicleVerified    → dispatch_data.vehicleVerified
-                                status             → dispatch_data.status
-                                isDispatchable     → dispatch_data.isDispatchable
-                          */}
                           <div className="flex flex-wrap gap-2 mt-4">
                             <span className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-semibold
                               ${dispatch_data?.onboardingComplete
@@ -749,12 +740,7 @@ export default function AvailabilityServiceZones() {
                   </div>
                 </motion.div>
 
-                {/* Stats row
-                    All fields sourced from dispatch_data (GET /dispatch/status response):
-                      shift.startTime / shift.endTime → dispatch_data.shift
-                      status                          → dispatch_data.status
-                      partnershipStatus               → dispatch_data.partnershipStatus
-                */}
+                {/* Stats row */}
                 <motion.div variants={stagger} className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                   {[
                     {
@@ -823,7 +809,7 @@ export default function AvailabilityServiceZones() {
                       <div className="text-left">
                         <p className="font-bold text-base-content text-sm">Manage Service Zones</p>
                         <p className="text-xs text-base-content/50 mt-0.5">{activeZones} active zone{activeZones !== 1 ? "s" : ""} · {totalKm} km total coverage</p>
-                        <p className="text-xs text-base-content/35 mt-0.5">Add or remove cities where you accept ride requests</p>
+                        <p className="text-xs text-base-content/35 mt-0.5">Add, Edit or remove cities where you accept ride requests</p>
                       </div>
                     </div>
                     <ChevronRight className="w-5 h-5 text-base-content/30 group-hover:text-primary group-hover:translate-x-1 transition-all" />
@@ -838,127 +824,102 @@ export default function AvailabilityServiceZones() {
                 key="zones"
                 initial="hidden" animate="visible" exit={{ opacity: 0, y: -16 }}
                 variants={stagger}
-                className="space-y-6"
+                className="space-y-8"
               >
                 {/* Stats bar */}
-                <motion.div variants={fadeUp} className="grid grid-cols-3 gap-4">
+                <motion.div variants={fadeUp} className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   {[
                     { label: "Total Zones",     value: Array.isArray(serviceZones) ? serviceZones.length : 0, icon: Layers,       color: "text-primary bg-primary/5 border-primary/20", note: "All zones added" },
                     { label: "Active Zones",    value: activeZones,                                           icon: CheckCircle2, color: "text-success bg-success/5 border-success/20", note: "Receiving requests" },
                     { label: "Total Coverage",  value: `${totalKm} km`,                                       icon: TrendingUp,   color: "text-info    bg-info/5    border-info/20",    note: "Combined radius" },
                   ].map(s => (
-                    <div key={s.label} className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm">
-                      <div className={`w-8 h-8 rounded-xl border flex items-center justify-center mb-2 ${s.color}`}>
-                        <s.icon className="w-3.5 h-3.5" />
+                    <div key={s.label} className="rounded-2xl border border-base-300 bg-base-100 p-5 shadow-sm">
+                      <div className={`w-10 h-10 rounded-xl border flex items-center justify-center mb-3 ${s.color}`}>
+                        <s.icon className="w-5 h-5" />
                       </div>
-                      <p className="text-xl font-black text-base-content">{s.value}</p>
-                      <p className="text-xs text-base-content/50">{s.label}</p>
-                      <p className="text-xs text-base-content/35 mt-0.5">{s.note}</p>
+                      <p className="text-2xl font-black text-base-content">{s.value}</p>
+                      <p className="text-sm text-base-content/50">{s.label}</p>
+                      <p className="text-xs text-base-content/35 mt-1">{s.note}</p>
                     </div>
                   ))}
                 </motion.div>
 
-                {/* Map + Zone list */}
-                <motion.div variants={fadeUp} className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-
-                  {/* Map */}
-                  <div className="lg:col-span-3 rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden" style={{ minHeight: 420 }}>
-                    <div className="p-4 border-b border-base-300 flex items-center justify-between bg-base-100">
-                      <div className="flex items-center gap-2">
-                        <Globe className="w-4 h-4 text-primary" />
-                        <span className="text-sm font-semibold text-base-content">Coverage Map</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <PulseDot color="#0284c7" size={8} />
-                        <span className="text-xs text-base-content/50">{activeZones} zone{activeZones !== 1 ? "s" : ""} visible</span>
-                      </div>
+                {/* Zone list grid */}
+                <motion.div variants={fadeUp} className="flex flex-col gap-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <h3 className="text-xl font-bold text-base-content">Your Active Service Zones</h3>
+                      <p className="text-sm text-base-content/50 mt-1">Manage the locations where you provide rides. Max 10 zones allowed.</p>
                     </div>
-                    {/* Field note below map header */}
-                    <div className="px-4 py-2 border-b border-base-200 bg-base-50">
-                      <p className="flex items-start gap-1 text-xs text-base-content/40 leading-relaxed">
-                        <Info className="w-3 h-3 flex-shrink-0 mt-0.5 opacity-60" />
-                        Circles show your service radius for each active zone. Click a marker for zone details.
-                      </p>
-                    </div>
-                    <div style={{ height: 360 }}>
-                      <ServiceZoneMap zones={Array.isArray(serviceZones) ? serviceZones : []} />
-                    </div>
+                    <button
+                      onClick={() => { setModalState({ show: true, data: null }); navTo("/partner/solo/service-zones/add"); }}
+                      disabled={Array.isArray(serviceZones) && serviceZones.length >= 10}
+                      className="flex-shrink-0 flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-content text-sm font-bold hover:brightness-110 disabled:opacity-50 transition-all"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add Zone
+                    </button>
                   </div>
 
-                  {/* Zone list */}
-                  <div className="lg:col-span-2 flex flex-col gap-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="text-sm font-bold text-base-content">Your Zones</h3>
-                        <p className="text-xs text-base-content/40 mt-0.5">Max 10 zones allowed</p>
+                  {Array.isArray(serviceZones) && serviceZones.length >= 10 && (
+                    <div className="flex items-center gap-3 p-4 rounded-xl bg-warning/10 border border-warning/20">
+                      <Info className="w-5 h-5 text-warning flex-shrink-0" />
+                      <p className="text-sm text-warning font-medium">Maximum limit of 10 service zones reached. Please remove an existing zone before adding a new one.</p>
+                    </div>
+                  )}
+
+                  {loadingZones ? (
+                    <div className="flex items-center justify-center h-48 border border-base-300 rounded-2xl bg-base-100/50">
+                      <div className="flex flex-col items-center gap-3">
+                        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                        <span className="text-sm text-base-content/60 font-medium">Loading zones...</span>
+                      </div>
+                    </div>
+                  ) : !Array.isArray(serviceZones) || serviceZones.length === 0 ? (
+                    <motion.div
+                      variants={scaleIn}
+                      className="flex flex-col items-center justify-center gap-4 p-12 rounded-2xl border border-dashed border-base-300 bg-base-100"
+                    >
+                      <div className="w-16 h-16 rounded-2xl bg-base-200 flex items-center justify-center">
+                        <Globe className="w-8 h-8 text-base-content/30" />
+                      </div>
+                      <div className="text-center max-w-sm">
+                        <p className="text-lg font-bold text-base-content">No service zones set</p>
+                        <p className="text-sm text-base-content/50 mt-1">You won't receive any ride requests until you add at least one service zone.</p>
                       </div>
                       <button
-                        onClick={() => { setShowAddModal(true); navTo("/partner/solo/service-zones/add"); }}
-                        disabled={Array.isArray(serviceZones) && serviceZones.length >= 10}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary/10 border border-primary/25
-                                   text-primary text-xs font-bold hover:bg-primary/20 disabled:opacity-40 transition-all"
+                        onClick={() => { setModalState({ show: true, data: null }); navTo("/partner/solo/service-zones/add"); }}
+                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-content text-sm font-bold hover:brightness-110 transition-all mt-2"
                       >
-                        <Plus className="w-3.5 h-3.5" />
-                        Add Zone
+                        <Plus className="w-4 h-4" />
+                        Add First Zone
                       </button>
+                    </motion.div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <AnimatePresence mode="popLayout">
+                        {serviceZones.map(zone => (
+                          <ZoneCard
+                            key={zone._id}
+                            zone={zone}
+                            onEdit={(z) => setModalState({ show: true, data: z })}
+                            onRemove={handleRemoveZone}
+                            removing={removingId === zone._id && loadingRemoveZone}
+                          />
+                        ))}
+                      </AnimatePresence>
                     </div>
-
-                    {loadingZones ? (
-                      <div className="flex items-center justify-center h-40">
-                        <Loader2 className="w-6 h-6 animate-spin text-primary" />
-                      </div>
-                    ) : !Array.isArray(serviceZones) || serviceZones.length === 0 ? (
-                      <motion.div
-                        variants={scaleIn}
-                        className="flex flex-col items-center justify-center gap-4 p-8 rounded-2xl border border-dashed border-base-300 bg-base-200/50"
-                      >
-                        <div className="w-14 h-14 rounded-2xl bg-base-200 flex items-center justify-center">
-                          <Globe className="w-6 h-6 text-base-content/30" />
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm font-semibold text-base-content/60">No service zones yet</p>
-                          <p className="text-xs text-base-content/40 mt-1">Add cities where you accept rides</p>
-                        </div>
-                        <button
-                          onClick={() => { setShowAddModal(true); navTo("/partner/solo/service-zones/add"); }}
-                          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-primary-content text-xs font-bold hover:brightness-110 transition-all"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          Add First Zone
-                        </button>
-                      </motion.div>
-                    ) : (
-                      <div className="flex flex-col gap-3 max-h-[360px] overflow-y-auto pr-1 scrollbar-thin scrollbar-track-base-200 scrollbar-thumb-base-300">
-                        <AnimatePresence mode="popLayout">
-                          {serviceZones.map(zone => (
-                            <ZoneCard
-                              key={zone._id}
-                              zone={zone}
-                              onRemove={handleRemoveZone}
-                              removing={removingId === zone._id && loadingRemoveZone}
-                            />
-                          ))}
-                        </AnimatePresence>
-                      </div>
-                    )}
-
-                    {Array.isArray(serviceZones) && serviceZones.length >= 10 && (
-                      <div className="flex items-center gap-2 p-3 rounded-xl bg-warning/10 border border-warning/20">
-                        <Info className="w-3.5 h-3.5 text-warning flex-shrink-0" />
-                        <p className="text-xs text-warning">Maximum 10 service zones reached. Remove a zone to add another.</p>
-                      </div>
-                    )}
-                  </div>
+                  )}
                 </motion.div>
 
                 {/* Back to availability */}
-                <motion.div variants={fadeUp}>
+                <motion.div variants={fadeUp} className="pt-4">
                   <button
                     onClick={() => navTo("/partner/solo/availability")}
-                    className="flex items-center gap-2 text-sm text-base-content/40 hover:text-base-content/70 transition-colors"
+                    className="flex items-center gap-2 text-sm text-base-content/50 font-medium hover:text-base-content/80 transition-colors"
                   >
                     <ArrowLeft className="w-4 h-4" />
-                    Back to Availability
+                    Back to Availability Settings
                   </button>
                 </motion.div>
               </motion.div>
@@ -967,13 +928,14 @@ export default function AvailabilityServiceZones() {
         </div>
       </Container>
 
-      {/* ── Add Zone Modal ──────────────────────────────────────────────────── */}
+      {/* ── Dynamic Zone Modal (Add / Edit) ─────────────────────────────────── */}
       <AnimatePresence>
-        {showAddModal && (
-          <AddZoneModal
+        {modalState.show && (
+          <ZoneModal
+            initialData={modalState.data}
             onClose={handleCloseModal}
-            onAdd={handleAddZone}
-            loading={loadingAddZone}
+            onSave={handleSaveZone}
+            loading={loadingAddZone || loadingUpdateZone}
           />
         )}
       </AnimatePresence>

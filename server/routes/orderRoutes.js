@@ -8,16 +8,19 @@ import multer         from 'multer';
 import { protect }    from '../middleware/authMiddleware.js';
 
 // ── Models ────────────────────────────────────────────────────────────────────
-import Medicine        from '../models/Medicine.js';
-import Cart            from '../models/Cart.js';
-import PharmacyOrder   from '../models/PharmacyOrder.js';
-import PharmacyStore   from '../models/PharmacyStore.js';
-import UserSubscription from '../models/UserSubscription.js';
-import Wallet          from '../models/Wallet.js';
-import Notification    from '../models/Notification.js';
-import User            from '../models/User.js';
-import PromotionCoupon from '../models/PromotionCoupon.js';
-import SystemLog       from '../models/SystemLog.js';
+import Medicine             from '../models/Medicine.js';
+import Cart                 from '../models/Cart.js';
+import PharmacyOrder        from '../models/PharmacyOrder.js';
+import PharmacyStore        from '../models/PharmacyStore.js';
+import UserSubscription     from '../models/UserSubscription.js';
+import Wallet               from '../models/Wallet.js';
+import Notification         from '../models/Notification.js';
+import User                 from '../models/User.js';
+import PromotionCoupon      from '../models/PromotionCoupon.js';
+import SystemLog            from '../models/SystemLog.js';
+import PlatformPricingConfig from '../models/PlatformPricingConfig.js';
+import InventoryMovement    from '../models/InventoryMovement.js';
+import MedicineInventory    from '../models/MedicineInventory.js';
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 import sendEmail from '../utils/sendEmail.js';
@@ -38,6 +41,9 @@ const router = express.Router();
 
 const RAZORPAY_KEY_ID     = process.env.RAZORPAY_KEY_ID     || 'rzp_test_SJTh9WQJSGGnIT';
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '0IT2SC59bGq578K2QnUEleFX';
+
+// ── Platform fee: flat ₹5 per order ──────────────────────────────────────────
+const PLATFORM_FEE_FLAT = 5;
 
 const razorpay = new Razorpay({ key_id: RAZORPAY_KEY_ID, key_secret: RAZORPAY_KEY_SECRET });
 
@@ -258,19 +264,6 @@ const uploadToImageKit = async (buffer, fileName, folder = '/prescriptions') => 
 // § HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const resolvePharmacyDiscount = async (userId) => {
-  if (!userId) return 0;
-  try {
-    const sub = await UserSubscription.findOne({
-      user: userId,
-      status: { $in: ['Active', 'Trial'] },
-    })
-      .select('limits.pharmacyDiscountPercent')
-      .lean();
-    return sub?.limits?.pharmacyDiscountPercent ?? 0;
-  } catch { return 0; }
-};
-
 const toObjectId = (value, label = 'id') => {
   if (value instanceof mongoose.Types.ObjectId) return value;
   if (value && typeof value === 'object' && value._id) {
@@ -302,6 +295,132 @@ const validateDeliveryAddress = (address) => {
   if (!validatePhoneNumber(address.phone)) throw new Error('Invalid phone number format');
   if (!validatePincode(address.pincode))   throw new Error('Invalid pincode format');
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// § HAVERSINE DISTANCE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
+  const R    = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const getDistanceKm = (store, customerCoords) => {
+  const sc = store.address?.coordinates;
+  if (!sc || sc.lat == null || sc.lng == null) return null;
+  if (
+    !Array.isArray(customerCoords) ||
+    customerCoords.length < 2 ||
+    (customerCoords[0] === 0 && customerCoords[1] === 0)
+  ) return null;
+  return haversineKm(customerCoords, [sc.lng, sc.lat]);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// § DELIVERY CHARGE RESOLVER
+// ─────────────────────────────────────────────────────────────────────────────
+// Priority:
+//   1. Express delivery → platform config expressDeliveryCharge always applies
+//      (no free-delivery waiver for express)
+//   2. Customer has active sub plan → check plan.pharmacy.deliveryChargePerOrder
+//      null/0 = free delivery for sub customer regardless of order value
+//   3. No sub plan or plan has delivery charge → check freeDeliveryMinOrderValue
+//      orderTotal >= threshold → free; else deliveryAgentPayout charged to customer
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const resolveDeliveryCharge = async ({
+  userId,
+  orderTotal,
+  deliveryType = 'Standard', // 'Standard' | 'Express'
+  platformConfig,
+  subPlan = null,             // populated SubscriptionPlan doc or null
+}) => {
+  const pharmacy = platformConfig?.pharmacy ?? {};
+
+  // Express: always charge platform express fee
+  if (deliveryType === 'Express') {
+    return {
+      charge:    pharmacy.expressDeliveryCharge ?? 49,
+      isFree:    false,
+      reason:    'express_delivery',
+    };
+  }
+
+  // Standard: check sub plan benefit first
+  if (subPlan) {
+    const planDelivery = subPlan.pharmacy?.deliveryChargePerOrder;
+    // null or 0 = free delivery as plan benefit
+    if (planDelivery == null || planDelivery === 0) {
+      return {
+        charge: 0,
+        isFree: true,
+        reason: 'subscription_free_delivery',
+      };
+    }
+    // Plan specifies a delivery charge (e.g. Basic Care = ₹10)
+    return {
+      charge: planDelivery,
+      isFree: false,
+      reason: 'subscription_plan_charge',
+    };
+  }
+
+  // No sub plan: check free-delivery minimum order threshold
+  const freeMin = pharmacy.freeDeliveryMinOrderValue ?? 200;
+  if (orderTotal >= freeMin) {
+    return {
+      charge: 0,
+      isFree: true,
+      reason: 'free_above_minimum',
+    };
+  }
+
+  // Below threshold: customer pays agent payout
+  return {
+    charge: pharmacy.deliveryAgentPayout ?? 30,
+    isFree: false,
+    reason: 'below_min_order',
+  };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// § SUBSCRIPTION DISCOUNT RESOLVER
+// Returns { pharmacyDiscountPct, planDoc } for a user
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const resolveSubscriptionBenefits = async (userId) => {
+  if (!userId) return { pharmacyDiscountPct: 0, planDoc: null, subDoc: null };
+  try {
+    const sub = await UserSubscription.findOne({
+      user:   userId,
+      status: { $in: ['Active', 'Trial'] },
+    })
+      .populate('plan', 'pharmacy consultations transport diagnostics careAssistant')
+      .select('limits plan status')
+      .lean();
+
+    if (!sub) return { pharmacyDiscountPct: 0, planDoc: null, subDoc: null };
+
+    return {
+      pharmacyDiscountPct: sub.limits?.pharmacyDiscountPercent ?? 0,
+      planDoc:             sub.plan ?? null,
+      subDoc:              sub,
+    };
+  } catch {
+    return { pharmacyDiscountPct: 0, planDoc: null, subDoc: null };
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// § COUPON HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const validateAndApplyCoupon = async (code, userId, orderTotal, session = null) => {
   if (!code || typeof code !== 'string') throw new Error('Coupon code is required.');
@@ -375,51 +494,77 @@ const buildOrderPrescription = (cartItems) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// § HAVERSINE DISTANCE
+// § STORE SCORING ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+// Composite score for store selection priority.
+// Lower score = better (rank ascending).
+//
+// Weights (tunable):
+//   1. Price:            40% — normalised unit price vs cheapest available
+//   2. Distance:         25% — normalised km vs furthest candidate
+//   3. Stock:            15% — inverse of stock availability ratio
+//   4. Delivery SLA:     10% — standardEtaMinutes normalised
+//   5. Store Rating:      7% — inverse of avgRating (higher rating = lower penalty)
+//   6. Partner Priority:  3% — Owned > Partnered; admin priorityScore bonus
+//
+// Returns 0–100 (lower = preferred). Falls back gracefully when data missing.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
-  const R    = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+const scoreStore = ({
+  pricePerUnit,
+  minPriceAcrossStores,
+  maxPriceAcrossStores,
+  distanceKm,
+  maxDistanceKm,
+  stockQuantity,
+  maxStockAcrossStores,
+  etaMinutes,
+  maxEtaAcrossStores,
+  avgRating,
+  storeType,
+  priorityScore,
+}) => {
+  // ── 1. Price score (40) ───────────────────────────────────────────────────
+  let priceScore = 0;
+  if (maxPriceAcrossStores > minPriceAcrossStores) {
+    priceScore = ((pricePerUnit - minPriceAcrossStores) / (maxPriceAcrossStores - minPriceAcrossStores)) * 40;
+  }
+
+  // ── 2. Distance score (25) ────────────────────────────────────────────────
+  let distScore = 12.5; // neutral if no coords
+  if (distanceKm !== null && maxDistanceKm > 0) {
+    distScore = (distanceKm / maxDistanceKm) * 25;
+  }
+
+  // ── 3. Stock score (15) ───────────────────────────────────────────────────
+  let stockScore = 15; // penalise max if no stock info
+  if (maxStockAcrossStores > 0) {
+    stockScore = (1 - (stockQuantity / maxStockAcrossStores)) * 15;
+  }
+
+  // ── 4. SLA score (10) ─────────────────────────────────────────────────────
+  let slaScore = 5; // neutral
+  if (etaMinutes != null && maxEtaAcrossStores > 0) {
+    slaScore = (etaMinutes / maxEtaAcrossStores) * 10;
+  }
+
+  // ── 5. Rating score (7) ───────────────────────────────────────────────────
+  // avgRating 0–5; higher rating should REDUCE score penalty
+  const ratingPenalty = avgRating > 0 ? (1 - avgRating / 5) * 7 : 3.5;
+
+  // ── 6. Partner priority score (3) ────────────────────────────────────────
+  // Owned stores preferred; higher platformPriorityScore = lower penalty
+  let partnerScore = storeType === 'Owned' ? 0 : 1.5;
+  if (priorityScore != null) {
+    partnerScore += (1 - priorityScore / 100) * 1.5;
+  }
+
+  const total = priceScore + distScore + stockScore + slaScore + ratingPenalty + partnerScore;
+  return parseFloat(total.toFixed(4));
 };
 
-const getDistanceKm = (store, customerCoords) => {
-  const sc = store.address?.coordinates;
-  if (!sc || sc.lat == null || sc.lng == null) return null;
-  if (
-    !Array.isArray(customerCoords) ||
-    customerCoords.length < 2 ||
-    (customerCoords[0] === 0 && customerCoords[1] === 0)
-  ) return null;
-  // customerCoords = [lng, lat] from GeoJSON Point
-  return haversineKm(customerCoords, [sc.lng, sc.lat]);
-};
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// § CORRECTED MULTI-STORE CART FULFILMENT
-// ═══════════════════════════════════════════════════════════════════════════════
-//
-// ALGORITHM:
-//  1. Fetch all medicines from cart in a single DB call.
-//  2. Collect every unique storeId that has at least one non-expired,
-//     active inventory entry with qty > 0 across ALL cart medicines.
-//     (No radius filtering — every open+verified store is eligible.)
-//  3. Fetch all those PharmacyStore docs in a single DB call.
-//  4. Sort stores by distance from customer (nulls last) — closest first.
-//  5. For each cart item try to assign it to the CLOSEST store that has
-//     enough stock. If the closest store is already being used for other
-//     items from this cart, prefer that same store (consolidation) as long
-//     as it has enough stock, to minimise number of orders.
-//  6. If no single store can fulfil a particular item, mark it unavailable.
-//  7. Return groups (one per store) and unavailableItems list.
-//
+// § MULTI-STORE CART FULFILMENT  (REWRITTEN WITH SCORING + DELIVERY TYPE)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const resolveMultiStoreForCart = async (cartItems, customerUser) => {
@@ -430,69 +575,62 @@ const resolveMultiStoreForCart = async (cartItems, customerUser) => {
   const medicineIds = cartItems.map((item) =>
     (item.medicine?._id ?? item.medicine).toString()
   );
-  const medicines = await Medicine.find({ _id: { $in: medicineIds } }).lean();
-  const medMap    = new Map(medicines.map((m) => [m._id.toString(), m]));
+
+  // Use MedicineInventory collection for accurate per-store pricing/stock
+  const inventoryRecords = await MedicineInventory.find({
+    medicineId: { $in: medicineIds.map((id) => toObjectId(id)) },
+    isActive:   true,
+    isDeleted:  false,
+  }).lean();
+
+  // Build: medicineId → [inventoryRecord]
+  const invByMed = new Map();
+  for (const inv of inventoryRecords) {
+    const mid = inv.medicineId.toString();
+    if (!invByMed.has(mid)) invByMed.set(mid, []);
+    invByMed.get(mid).push(inv);
+  }
 
   // ── Step 2: collect all candidate store IDs ───────────────────────────────
   const allStoreIds = new Set();
-  for (const med of medicines) {
-    for (const inv of (med.inventory || [])) {
-      if (
-        inv.isActive &&
-        !inv.isExpired &&
-        inv.expiryDate > now &&
-        inv.stockQuantity > 0
-      ) {
-        allStoreIds.add(inv.storeId.toString());
-      }
+  for (const invList of invByMed.values()) {
+    for (const inv of invList) {
+      if (inv.availableStock > 0) allStoreIds.add(inv.storeId.toString());
     }
   }
 
-  // ── Step 3: fetch all open + verified stores (no radius limit) ────────────
-  let openStores = [];
-  if (allStoreIds.size > 0) {
-    openStores = await PharmacyStore.find({
-      _id:        { $in: Array.from(allStoreIds) },
-      status:     'Open',
-      isVerified: true,
-    }).lean();
+  if (!allStoreIds.size) {
+    return { groups: [], unavailableItems: cartItems.map((i) => ({
+      medicineId: (i.medicine?._id ?? i.medicine).toString(),
+      name: i.medicine?.brandName ?? 'Medicine',
+      reason: 'Out of stock everywhere',
+    })) };
   }
 
-  // ── Step 4: sort stores by distance, closest first ────────────────────────
-  const storesSortedByDistance = openStores
-    .map((store) => ({
-      store,
-      distanceKm: getDistanceKm(store, customerCoords),
-    }))
-    .sort((a, b) => {
-      if (a.distanceKm !== null && b.distanceKm !== null) return a.distanceKm - b.distanceKm;
-      if (a.distanceKm !== null) return -1;
-      if (b.distanceKm !== null) return  1;
-      return 0;
-    });
+  // ── Step 3: fetch open + verified stores ─────────────────────────────────
+  const openStores = await PharmacyStore.find({
+    _id:        { $in: Array.from(allStoreIds) },
+    status:     'Open',
+    isVerified: true,
+    isDeleted:  false,
+    'operationalCapacity.isAcceptingOrders': true,
+  }).lean();
 
   const storeMap = new Map(openStores.map((s) => [s._id.toString(), s]));
 
-  // ── Helper: get a store's inventory entry for a medicine ──────────────────
-  const getInvEntry = (medicine, storeIdStr) =>
-    (medicine.inventory || []).find(
-      (inv) =>
-        inv.storeId.toString() === storeIdStr &&
-        inv.isActive &&
-        !inv.isExpired &&
-        inv.expiryDate > now &&
-        inv.stockQuantity > 0
-    ) ?? null;
+  // ── Step 4: compute distances ─────────────────────────────────────────────
+  const storeDistances = new Map();
+  for (const store of openStores) {
+    storeDistances.set(store._id.toString(), getDistanceKm(store, customerCoords));
+  }
 
-  // ── Step 5 & 6: assign each cart item to the best store ──────────────────
-  //
-  // "reservedQty" tracks how much stock we've already promised to this order
-  // from each (medicine, store) pair, so we don't over-commit.
-  // key = `${medicineId}:${storeIdStr}`, value = qty already reserved
-  const reservedQty = new Map();
-
-  const storeGroups      = new Map(); // storeIdStr → { storeDoc, items[] }
+  // ── Step 5: for each cart item, score all eligible stores and pick best ───
+  const reservedQty      = new Map(); // `${medId}:${storeId}` → qty reserved
+  const storeGroups      = new Map(); // storeId → { storeDoc, items[] }
   const unavailableItems = [];
+
+  const medicines = await Medicine.find({ _id: { $in: medicineIds.map((id) => toObjectId(id)) } }).lean();
+  const medMap    = new Map(medicines.map((m) => [m._id.toString(), m]));
 
   for (const cartItem of cartItems) {
     const medId    = (cartItem.medicine?._id ?? cartItem.medicine).toString();
@@ -500,7 +638,6 @@ const resolveMultiStoreForCart = async (cartItems, customerUser) => {
     const qty      = parseInt(cartItem.quantity, 10);
     const name     = medicine?.brandName ?? medicine?.genericName ?? 'Medicine';
 
-    // ── Basic guards ────────────────────────────────────────────────────────
     if (!qty || isNaN(qty) || qty <= 0) {
       unavailableItems.push({ medicineId: medId, name, reason: `Invalid quantity: ${cartItem.quantity}` });
       continue;
@@ -510,84 +647,93 @@ const resolveMultiStoreForCart = async (cartItems, customerUser) => {
       continue;
     }
 
-    // ── Find the best store for this item ───────────────────────────────────
-    //
-    // Priority order:
-    //   a) A store already assigned for this cart (consolidation) that has
-    //      enough REMAINING stock (after our own reservations).
-    //   b) The closest open store that has enough remaining stock.
-    //
-    let assignedStoreIdStr = null;
-    let assignedInvEntry   = null;
-    let assignedDistanceKm = null;
-
-    // Pass A: try to consolidate with an already-chosen store
-    for (const [existingStoreIdStr] of storeGroups) {
-      const inv = getInvEntry(medicine, existingStoreIdStr);
-      if (!inv) continue;
-      const reserveKey  = `${medId}:${existingStoreIdStr}`;
-      const alreadyUsed = reservedQty.get(reserveKey) ?? 0;
-      if (inv.stockQuantity - alreadyUsed >= qty) {
-        assignedStoreIdStr = existingStoreIdStr;
-        assignedInvEntry   = inv;
-        assignedDistanceKm = getDistanceKm(storeMap.get(existingStoreIdStr), customerCoords);
-        break;
-      }
-    }
-
-    // Pass B: if no consolidation found, pick the closest store with enough stock
-    if (!assignedStoreIdStr) {
-      for (const { store, distanceKm } of storesSortedByDistance) {
-        const storeIdStr = store._id.toString();
-        const inv        = getInvEntry(medicine, storeIdStr);
-        if (!inv) continue;
-        const reserveKey  = `${medId}:${storeIdStr}`;
-        const alreadyUsed = reservedQty.get(reserveKey) ?? 0;
-        if (inv.stockQuantity - alreadyUsed >= qty) {
-          assignedStoreIdStr = storeIdStr;
-          assignedInvEntry   = inv;
-          assignedDistanceKm = distanceKm;
-          break;
-        }
-      }
-    }
-
-    if (!assignedStoreIdStr) {
-      // No store could satisfy the required quantity
-      const totalAvailable = (medicine.inventory || []).reduce(
-        (sum, inv) => sum + (inv.stockQuantity || 0), 0
+    const eligibleInvs = (invByMed.get(medId) || []).filter((inv) => {
+      const storeIdStr   = inv.storeId.toString();
+      const reserveKey   = `${medId}:${storeIdStr}`;
+      const alreadyUsed  = reservedQty.get(reserveKey) ?? 0;
+      return (
+        storeMap.has(storeIdStr) &&
+        inv.availableStock - alreadyUsed >= qty
       );
+    });
+
+    if (!eligibleInvs.length) {
+      const totalAvail = (invByMed.get(medId) || []).reduce((s, i) => s + (i.availableStock || 0), 0);
       unavailableItems.push({
         medicineId: medId,
         name,
-        reason: totalAvailable === 0
-          ? 'Out of stock at all stores'
-          : `Insufficient stock (need ${qty}; combined available: ${totalAvailable})`,
+        reason: totalAvail === 0 ? 'Out of stock at all stores' : `Insufficient stock (need ${qty})`,
       });
       continue;
     }
 
-    // ── Reserve the qty in our local tracker ────────────────────────────────
-    const reserveKey = `${medId}:${assignedStoreIdStr}`;
+    // ── Scoring context ────────────────────────────────────────────────────
+    const prices      = eligibleInvs.map((i) => i.finalPrice ?? i.sellingPrice ?? 0);
+    const minPrice    = Math.min(...prices);
+    const maxPrice    = Math.max(...prices);
+    const stocks      = eligibleInvs.map((i) => i.availableStock ?? 0);
+    const maxStock    = Math.max(...stocks);
+    const distances   = eligibleInvs.map((i) => storeDistances.get(i.storeId.toString()) ?? null).filter(Boolean);
+    const maxDist     = distances.length ? Math.max(...distances) : 0;
+    const etas        = eligibleInvs.map((i) => {
+      const s = storeMap.get(i.storeId.toString());
+      return s?.deliverySettings?.standardEtaMinutes ?? 120;
+    });
+    const maxEta      = Math.max(...etas, 1);
+
+    // Prefer store already used in this cart (consolidation) — heavy bonus
+    const scoredCandidates = eligibleInvs.map((inv) => {
+      const storeIdStr  = inv.storeId.toString();
+      const store       = storeMap.get(storeIdStr);
+      const distKm      = storeDistances.get(storeIdStr) ?? null;
+      const etaMin      = store?.deliverySettings?.standardEtaMinutes ?? 120;
+      const alreadyUsed = storeGroups.has(storeIdStr);
+
+      const baseScore = scoreStore({
+        pricePerUnit:            inv.finalPrice ?? inv.sellingPrice ?? 0,
+        minPriceAcrossStores:    minPrice,
+        maxPriceAcrossStores:    maxPrice,
+        distanceKm:              distKm,
+        maxDistanceKm:           maxDist,
+        stockQuantity:           inv.availableStock ?? 0,
+        maxStockAcrossStores:    maxStock,
+        etaMinutes:              etaMin,
+        maxEtaAcrossStores:      maxEta,
+        avgRating:               store?.performanceMetrics?.avgRating ?? 0,
+        storeType:               store?.storeType ?? 'Partnered',
+        priorityScore:           store?.priorityScore ?? 50,
+      });
+
+      // Consolidation bonus: -10 to prefer same store
+      const consolidationBonus = alreadyUsed ? -10 : 0;
+
+      return { inv, storeIdStr, score: baseScore + consolidationBonus, distKm };
+    });
+
+    scoredCandidates.sort((a, b) => a.score - b.score);
+    const best = scoredCandidates[0];
+
+    // Reserve qty
+    const reserveKey = `${medId}:${best.storeIdStr}`;
     reservedQty.set(reserveKey, (reservedQty.get(reserveKey) ?? 0) + qty);
 
-    // ── Add to store group ──────────────────────────────────────────────────
-    if (!storeGroups.has(assignedStoreIdStr)) {
-      storeGroups.set(assignedStoreIdStr, {
-        storeDoc: storeMap.get(assignedStoreIdStr),
+    if (!storeGroups.has(best.storeIdStr)) {
+      storeGroups.set(best.storeIdStr, {
+        storeDoc: storeMap.get(best.storeIdStr),
         items:    [],
       });
     }
 
-    storeGroups.get(assignedStoreIdStr).items.push({
-      medicine,                  // full lean medicine doc
+    storeGroups.get(best.storeIdStr).items.push({
+      medicine,
       quantity:               qty,
-      pricePerUnit:           cartItem.pricePerUnit ?? null,
-      gstPercentage:          cartItem.gstPercentage ?? medicine.gstPercentage ?? 0,
+      pricePerUnit:           best.inv.finalPrice ?? best.inv.sellingPrice ?? medicine.mrp,
+      gstPercentage:          cartItem.gstPercentage ?? medicine.gstPercentage ?? 5,
       isPrescriptionRequired: cartItem.isPrescriptionRequired ?? medicine.isPrescriptionRequired ?? false,
       prescription:           cartItem.prescription ?? null,
-      _resolvedInv:           assignedInvEntry,
-      _distanceKm:            assignedDistanceKm,
+      _resolvedInv:           best.inv,
+      _distanceKm:            best.distKm,
+      _score:                 best.score,
     });
   }
 
@@ -598,78 +744,93 @@ const resolveMultiStoreForCart = async (cartItems, customerUser) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// § SINGLE-MEDICINE STORE RESOLUTION  (used by /cart/add and /order/direct)
+// § SINGLE-MEDICINE STORE RESOLUTION  (uses MedicineInventory + scoring)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const resolveStoreForMedicine = async (medicineId, requiredQty, customerUser, preferredStoreId = null) => {
   const medicine = await Medicine.findById(medicineId).lean();
   if (!medicine)               throw new Error('Medicine not found.');
   if (medicine.isDiscontinued) throw new Error(`"${medicine.brandName}" is discontinued.`);
-  if (!medicine.inventory?.length)
-    throw new Error(`"${medicine.brandName}" is not stocked at any store.`);
 
-  const now = new Date();
+  const invRecords = await MedicineInventory.find({
+    medicineId: toObjectId(medicineId),
+    isActive:   true,
+    isDeleted:  false,
+    availableStock: { $gte: requiredQty },
+  }).lean();
 
-  const eligibleEntries = medicine.inventory.filter((inv) =>
-    inv.isActive &&
-    !inv.isExpired &&
-    inv.expiryDate > now &&
-    inv.stockQuantity >= requiredQty
-  );
-
-  if (!eligibleEntries.length) {
-    const totalAvailable = medicine.inventory.reduce((s, i) => s + (i.stockQuantity || 0), 0);
-
+  if (!invRecords.length) {
+    const allInv = await MedicineInventory.find({
+      medicineId: toObjectId(medicineId),
+      isActive:   true,
+      isDeleted:  false,
+    }).lean();
+    const totalAvailable = allInv.reduce((s, i) => s + (i.availableStock || 0), 0);
     if (totalAvailable === 0)
       throw new Error(`"${medicine.brandName}" is out of stock across all stores.`);
-
-    // Check if all active entries are expired
-    const activeNonExpiredEntries = medicine.inventory.filter(
-      (inv) => inv.isActive && !inv.isExpired && inv.expiryDate > now
-    );
-
-    if (activeNonExpiredEntries.length === 0)
-      throw new Error(
-        `"${medicine.brandName}" is currently unavailable — all stock has expired or is inactive.`
-      );
-
-    // Stock exists and is valid, but not enough quantity
-    const maxAvailable = Math.max(...activeNonExpiredEntries.map((i) => i.stockQuantity));
+    const maxAvailable = Math.max(...allInv.map((i) => i.availableStock || 0));
     throw new Error(
-      `"${medicine.brandName}" does not have sufficient stock (requested: ${requiredQty}). ` +
-      `Maximum available at any single store: ${maxAvailable}.`
+      `"${medicine.brandName}" insufficient stock (requested: ${requiredQty}, max at any store: ${maxAvailable}).`
     );
   }
 
-  const eligibleStoreIds = eligibleEntries.map((e) => e.storeId);
-  const stores = await PharmacyStore.find({
-    _id:        { $in: eligibleStoreIds },
+  const storeIds  = invRecords.map((i) => i.storeId);
+  const stores    = await PharmacyStore.find({
+    _id:        { $in: storeIds },
     status:     'Open',
     isVerified: true,
+    isDeleted:  false,
+    'operationalCapacity.isAcceptingOrders': true,
   }).lean();
 
   if (!stores.length)
-    throw new Error(
-      `"${medicine.brandName}" is currently unavailable — all stocking stores are closed or unverified.`
-    );
+    throw new Error(`"${medicine.brandName}" — all stocking stores are closed or unverified.`);
 
+  const storeMap       = new Map(stores.map((s) => [s._id.toString(), s]));
   const customerCoords = customerUser?.location?.coordinates;
 
-  const candidates = stores.map((store) => {
-    const invEntry   = eligibleEntries.find((e) =>
-      new mongoose.Types.ObjectId(e.storeId).equals(store._id)
-    );
-    const distanceKm = getDistanceKm(store, customerCoords);
-    return { store, inventoryEntry: invEntry, distanceKm };
+  const prices   = invRecords.map((i) => i.finalPrice ?? i.sellingPrice ?? 0);
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  const stocks   = invRecords.map((i) => i.availableStock ?? 0);
+  const maxStock = Math.max(...stocks);
+  const distances = invRecords.map((i) => {
+    const s = storeMap.get(i.storeId.toString());
+    return s ? getDistanceKm(s, customerCoords) : null;
+  }).filter(Boolean);
+  const maxDist = distances.length ? Math.max(...distances) : 0;
+  const etas    = invRecords.map((i) => {
+    const s = storeMap.get(i.storeId.toString());
+    return s?.deliverySettings?.standardEtaMinutes ?? 120;
   });
+  const maxEta = Math.max(...etas, 1);
 
- candidates.sort((a, b) => {
-  if (a.distanceKm !== null && b.distanceKm !== null) return a.distanceKm - b.distanceKm; // nearest first
-  if (a.distanceKm !== null) return -1;
-  if (b.distanceKm !== null) return  1;
-  return (b.inventoryEntry.stockQuantity || 0) - (a.inventoryEntry.stockQuantity || 0); // fallback: most stock
-});
+  let candidates = invRecords
+    .filter((inv) => storeMap.has(inv.storeId.toString()))
+    .map((inv) => {
+      const store    = storeMap.get(inv.storeId.toString());
+      const distKm   = getDistanceKm(store, customerCoords);
+      const etaMin   = store?.deliverySettings?.standardEtaMinutes ?? 120;
+      const score    = scoreStore({
+        pricePerUnit:            inv.finalPrice ?? inv.sellingPrice ?? 0,
+        minPriceAcrossStores:    minPrice,
+        maxPriceAcrossStores:    maxPrice,
+        distanceKm:              distKm,
+        maxDistanceKm:           maxDist,
+        stockQuantity:           inv.availableStock ?? 0,
+        maxStockAcrossStores:    maxStock,
+        etaMinutes:              etaMin,
+        maxEtaAcrossStores:      maxEta,
+        avgRating:               store?.performanceMetrics?.avgRating ?? 0,
+        storeType:               store?.storeType ?? 'Partnered',
+        priorityScore:           store?.priorityScore ?? 50,
+      });
+      return { store, inventoryEntry: inv, distanceKm: distKm, score };
+    });
 
+  candidates.sort((a, b) => a.score - b.score);
+
+  // Honour explicit preferred store if it has sufficient stock
   if (preferredStoreId) {
     const prefObjId = toObjectId(preferredStoreId, 'preferredStoreId');
     const prefCand  = candidates.find((c) => c.store._id.equals(prefObjId));
@@ -691,78 +852,76 @@ const resolveStoreForMedicine = async (medicineId, requiredQty, customerUser, pr
     distanceKm:     best.distanceKm,
   };
 };
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// § STOCK HELPERS
+// § STOCK HELPERS  (now use MedicineInventory, not embedded inventory)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Decrement stock for each item at the given store, within a session.
- * Uses a positional $ update so only the matching inventory sub-document
- * is touched. Throws on concurrent-stock conflict.
- */
 const decrementStock = async (items, storeId, session) => {
   const storeObjId = toObjectId(storeId, 'storeId');
 
   for (const item of items) {
     const qty = parseInt(item.quantity, 10);
-    if (!qty || isNaN(qty) || qty <= 0) {
-      throw new Error(
-        `Cannot decrement stock for "${item.name ?? item.medicine}": quantity is invalid (${item.quantity}).`
-      );
-    }
+    if (!qty || isNaN(qty) || qty <= 0)
+      throw new Error(`Invalid quantity for "${item.name ?? item.medicine}": ${item.quantity}.`);
 
-    // Atomic: find the medicine whose inventory entry for this store
-    // still has enough stock, then decrement exactly that entry.
-   const updated = await Medicine.findOneAndUpdate(
-  {
-    _id: item.medicine,
-    inventory: {
-      $elemMatch: {
-        storeId:       storeObjId,
-        isActive:      true,
-        isExpired:     false,
-        expiryDate:    { $gt: new Date() },
-        stockQuantity: { $gte: qty },
+    const updated = await MedicineInventory.findOneAndUpdate(
+      {
+        medicineId:     toObjectId(item.medicine, 'medicine'),
+        storeId:        storeObjId,
+        isActive:       true,
+        isDeleted:      false,
+        availableStock: { $gte: qty },
       },
-    },
-  },
-      { $inc: { 'inventory.$.stockQuantity': -qty } },
+      {
+        $inc: {
+          stockQuantity:  -qty,
+          availableStock: -qty,
+        },
+      },
       { new: true, session }
     );
 
     if (!updated) {
-  const med = await Medicine.findById(item.medicine).session(session);
-  const now = new Date();
-  const totalAvailable = (med?.inventory ?? [])
-    .filter(
-      (inv) =>
-        new mongoose.Types.ObjectId(inv.storeId).equals(storeObjId) &&
-        inv.isActive &&
-        !inv.isExpired &&
-        inv.expiryDate > now
-    )
-    .reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0);
+      const inv = await MedicineInventory.findOne({
+        medicineId: toObjectId(item.medicine, 'medicine'),
+        storeId:    storeObjId,
+        isActive:   true,
+        isDeleted:  false,
+      }).session(session);
 
-  if (totalAvailable === 0) {
-    throw new Error(`"${item.name}" is not stocked at the selected store.`);
-  }
-  throw new Error(
-    `Concurrent stock conflict for "${item.name}". ` +
-    `Available: ${totalAvailable}, requested: ${qty}. Please retry.`
-  );
-}
+      const available = inv?.availableStock ?? 0;
+      if (available === 0) {
+        throw new Error(`"${item.name}" is not stocked at the selected store.`);
+      }
+      throw new Error(
+        `Concurrent stock conflict for "${item.name}". Available: ${available}, requested: ${qty}. Please retry.`
+      );
+    }
 
-    // Flag low-stock if needed
-    const afterInv = updated.inventory.find((i) =>
-      new mongoose.Types.ObjectId(i.storeId).equals(storeObjId)
-    );
-    if (afterInv && afterInv.stockQuantity <= (afterInv.reorderLevel ?? 10)) {
-      await Medicine.findOneAndUpdate(
-        {
-          _id:       item.medicine,
-          inventory: { $elemMatch: { storeId: storeObjId, stockQuantity: afterInv.stockQuantity } },
-        },
-        { $set: { 'inventory.$.isLowStock': true } },
+    // Log inventory movement
+    try {
+      await InventoryMovement.create([{
+        storeId:         storeObjId,
+        medicineId:      toObjectId(item.medicine, 'medicine'),
+        batchId:         updated.batchId ?? new mongoose.Types.ObjectId(), // fallback if no batch linked
+        movementType:    'Sale',
+        quantityChanged: qty,
+        previousStock:   updated.stockQuantity + qty,
+        newStock:        updated.stockQuantity,
+        referenceModel:  'PharmacyOrder',
+        reason:          'Order fulfilment',
+      }], { session });
+    } catch (e) {
+      // Movement log failure is non-fatal; order must not fail because of it
+      logError('INVENTORY_MOVEMENT_LOG', e, { medicineId: item.medicine, storeId });
+    }
+
+    // Flag low-stock
+    if (updated.availableStock <= (updated.reorderLevel ?? 10)) {
+      await MedicineInventory.findByIdAndUpdate(
+        updated._id,
+        { $set: { isLowStock: true, isOutOfStock: updated.availableStock <= 0 } },
         { session }
       );
     }
@@ -773,22 +932,40 @@ const incrementStock = async (items, storeId, session) => {
   const storeObjId = toObjectId(storeId, 'storeId');
   for (const item of items) {
     const qty = parseInt(item.quantity, 10);
-    const updated = await Medicine.findOneAndUpdate(
-      { _id: item.medicine, inventory: { $elemMatch: { storeId: storeObjId } } },
-      { $inc: { 'inventory.$.stockQuantity': qty } },
+    const updated = await MedicineInventory.findOneAndUpdate(
+      { medicineId: toObjectId(item.medicine, 'medicine'), storeId: storeObjId, isDeleted: false },
+      {
+        $inc: {
+          stockQuantity:  qty,
+          availableStock: qty,
+        },
+        $set: { isOutOfStock: false },
+      },
       { new: true, session }
     );
-    if (updated) {
-      const inv = updated.inventory.find((i) =>
-        new mongoose.Types.ObjectId(i.storeId).equals(storeObjId)
+    if (updated && updated.availableStock > (updated.reorderLevel ?? 10)) {
+      await MedicineInventory.findByIdAndUpdate(
+        updated._id,
+        { $set: { isLowStock: false } },
+        { session }
       );
-      if (inv && inv.stockQuantity > inv.reorderLevel) {
-        await Medicine.findOneAndUpdate(
-          { _id: item.medicine, inventory: { $elemMatch: { storeId: storeObjId } } },
-          { $set: { 'inventory.$.isLowStock': false } },
-          { session }
-        );
-      }
+    }
+
+    // Movement log
+    try {
+      await InventoryMovement.create([{
+        storeId:         storeObjId,
+        medicineId:      toObjectId(item.medicine, 'medicine'),
+        batchId:         updated?.batchId ?? new mongoose.Types.ObjectId(),
+        movementType:    'Return',
+        quantityChanged: qty,
+        previousStock:   (updated?.stockQuantity ?? qty) - qty,
+        newStock:        updated?.stockQuantity ?? qty,
+        referenceModel:  'PharmacyOrder',
+        reason:          'Order cancellation stock release',
+      }], { session });
+    } catch (e) {
+      logError('INVENTORY_MOVEMENT_LOG_RETURN', e, { medicineId: item.medicine, storeId });
     }
   }
 };
@@ -807,6 +984,88 @@ const clearCart = async (userId, session = null) => {
   );
   if (session) q.session(session);
   return await q;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// § BILLING BUILDER
+// ─────────────────────────────────────────────────────────────────────────────
+// Centralised function to compute final billing for any order group.
+// Handles: subscription discount → coupon discount → delivery → platform fee
+//
+// Returns billing object ready to store in PharmacyOrder.billing
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const buildBilling = async ({
+  orderItems,
+  userId,
+  deliveryType,         // 'Standard' | 'Express'
+  platformConfig,
+  subPlanDoc,           // SubscriptionPlan lean doc or null
+  couponCode,           // string or null
+  subscriptionDiscountPct,
+  session,
+}) => {
+  const subTotal = parseFloat(orderItems.reduce((s, i) => s + i.totalPrice, 0).toFixed(2));
+
+  // ── 1. Subscription discount ──────────────────────────────────────────────
+  const subDiscAmt = parseFloat(((subTotal * subscriptionDiscountPct) / 100).toFixed(2));
+  const afterSubDisc = parseFloat(Math.max(0, subTotal - subDiscAmt).toFixed(2));
+
+  // ── 2. Coupon discount ────────────────────────────────────────────────────
+  let couponDiscountAmt = 0;
+  let appliedCoupon     = null;
+  if (couponCode) {
+    const r = await validateAndApplyCoupon(couponCode, userId, afterSubDisc, session);
+    couponDiscountAmt = r.discountAmount;
+    appliedCoupon     = r.coupon;
+  }
+
+  const totalDiscountAmount = parseFloat((subDiscAmt + couponDiscountAmt).toFixed(2));
+  const afterAllDiscounts   = parseFloat(Math.max(0, subTotal - totalDiscountAmount).toFixed(2));
+
+  // ── 3. Delivery charge ────────────────────────────────────────────────────
+  const deliveryResult = await resolveDeliveryCharge({
+    userId,
+    orderTotal: afterAllDiscounts,
+    deliveryType,
+    platformConfig,
+    subPlan: subPlanDoc,
+  });
+  const deliveryCharges = deliveryResult.charge;
+
+  // ── 4. Platform fee ────────────────────────────────────────────────────────
+  const platformFee = PLATFORM_FEE_FLAT; // ₹5 flat per order
+
+  // ── 5. GST on paid amount (post-discount, pre-delivery) ────────────────────
+  let gstAmount = 0;
+  const discountFactor = subTotal > 0 ? afterAllDiscounts / subTotal : 0;
+  orderItems.forEach((item) => {
+    const itemPaidShare  = item.totalPrice * discountFactor;
+    item.taxAmount       = parseFloat((itemPaidShare * item.gstPercentage / (100 + item.gstPercentage)).toFixed(2));
+    gstAmount           += item.taxAmount;
+  });
+  gstAmount = parseFloat(gstAmount.toFixed(2));
+
+  // ── 6. Grand total ─────────────────────────────────────────────────────────
+  const totalPayable = parseFloat(
+    (afterAllDiscounts + deliveryCharges + platformFee).toFixed(2)
+  );
+
+  return {
+    billing: {
+      subTotal,
+      gstAmount,
+      deliveryCharges,
+      platformFee,
+      discountAmount:   totalDiscountAmount,
+      walletAmountUsed: 0, // set at payment time
+      promoCode:        appliedCoupon?.code ?? undefined,
+      totalPayable,
+    },
+    appliedCoupon,
+    couponDiscountAmt,
+    deliveryResult,
+  };
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -829,33 +1088,16 @@ router.post(
         imageUrl = await uploadToImageKit(req.file.buffer, req.file.originalname, '/prescriptions');
       } catch (err) {
         logError('IMAGEKIT_UPLOAD', err, { userId: req.user._id });
-        await syslog('error', 'api', 'Prescription upload to ImageKit failed', {
-          actor:   actorFromReq(req),
-          request: { method: 'POST', path: req.originalUrl, statusCode: 500 },
-          metadata: { fileName: req.file.originalname },
-        });
         return res.status(500).json({ success: false, message: 'Failed to upload prescription to storage.' });
       }
-
-      logAudit('PRESCRIPTION_UPLOAD_IMAGEKIT', { userId: req.user._id, fileName: req.file.originalname, imageUrl });
-      await syslog('success', 'api', 'Customer uploaded prescription (file)', {
-        actor:   actorFromReq(req),
-        request: { method: 'POST', path: req.originalUrl, statusCode: 200 },
-        metadata: { fileName: req.file.originalname, size: req.file.size, imageUrl },
-      });
-
       return res.status(200).json({
         success: true, message: 'Prescription uploaded successfully.',
         imageUrl, fileName: req.file.originalname, size: req.file.size, mimeType: req.file.mimetype,
       });
     }
 
-    const { base64, fileName = 'prescription.jpg', mimeType = 'image/jpeg' } = req.body;
-
+    const { base64, fileName = 'prescription.jpg' } = req.body;
     if (base64) {
-      if (typeof base64 !== 'string' || !base64.trim())
-        return res.status(400).json({ success: false, message: 'base64 string is required when not using multipart upload.' });
-
       const cleanBase64 = base64.includes(',') ? base64.split(',')[1] : base64;
       try {
         const response = await imagekit.upload({
@@ -868,14 +1110,10 @@ router.post(
         logError('IMAGEKIT_BASE64_UPLOAD', err, { userId: req.user._id });
         return res.status(500).json({ success: false, message: 'Failed to upload prescription to storage.' });
       }
-
-      return res.status(200).json({ success: true, message: 'Prescription uploaded successfully.', imageUrl, fileName, mimeType });
+      return res.status(200).json({ success: true, message: 'Prescription uploaded successfully.', imageUrl });
     }
 
-    return res.status(400).json({
-      success: false,
-      message: 'No file provided. Send a multipart file with field "prescription" or a JSON body with { base64, fileName }.',
-    });
+    return res.status(400).json({ success: false, message: 'No file provided.' });
   }),
 );
 
@@ -888,11 +1126,10 @@ router.get('/upload/auth', protect, asyncHandler(async (req, res) => {
     const authParams = imagekit.getAuthenticationParameters();
     return res.status(200).json({
       success: true, ...authParams,
-      publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
+      publicKey:   process.env.IMAGEKIT_PUBLIC_KEY,
       urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT,
     });
   } catch (err) {
-    logError('IMAGEKIT_AUTH_PARAMS', err, { userId: req.user._id });
     return res.status(500).json({ success: false, message: 'Failed to generate upload authentication.' });
   }
 }));
@@ -903,26 +1140,214 @@ router.get('/upload/auth', protect, asyncHandler(async (req, res) => {
 
 router.get('/medicines', cache(120), asyncHandler(async (req, res) => {
   const { search, category, storeId, page = 1, limit = 12, sort = 'createdAt_desc' } = req.query;
-  const filter = { isDiscontinued: false };
+
+  const filter = { isDiscontinued: false, isApproved: true, isDeleted: false };
   if (search)   filter.$text = { $search: search };
   if (category) filter.category = { $in: category.split(',') };
-  if (storeId)  filter['inventory.storeId'] = toObjectId(storeId, 'storeId');
-  const sortMap  = { mrp_asc: { mrp: 1 }, mrp_desc: { mrp: -1 }, createdAt_desc: { createdAt: -1 } };
+
+  const sortMap  = {
+    mrp_asc:       { mrp: 1 },
+    mrp_desc:      { mrp: -1 },
+    createdAt_desc:{ createdAt: -1 },
+    name_asc:      { name: 1 },
+  };
   const pageNum  = Math.max(1, parseInt(page, 10));
   const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10)));
   const skip     = (pageNum - 1) * limitNum;
+
+  let medicineQuery = Medicine.find(filter)
+    .sort(sortMap[sort] || { createdAt: -1 })
+    .skip(skip)
+    .limit(limitNum)
+    .lean();
+
   const [medicines, total] = await Promise.all([
-    Medicine.find(filter)
-      .sort(sortMap[sort] || { createdAt: -1 })
-      .skip(skip).limit(limitNum)
-      .populate('inventory.storeId', 'storeName address status')
-      .lean(),
+    medicineQuery,
     Medicine.countDocuments(filter),
   ]);
+
+  // Enrich with MedicineInventory data per medicine
+  const medicineIds = medicines.map((m) => m._id);
+  const invRecords  = await MedicineInventory.find({
+    medicineId: { $in: medicineIds },
+    isActive:   true,
+    isDeleted:  false,
+    availableStock: { $gt: 0 },
+  })
+    .populate('storeId', 'storeName address status deliverySettings performanceMetrics storeType priorityScore')
+    .lean();
+
+  // Attach inventory summary to each medicine
+  const invByMed = new Map();
+  for (const inv of invRecords) {
+    const mid = inv.medicineId.toString();
+    if (!invByMed.has(mid)) invByMed.set(mid, []);
+    invByMed.get(mid).push(inv);
+  }
+
+  // If storeId filter requested, filter further
+  const enriched = medicines.map((med) => {
+    let invs = invByMed.get(med._id.toString()) || [];
+    if (storeId) invs = invs.filter((i) => i.storeId?._id?.toString() === storeId);
+    const cheapest = invs.length
+      ? invs.reduce((min, i) => (i.finalPrice < min.finalPrice ? i : min), invs[0])
+      : null;
+    return {
+      ...med,
+      lowestPrice:       cheapest?.finalPrice ?? null,
+      isAvailable:       invs.length > 0,
+      storeCount:        invs.length,
+      storeOptions:      invs.slice(0, 5).map((i) => ({
+        storeId:       i.storeId?._id,
+        storeName:     i.storeId?.storeName,
+        price:         i.finalPrice,
+        discountPct:   i.discountPercent,
+        availableStock:i.availableStock,
+        etaMinutes:    i.storeId?.deliverySettings?.standardEtaMinutes,
+        rating:        i.storeId?.performanceMetrics?.avgRating,
+      })),
+    };
+  });
+
   res.status(200).json({
     success: true,
     pagination: { total, pages: Math.ceil(total / limitNum), page: pageNum, limit: limitNum },
-    medicines,
+    medicines: enriched,
+  });
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1a. GET /api/pharmacy/medicines/:id/stores
+// ─────────────────────────────────────────────────────────────────────────────
+// Returns all stores selling this medicine, sorted by composite score.
+// Used on product detail page — "Available at these stores" section.
+// Query params: qty (default 1), deliveryType ('Standard'|'Express')
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/medicines/:id/stores', asyncHandler(async (req, res) => {
+  const { id }           = req.params;
+  const qty              = Math.max(1, parseInt(req.query.qty, 10) || 1);
+  const deliveryType     = req.query.deliveryType === 'Express' ? 'Express' : 'Standard';
+  const userId           = await getOptionalUserId(req);
+  const customerUser     = userId ? await User.findById(userId).select('location').lean() : null;
+  const customerCoords   = customerUser?.location?.coordinates;
+
+  const medicine = await Medicine.findById(id).select('brandName genericName isDiscontinued').lean();
+  if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
+  if (medicine.isDiscontinued)
+    return res.status(400).json({ success: false, message: `"${medicine.brandName}" is discontinued.` });
+
+  const invRecords = await MedicineInventory.find({
+    medicineId:     toObjectId(id),
+    isActive:       true,
+    isDeleted:      false,
+    availableStock: { $gte: qty },
+  }).lean();
+
+  if (!invRecords.length)
+    return res.status(200).json({ success: true, stores: [], message: 'No stock available.' });
+
+  const storeIds = invRecords.map((i) => i.storeId);
+  const stores   = await PharmacyStore.find({
+    _id:        { $in: storeIds },
+    status:     'Open',
+    isVerified: true,
+    isDeleted:  false,
+  }).lean();
+  const storeMap = new Map(stores.map((s) => [s._id.toString(), s]));
+
+  // Load platform config for delivery charge preview
+  const platformConfig = await PlatformPricingConfig.getGlobal();
+
+  // Load user subscription if logged in
+  const { planDoc: subPlanDoc } = userId
+    ? await resolveSubscriptionBenefits(userId)
+    : { planDoc: null };
+
+  const prices   = invRecords.map((i) => i.finalPrice ?? i.sellingPrice ?? 0);
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  const stocks   = invRecords.map((i) => i.availableStock ?? 0);
+  const maxStock = Math.max(...stocks);
+  const dists    = invRecords
+    .map((i) => {
+      const s = storeMap.get(i.storeId.toString());
+      return s ? getDistanceKm(s, customerCoords) : null;
+    })
+    .filter(Boolean);
+  const maxDist = dists.length ? Math.max(...dists) : 0;
+  const etas    = invRecords.map((i) => {
+    const s = storeMap.get(i.storeId.toString());
+    return s?.deliverySettings?.standardEtaMinutes ?? 120;
+  });
+  const maxEta = Math.max(...etas, 1);
+
+  const scored = await Promise.all(
+    invRecords
+      .filter((inv) => storeMap.has(inv.storeId.toString()))
+      .map(async (inv) => {
+        const store   = storeMap.get(inv.storeId.toString());
+        const distKm  = getDistanceKm(store, customerCoords);
+        const etaMin  = store?.deliverySettings?.standardEtaMinutes ?? 120;
+        const price   = inv.finalPrice ?? inv.sellingPrice ?? 0;
+        const score   = scoreStore({
+          pricePerUnit:         price,
+          minPriceAcrossStores: minPrice,
+          maxPriceAcrossStores: maxPrice,
+          distanceKm:           distKm,
+          maxDistanceKm:        maxDist,
+          stockQuantity:        inv.availableStock ?? 0,
+          maxStockAcrossStores: maxStock,
+          etaMinutes:           etaMin,
+          maxEtaAcrossStores:   maxEta,
+          avgRating:            store?.performanceMetrics?.avgRating ?? 0,
+          storeType:            store?.storeType ?? 'Partnered',
+          priorityScore:        store?.priorityScore ?? 50,
+        });
+
+        // Delivery charge preview for this store
+        const delResult = await resolveDeliveryCharge({
+          userId,
+          orderTotal: price * qty,
+          deliveryType,
+          platformConfig,
+          subPlan: subPlanDoc,
+        });
+
+        return {
+          storeId:          store._id,
+          storeName:        store.storeName,
+          storeType:        store.storeType,
+          address:          store.address,
+          distanceKm:       distKm ? parseFloat(distKm.toFixed(2)) : null,
+          price,
+          discountPercent:  inv.discountPercent ?? 0,
+          mrp:              inv.mrp,
+          availableStock:   inv.availableStock,
+          etaMinutes:       etaMin,
+          expressAvailable: store.deliverySettings?.expressDelivery ?? false,
+          expressEtaMinutes:store.deliverySettings?.expressEtaMinutes ?? 30,
+          avgRating:        store.performanceMetrics?.avgRating ?? 0,
+          totalReviews:     store.performanceMetrics?.totalReviews ?? 0,
+          deliveryCharge:   delResult.charge,
+          deliveryFree:     delResult.isFree,
+          deliveryReason:   delResult.reason,
+          score,
+          codAvailable:     store.deliverySettings?.codAvailable ?? true,
+          isRecommended:    false, // will be set on first item
+        };
+      })
+  );
+
+  scored.sort((a, b) => a.score - b.score);
+  if (scored.length) scored[0].isRecommended = true;
+
+  res.status(200).json({
+    success: true,
+    medicine: { _id: medicine._id, brandName: medicine.brandName },
+    storeCount: scored.length,
+    stores:     scored,
+    sortCriteria: ['price', 'distance', 'stock', 'eta', 'rating', 'partnerPriority'],
   });
 }));
 
@@ -952,11 +1377,10 @@ router.get('/cart', protect, asyncHandler(async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. POST /api/pharmacy/cart/add
-//
-// NOTE: The cart model does NOT have a storeId per item — it is store-agnostic.
-// Store resolution happens at checkout time. We only validate that the medicine
-// exists and has stock somewhere, and persist the item with pricePerUnit from
-// the best-matched store's inventory (or mrp as fallback).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. POST /api/pharmacy/cart/add
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.post('/cart/add', asyncHandler(async (req, res) => {
@@ -966,14 +1390,10 @@ router.post('/cart/add', asyncHandler(async (req, res) => {
   if (!medicineId)
     return res.status(400).json({ success: false, message: 'medicineId is required.' });
 
-  const quantityNum = Math.max(1, parseInt(quantity, 10));
-  const userId      = await getOptionalUserId(req);
+  const quantityNum  = Math.max(1, parseInt(quantity, 10));
+  const userId       = await getOptionalUserId(req);
+  const customerUser = userId ? await User.findById(userId).select('location').lean() : null;
 
-  const customerUser = userId
-    ? await User.findById(userId).select('location').lean()
-    : null;
-
-  // Resolve the best store to verify availability and get a price
   let resolvedStore, inventoryEntry, medicine;
   try {
     ({ store: resolvedStore, inventoryEntry, medicine } = await resolveStoreForMedicine(
@@ -992,42 +1412,37 @@ router.post('/cart/add', asyncHandler(async (req, res) => {
       item: {
         medicine:               medicineId,
         quantity:               quantityNum,
-        pricePerUnit:           inventoryEntry.pricePerUnit ?? medicine.mrp,
+        pricePerUnit:           inventoryEntry.finalPrice ?? inventoryEntry.sellingPrice ?? medicine.mrp,
         isPrescriptionRequired: medicine.isPrescriptionRequired ?? false,
       },
-      ...(storeOverridden && {
-        notice: `Your preferred store did not have sufficient stock. Item would be sourced from "${resolvedStore.storeName}" instead.`,
-      }),
+      ...(storeOverridden && { notice: `Sourced from "${resolvedStore.storeName}" (preferred store had insufficient stock).` }),
     });
   }
 
-  // Upsert the cart document
   let cart = await Cart.findOneAndUpdate(
     { user: userId },
     { $setOnInsert: { user: userId, items: [] } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 
-  const pricePerUnit     = inventoryEntry.pricePerUnit ?? medicine.mrp;
+  const pricePerUnit = inventoryEntry.finalPrice ?? inventoryEntry.sellingPrice ?? medicine.mrp;
   const prescriptionData = {
     isRequired: medicine.isPrescriptionRequired ?? false,
-    imageUrl:   prescription?.imageUrl  || null,
-    uploadedAt: prescription?.imageUrl  ? new Date() : null,
+    imageUrl:   prescription?.imageUrl || null,
+    uploadedAt: prescription?.imageUrl ? new Date() : null,
   };
 
-  // Check if the same medicine is already in the cart
   const itemIdx = cart.items.findIndex(
     (i) => i.medicine.toString() === medicineId.toString()
   );
 
   if (itemIdx > -1) {
     const newQty = cart.items[itemIdx].quantity + quantityNum;
-    // Validate against the stock of the best available store
-    if (newQty > inventoryEntry.stockQuantity) {
+    if (newQty > inventoryEntry.availableStock) {
       return res.status(400).json({
-        success:        false,
-        message:        `Total quantity (${newQty}) exceeds available stock (${inventoryEntry.stockQuantity}).`,
-        availableStock: inventoryEntry.stockQuantity,
+        success: false,
+        message: `Total quantity (${newQty}) exceeds available stock (${inventoryEntry.availableStock}).`,
+        availableStock: inventoryEntry.availableStock,
       });
     }
     cart.items[itemIdx].quantity = newQty;
@@ -1037,32 +1452,24 @@ router.post('/cart/add', asyncHandler(async (req, res) => {
       medicine:               toObjectId(medicineId, 'medicineId'),
       quantity:               quantityNum,
       pricePerUnit,
-      gstPercentage:          medicine.gstPercentage ?? 12,
+      gstPercentage:          medicine.gstPercentage ?? 5,
       isPrescriptionRequired: medicine.isPrescriptionRequired ?? false,
       prescription:           prescriptionData,
     });
   }
 
-  // The cart.store field is kept as a "hint" (last resolved store) but is NOT
-  // the source of truth for checkout — resolveMultiStoreForCart decides that.
   cart.store = resolvedStore._id;
   await cart.save();
   await cart.populate('items.medicine', 'brandName genericName images dosage packaging isPrescriptionRequired');
-  await cart.populate('store', 'storeName address status');
-
-  logAudit('CART_ADD', { userId, medicineId, quantity: quantityNum, hintStore: resolvedStoreIdStr, storeOverridden });
-  await syslog('info', 'api', 'Customer added item to cart', {
-    actor:    { userId, role: 'customer' },
-    request:  { method: 'POST', path: req.originalUrl, statusCode: 200 },
-    metadata: { medicineId, quantity: quantityNum, hintStoreId: resolvedStoreIdStr, storeOverridden },
-  });
+  
+  // FIX: Added 'operationalCapacity', 'timings', 'isOnline', and 'deliverySettings' 
+  // so the virtuals in the PharmacyStore model do not crash when toObject() is called.
+  await cart.populate('store', 'storeName address status deliverySettings operationalCapacity timings isOnline');
 
   res.status(200).json({
     success: true,
     cart:    cart.toObject(),
-    ...(storeOverridden && {
-      notice: `Your preferred store did not have sufficient stock. Item sourced from "${resolvedStore.storeName}" instead.`,
-    }),
+    ...(storeOverridden && { notice: `Sourced from "${resolvedStore.storeName}" (preferred store had insufficient stock).` }),
   });
 }));
 
@@ -1084,7 +1491,6 @@ router.post('/cart/update', protect, asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Cart is empty.' });
 
   const itemIdx = cart.items.findIndex((i) => i.medicine.toString() === medicineId);
-
   if (itemIdx === -1)
     return res.status(404).json({ success: false, message: 'Item not in cart.' });
 
@@ -1092,24 +1498,21 @@ router.post('/cart/update', protect, asyncHandler(async (req, res) => {
     cart.items.splice(itemIdx, 1);
     if (cart.items.length === 0) cart.store = null;
   } else {
-    // Validate against current best-available stock across all stores
-    const med = await Medicine.findById(medicineId).lean();
-    const now = new Date();
-    const maxAvailable = (med?.inventory || []).reduce(
-      (max, inv) =>
-        inv.isActive && !inv.isExpired && inv.expiryDate > now
-          ? Math.max(max, inv.stockQuantity)
-          : max,
-      0
-    );
+    const inv = await MedicineInventory.findOne({
+      medicineId: toObjectId(medicineId),
+      isActive:   true,
+      isDeleted:  false,
+    })
+      .sort({ availableStock: -1 })
+      .lean();
 
+    const maxAvailable = inv?.availableStock ?? 0;
     if (!maxAvailable)
-      return res.status(400).json({ success: false, message: `"${med?.brandName}" is out of stock.` });
-
+      return res.status(400).json({ success: false, message: 'Item is out of stock.' });
     if (quantityNum > maxAvailable)
       return res.status(400).json({
-        success:        false,
-        message:        `Insufficient stock. Maximum available: ${maxAvailable}.`,
+        success: false,
+        message: `Insufficient stock. Maximum available: ${maxAvailable}.`,
         availableStock: maxAvailable,
       });
 
@@ -1127,7 +1530,6 @@ router.post('/cart/update', protect, asyncHandler(async (req, res) => {
 
 router.delete('/cart', protect, asyncHandler(async (req, res) => {
   await clearCart(req.user._id);
-  logAudit('CART_CLEARED', { userId: req.user._id });
   res.status(200).json({ success: true, message: 'Cart cleared.' });
 }));
 
@@ -1154,7 +1556,6 @@ router.post('/cart/prescription', protect, asyncHandler(async (req, res) => {
   await cart.save();
   await cart.populate('items.medicine', 'brandName genericName images isPrescriptionRequired');
 
-  logAudit('CART_PRESCRIPTION_UPLOAD', { userId: req.user._id, medicineId, imageUrl });
   res.status(200).json({ success: true, message: 'Prescription uploaded.', cart: cart.toObject() });
 }));
 
@@ -1175,7 +1576,6 @@ router.post(
     try {
       imageUrl = await uploadToImageKit(req.file.buffer, req.file.originalname, '/prescriptions/cart');
     } catch (err) {
-      logError('CART_PRESCRIPTION_IMAGEKIT', err, { userId: req.user._id, medicineId });
       return res.status(500).json({ success: false, message: 'Failed to upload prescription to storage.' });
     }
 
@@ -1191,10 +1591,7 @@ router.post(
     await cart.save();
     await cart.populate('items.medicine', 'brandName genericName images isPrescriptionRequired');
 
-    res.status(200).json({
-      success: true, message: 'Prescription uploaded and saved to cart.',
-      imageUrl, cart: cart.toObject(),
-    });
+    res.status(200).json({ success: true, message: 'Prescription uploaded and saved to cart.', imageUrl, cart: cart.toObject() });
   }),
 );
 
@@ -1223,14 +1620,191 @@ router.post('/coupon/validate', protect, asyncHandler(async (req, res) => {
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7. POST /api/pharmacy/order/checkout  (MULTI-STORE, CORRECTED)
+// GET /api/pharmacy/coupon/eligibility
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/coupon/eligibility', protect, asyncHandler(async (req, res) => {
+  const { couponCode, orderTotal } = req.query;
+
+  if (!couponCode || !couponCode.trim())
+    return res.status(400).json({ success: false, message: 'couponCode is required.' });
+
+  const orderTotalNum = parseFloat(orderTotal);
+  if (!orderTotal || isNaN(orderTotalNum) || orderTotalNum <= 0)
+    return res.status(400).json({ success: false, message: 'Valid orderTotal is required.' });
+
+  const code   = couponCode.trim().toUpperCase();
+  const coupon = await PromotionCoupon.findOne({ code, isActive: true }).lean();
+
+  if (!coupon) {
+    return res.status(200).json({ success: true, eligible: false, reason: `Coupon "${code}" is invalid or deactivated.`, couponCode: code });
+  }
+
+  const now     = new Date();
+  const userId  = req.user._id;
+  const reasons = [];
+
+  if (coupon.validity?.from && now < coupon.validity.from)
+    reasons.push(`Coupon not yet active. Valid from ${coupon.validity.from.toDateString()}.`);
+  if (coupon.validity?.to && now > coupon.validity.to)
+    reasons.push(`Coupon expired on ${coupon.validity.to.toDateString()}.`);
+  if (coupon.usage?.totalPlatformLimit != null && coupon.usage.currentUses >= coupon.usage.totalPlatformLimit)
+    reasons.push('Coupon has reached its total usage limit.');
+
+  const userUseCount = await PharmacyOrder.countDocuments({
+    customer: userId, 'billing.promoCode': code, 'payment.status': { $in: ['Paid', 'Pending'] },
+  });
+  const perUserLimit = coupon.usage?.limitPerUser ?? 1;
+  if (userUseCount >= perUserLimit)
+    reasons.push(perUserLimit === 1 ? 'Already used this coupon.' : `Used ${userUseCount}/${perUserLimit} times.`);
+
+  if (coupon.eligibility?.minOrderValue && orderTotalNum < coupon.eligibility.minOrderValue)
+    reasons.push(`Min order ₹${coupon.eligibility.minOrderValue} required. Your total: ₹${orderTotalNum.toFixed(2)}.`);
+
+  if (coupon.eligibility?.type === 'New_User_Only') {
+    const has = await PharmacyOrder.exists({ customer: userId });
+    if (has) reasons.push('Only for new users.');
+  }
+  if (coupon.eligibility?.type === 'First_Booking') {
+    const has = await PharmacyOrder.exists({ customer: userId, 'payment.status': 'Paid' });
+    if (has) reasons.push('Only valid on your first order.');
+  }
+
+  if (reasons.length > 0) {
+    return res.status(200).json({
+      success: true, eligible: false, couponCode: code,
+      reason: reasons[0], allReasons: reasons,
+      benefit: { type: coupon.benefit?.type, value: coupon.benefit?.value, maxCap: coupon.benefit?.maxCap ?? null },
+    });
+  }
+
+  let discountAmount = 0;
+  if (coupon.benefit?.type === 'Percentage') {
+    discountAmount = parseFloat(((orderTotalNum * coupon.benefit.value) / 100).toFixed(2));
+    if (coupon.benefit?.maxCap) discountAmount = Math.min(discountAmount, coupon.benefit.maxCap);
+  } else if (coupon.benefit?.type === 'Flat_Amount') {
+    discountAmount = Math.min(coupon.benefit.value, orderTotalNum);
+  }
+  discountAmount = parseFloat(discountAmount.toFixed(2));
+
+  const usesRemaining = coupon.usage?.totalPlatformLimit != null
+    ? coupon.usage.totalPlatformLimit - coupon.usage.currentUses
+    : null;
+
+  return res.status(200).json({
+    success: true, eligible: true, couponCode: code,
+    message: `Coupon valid! You save ₹${discountAmount}.`,
+    benefit: { type: coupon.benefit?.type, value: coupon.benefit?.value, maxCap: coupon.benefit?.maxCap ?? null, discountAmount, finalTotal: parseFloat((orderTotalNum - discountAmount).toFixed(2)) },
+    validity: { from: coupon.validity?.from ?? null, to: coupon.validity?.to ?? null },
+    usage: { usedByYou: userUseCount, limitPerUser: perUserLimit, usesRemaining },
+  });
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6a. GET /api/pharmacy/checkout/preview
+// ─────────────────────────────────────────────────────────────────────────────
+// Returns full billing preview before placing order.
+// Includes: subscription discount, coupon preview, delivery charge, platform fee.
+// Frontend uses this to show final breakdown before payment screen.
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/checkout/preview', protect, asyncHandler(async (req, res) => {
+  const { couponCode, deliveryType = 'Standard' } = req.query;
+
+  const cart = await Cart.findOne({ user: req.user._id })
+    .populate({
+      path:   'items.medicine',
+      select: 'brandName genericName gstPercentage mrp isPrescriptionRequired isDiscontinued',
+    })
+    .lean();
+
+  if (!cart?.items?.length)
+    return res.status(400).json({ success: false, message: 'Cart is empty.' });
+
+  const [platformConfig, { pharmacyDiscountPct, planDoc }] = await Promise.all([
+    PlatformPricingConfig.getGlobal(),
+    resolveSubscriptionBenefits(req.user._id),
+  ]);
+
+  const customerUser = await User.findById(req.user._id).select('location').lean();
+  const { groups, unavailableItems } = await resolveMultiStoreForCart(cart.items, customerUser);
+
+  if (!groups.length)
+    return res.status(400).json({ success: false, message: 'No items available at any open store.', unavailableItems });
+
+  const orderPreviews = [];
+  for (const group of groups) {
+    const { storeDoc, items: groupItems } = group;
+
+    const orderItems = groupItems.map((item) => {
+      const med          = item.medicine;
+      const pricePerUnit = item._resolvedInv?.finalPrice ?? item._resolvedInv?.sellingPrice ?? med.mrp ?? 0;
+      const gstPct       = Number(med?.gstPercentage) || 5;
+      const qty          = parseInt(item.quantity, 10);
+      return {
+        medicine:      med._id,
+        name:          med.brandName ?? med.genericName,
+        quantity:      qty,
+        pricePerUnit,
+        gstPercentage: gstPct,
+        taxAmount:     0,
+        totalPrice:    parseFloat((pricePerUnit * qty).toFixed(2)),
+        isPrescriptionRequired: item.isPrescriptionRequired ?? med.isPrescriptionRequired ?? false,
+      };
+    });
+
+    const { billing, appliedCoupon, deliveryResult } = await buildBilling({
+      orderItems,
+      userId:                 req.user._id,
+      deliveryType:           deliveryType === 'Express' ? 'Express' : 'Standard',
+      platformConfig,
+      subPlanDoc:             planDoc,
+      couponCode:             couponCode || null,
+      subscriptionDiscountPct: pharmacyDiscountPct,
+      session:                null,
+    });
+
+    orderPreviews.push({
+      storeId:        storeDoc._id,
+      storeName:      storeDoc.storeName,
+      itemCount:      orderItems.length,
+      billing,
+      couponApplied:  appliedCoupon ? { code: appliedCoupon.code, saved: billing.discountAmount } : null,
+      deliveryInfo:   deliveryResult,
+      platformFee:    PLATFORM_FEE_FLAT,
+    });
+  }
+
+  const grandTotal = orderPreviews.reduce((s, o) => s + o.billing.totalPayable, 0);
+
+  res.status(200).json({
+    success: true,
+    preview: {
+      orderCount:   orderPreviews.length,
+      orders:       orderPreviews,
+      grandTotal:   parseFloat(grandTotal.toFixed(2)),
+      platformFee:  PLATFORM_FEE_FLAT,
+      subscriptionDiscountApplied: pharmacyDiscountPct > 0,
+      subscriptionDiscountPct:     pharmacyDiscountPct,
+    },
+    ...(unavailableItems.length > 0 && { unavailableItems }),
+  });
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. POST /api/pharmacy/order/checkout  (MULTI-STORE WITH FULL BILLING)
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    const { address, paymentMethod = 'Razorpay', couponCode } = req.body;
+    const {
+      address,
+      paymentMethod  = 'Razorpay',
+      couponCode,
+      deliveryType   = 'Standard',  // 'Standard' | 'Express'
+    } = req.body;
 
     try { validateDeliveryAddress(address); }
     catch (error) {
@@ -1243,11 +1817,13 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid payment method.' });
     }
 
+    const resolvedDeliveryType = deliveryType === 'Express' ? 'Express' : 'Standard';
+
     // ── Load cart ────────────────────────────────────────────────────────────
     const cart = await Cart.findOne({ user: req.user._id })
       .populate({
         path:   'items.medicine',
-        select: 'brandName genericName images gstPercentage isPrescriptionRequired mrp inventory isDiscontinued hsnCode',
+        select: 'brandName genericName images gstPercentage isPrescriptionRequired mrp isDiscontinued hsnCode',
       })
       .session(session);
 
@@ -1256,26 +1832,20 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
       return res.status(400).json({ success: false, message: 'Cart is empty.' });
     }
 
-    // ── Build plain cart items list (safe, coerced values) ───────────────────
     const cartItemsPlain = cart.items.map((item) => {
       const qty = parseInt(item.quantity, 10);
       return {
-        medicine:               item.medicine,           // populated Mongoose doc
+        medicine:               item.medicine,
         quantity:               isNaN(qty) ? 0 : qty,
         pricePerUnit:           Number(item.pricePerUnit) || null,
-        gstPercentage:          Number(item.gstPercentage) || 0,
+        gstPercentage:          Number(item.gstPercentage) || 5,
         isPrescriptionRequired: Boolean(item.isPrescriptionRequired),
         prescription:           item.prescription
-          ? {
-              isRequired: item.prescription.isRequired,
-              imageUrl:   item.prescription.imageUrl ?? null,
-              uploadedAt: item.prescription.uploadedAt ?? null,
-            }
+          ? { isRequired: item.prescription.isRequired, imageUrl: item.prescription.imageUrl ?? null, uploadedAt: item.prescription.uploadedAt ?? null }
           : null,
       };
     });
 
-    // ── Multi-store resolution (corrected algorithm) ─────────────────────────
     const customerUser = await User.findById(req.user._id).select('location').lean();
     let groups, unavailableItems;
     try {
@@ -1294,22 +1864,11 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
       });
     }
 
-    // ── Subscription discount ────────────────────────────────────────────────
-    const subscriptionDiscountPct = await resolvePharmacyDiscount(req.user._id);
-
-    // ── Compute grand total (pre-coupon) for wallet preflight ────────────────
-  // ── Compute grand total (pre-coupon) for wallet preflight ────────────────
-    const computeGroupTotal = (groupItems) => {
-      let itemsTotal = 0;
-      for (const item of groupItems) {
-        const price = Number(item._resolvedInv?.pricePerUnit) || Number(item.medicine?.mrp) || Number(item.pricePerUnit) || 0;
-        itemsTotal += price * item.quantity;
-      }
-      const subDisc = (itemsTotal * subscriptionDiscountPct) / 100;
-      return Math.max(0, itemsTotal - subDisc);
-    };
-
-    const grandTotal = groups.reduce((acc, g) => acc + computeGroupTotal(g.items), 0);
+    // ── Platform config + subscription ────────────────────────────────────────
+    const [platformConfig, { pharmacyDiscountPct, planDoc }] = await Promise.all([
+      PlatformPricingConfig.getGlobal(),
+      resolveSubscriptionBenefits(req.user._id),
+    ]);
 
     // ── Wallet preflight ─────────────────────────────────────────────────────
     let wallet = null;
@@ -1317,58 +1876,30 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
       wallet = await Wallet.findOne({ user: req.user._id }).session(session);
       if (!wallet)          throw new Error('Wallet not found.');
       if (!wallet.isActive) throw new Error('Wallet is inactive.');
-      if (wallet.balance < grandTotal)
-        throw new Error(
-          `Insufficient wallet balance. Required: ₹${grandTotal.toFixed(2)}, Available: ₹${wallet.balance}.`
-        );
+      // Full preflight after billing computed per group below
     }
 
-    // ── Coupon validation ────────────────────────────────────────────────────
-    let appliedCoupon     = null;
-    let couponDiscountAmt = 0;
-
-    if (couponCode) {
-      try {
-        const r = await validateAndApplyCoupon(couponCode, req.user._id, grandTotal, session);
-        couponDiscountAmt = r.discountAmount;
-        appliedCoupon     = r.coupon;
-      } catch (error) {
-        await session.abortTransaction();
-        return res.status(400).json({ success: false, message: error.message });
-      }
-    }
-
-    // ── Create one PharmacyOrder per store group ──────────────────────────────
-    const createdOrders = [];
-    let remainingCouponDiscount = couponDiscountAmt;
+    // ── Create orders per store group ─────────────────────────────────────────
+    const createdOrders   = [];
+    let globalCouponCode  = couponCode || null;
+    let globalCouponUsed  = false;
 
     for (const group of groups) {
       const { storeDoc, items: groupItems } = group;
       const storeId    = storeDoc._id.toString();
       const storeObjId = storeDoc._id;
 
-      // ── Build order items ────────────────────────────────────────────────
-// ── Build order items ────────────────────────────────────────────────
       const orderItems = groupItems.map((item) => {
-        const med = item.medicine;
+        const med          = item.medicine;
+        const qty          = parseInt(item.quantity, 10);
+        if (!qty || isNaN(qty) || qty <= 0)
+          throw new Error(`Invalid quantity for "${med?.brandName ?? 'Medicine'}".`);
 
-        const qty = parseInt(item.quantity, 10);
-        if (!qty || isNaN(qty) || qty <= 0) {
-          throw new Error(
-            `Invalid quantity for "${med?.brandName ?? 'Medicine'}". Received: ${item.quantity}.`
-          );
-        }
-
-        const pricePerUnit =
-          Number(item._resolvedInv?.pricePerUnit) ||
-          Number(med?.mrp) ||
-          Number(item.pricePerUnit);
-        if (!pricePerUnit || isNaN(pricePerUnit)) {
+        const pricePerUnit = Number(item._resolvedInv?.finalPrice) || Number(item._resolvedInv?.sellingPrice) || Number(med?.mrp);
+        if (!pricePerUnit || isNaN(pricePerUnit))
           throw new Error(`Missing price for "${med?.brandName ?? 'Medicine'}".`);
-        }
 
-        const gstPct = Number(med?.gstPercentage) || Number(item.gstPercentage) || 5;
-
+        const gstPct = Number(med?.gstPercentage) || 5;
         return {
           medicine:               med._id,
           name:                   med.brandName ?? med.genericName ?? 'Medicine',
@@ -1379,82 +1910,75 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
           gstPercentage:          gstPct,
           quantity:               qty,
           pricePerUnit:           parseFloat(pricePerUnit.toFixed(2)),
-          taxAmount:              0, // Will be computed accurately post-deductions below
+          taxAmount:              0,
           totalPrice:             parseFloat((pricePerUnit * qty).toFixed(2)),
           isPrescriptionRequired: Boolean(item.isPrescriptionRequired ?? med.isPrescriptionRequired),
         };
       });
 
-      const subTotal   = parseFloat(orderItems.reduce((s, i) => s + i.totalPrice, 0).toFixed(2));
-      const subDiscAmt = parseFloat(((subTotal * subscriptionDiscountPct) / 100).toFixed(2));
+      // Apply coupon only to first store group to avoid double-use
+      const thisCouponCode = !globalCouponUsed ? globalCouponCode : null;
 
-      const groupCouponDisc = remainingCouponDiscount > 0
-        ? Math.min(remainingCouponDiscount, Math.max(0, subTotal - subDiscAmt))
-        : 0;
-      remainingCouponDiscount = parseFloat((remainingCouponDiscount - groupCouponDisc).toFixed(2));
-
-      const totalDiscountAmount = parseFloat((subDiscAmt + groupCouponDisc).toFixed(2));
-      const totalPayable        = parseFloat(Math.max(0, subTotal - totalDiscountAmount).toFixed(2));
-
-      // Pro-rata discount factor to distribute price deductions and record precise GST values
-      const discountFactor = subTotal > 0 ? totalPayable / subTotal : 0;
-      let gstAmount = 0;
-      orderItems.forEach((item) => {
-        const itemPaidShare = item.totalPrice * discountFactor;
-        item.taxAmount = parseFloat((itemPaidShare * item.gstPercentage / (100 + item.gstPercentage)).toFixed(2));
-        gstAmount += item.taxAmount;
+      const { billing, appliedCoupon, deliveryResult } = await buildBilling({
+        orderItems,
+        userId:                  req.user._id,
+        deliveryType:            resolvedDeliveryType,
+        platformConfig,
+        subPlanDoc:              planDoc,
+        couponCode:              thisCouponCode,
+        subscriptionDiscountPct: pharmacyDiscountPct,
+        session,
       });
-      gstAmount = parseFloat(gstAmount.toFixed(2));
+
+      if (appliedCoupon) globalCouponUsed = true;
+
+      // ── Live stock re-validation ─────────────────────────────────────────
+      for (const orderItem of orderItems) {
+        const liveInv = await MedicineInventory.findOne({
+          medicineId: toObjectId(orderItem.medicine, 'medicine'),
+          storeId:    storeObjId,
+          isActive:   true,
+          isDeleted:  false,
+        }).session(session);
+
+        if (!liveInv || liveInv.availableStock < orderItem.quantity) {
+          throw new Error(
+            `Stock changed for "${orderItem.name}" at "${storeDoc.storeName}". ` +
+            `Available: ${liveInv?.availableStock ?? 0}, requested: ${orderItem.quantity}. Please retry.`
+          );
+        }
+      }
 
       const orderPrescription = buildOrderPrescription(groupItems);
-
-      // ── Live stock re-validation inside the transaction ─────────────────
-      // Re-read the medicine documents inside the session to catch any
-      // concurrent updates that may have happened since resolution.
-     for (const orderItem of orderItems) {
-  const liveMed = await Medicine.findById(orderItem.medicine).session(session);
-  const now = new Date();
-  // Sum across ALL active, non-expired entries for this store — a medicine
-  // can have multiple inventory sub-documents for the same store (e.g. different
-  // batches), so we must aggregate rather than pick the first match.
-  const totalAvailableAtStore = (liveMed?.inventory ?? [])
-    .filter(
-      (inv) =>
-        new mongoose.Types.ObjectId(inv.storeId).equals(storeObjId) &&
-        inv.isActive &&
-        !inv.isExpired &&
-        inv.expiryDate > now
-    )
-    .reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0);
-
-  if (totalAvailableAtStore < orderItem.quantity) {
-    throw new Error(
-      `Stock changed for "${orderItem.name}" at "${storeDoc.storeName}". ` +
-      `Available: ${totalAvailableAtStore}, requested: ${orderItem.quantity}. Please retry.`
-    );
-  }
-}
 
       const order = new PharmacyOrder({
         customer:     req.user._id,
         store:        storeObjId,
         items:        orderItems,
         prescription: orderPrescription,
-        billing: {
-          subTotal,
-          gstAmount,
-          discountAmount: totalDiscountAmount,
-          promoCode:      groupCouponDisc > 0 ? appliedCoupon?.code : undefined,
-          totalPayable,
+        billing,
+        delivery: {
+          address,
+          // Set express delivery fields if applicable
+          ...(resolvedDeliveryType === 'Express' && {
+            estimatedArrival: new Date(Date.now() + (storeDoc.deliverySettings?.expressEtaMinutes ?? 30) * 60 * 1000),
+          }),
+          ...(resolvedDeliveryType === 'Standard' && {
+            estimatedArrival: new Date(Date.now() + (storeDoc.deliverySettings?.standardEtaMinutes ?? 120) * 60 * 1000),
+          }),
         },
-        delivery: { address },
-        payment:  { method: paymentMethod },
+        payment: { method: paymentMethod },
+      });
+      // Store delivery type hint in admin notes
+      order.adminNotes.push({
+        text:    `Delivery type: ${resolvedDeliveryType}. Store: ${storeDoc.storeName}. Charge: ₹${billing.deliveryCharges}. Reason: ${deliveryResult.reason}.`,
+        addedAt: new Date(),
       });
 
-      // ── Payment handling ─────────────────────────────────────────────────
+      // ── Payment ──────────────────────────────────────────────────────────
       if (paymentMethod === 'Razorpay') {
         const rzpOrder = await razorpay.orders.create({
-          amount:   Math.round(totalPayable * 100),
+          amount:   Math.round(billing.totalPayable * 100),
           currency: 'INR',
           receipt:  order._id.toString(),
         });
@@ -1467,12 +1991,16 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
       }
 
       if (paymentMethod === 'Wallet') {
+        if (wallet.balance < billing.totalPayable)
+          throw new Error(
+            `Insufficient wallet balance. Required: ₹${billing.totalPayable}, Available: ₹${wallet.balance}.`
+          );
         const balanceBefore = wallet.balance;
-        wallet.balance      = parseFloat((wallet.balance - totalPayable).toFixed(2));
+        wallet.balance      = parseFloat((wallet.balance - billing.totalPayable).toFixed(2));
         wallet.transactions.push({
           transactionId: `TXN-${Date.now()}-${storeId.slice(-4)}`,
           type:          'Debit',
-          amount:        totalPayable,
+          amount:        billing.totalPayable,
           purpose:       'Medicine_Purchase',
           referenceId:   order._id,
           onModel:       'PharmacyOrder',
@@ -1488,64 +2016,38 @@ router.post('/order/checkout', protect, asyncHandler(async (req, res) => {
       }
 
       await order.save({ session });
+      if (appliedCoupon) await commitCouponUsage(appliedCoupon._id, session);
       createdOrders.push({ order: order.toObject(), storeDoc });
     }
 
-    // ── Finalise ──────────────────────────────────────────────────────────────
-    if (appliedCoupon) await commitCouponUsage(appliedCoupon._id, session);
     if (paymentMethod === 'Wallet' && wallet) await wallet.save({ session });
     await clearCart(req.user._id, session);
     await session.commitTransaction();
 
     logAudit('ORDER_CHECKOUT_MULTI', {
-      userId:     req.user._id,
-      orderIds:   createdOrders.map((o) => o.order._id),
-      orderCount: createdOrders.length,
-      paymentMethod,
+      userId: req.user._id, orderCount: createdOrders.length, paymentMethod, deliveryType: resolvedDeliveryType,
     });
 
-    await syslog('success', 'payment', `Customer placed ${createdOrders.length} order(s) via checkout`, {
-      actor:   actorFromReq(req),
-      request: { method: 'POST', path: req.originalUrl, statusCode: 201 },
-      metadata: {
-        paymentMethod,
-        orderCount:       createdOrders.length,
-        couponCode:       appliedCoupon?.code ?? null,
-        unavailableCount: unavailableItems.length,
-      },
-    });
-
-    // Dispatch confirmation emails (non-blocking)
     if (paymentMethod !== 'Razorpay') {
       for (const { order, storeDoc } of createdOrders) {
-        const headerNote = appliedCoupon && order.billing.promoCode
-          ? `Coupon ${appliedCoupon.code} applied — you saved ₹${couponDiscountAmt}!`
-          : '';
+        const headerNote = order.billing.promoCode ? `Coupon applied — you saved!` : '';
         dispatchOrderConfirmationEmail(req.user._id, order, storeDoc.storeName, headerNote);
       }
     }
 
- res.status(201).json({
+    res.status(201).json({
       success:     true,
-      order:       createdOrders[0]?.order, // <-- ADDED: Prevents frontend 'payment' undefined crash
+      order:       createdOrders[0]?.order,
       orders:      createdOrders.map((o) => o.order),
       razorpayKey: RAZORPAY_KEY_ID,
       orderCount:  createdOrders.length,
       ...(unavailableItems.length > 0 && {
-        warning: {
-          message:          'Some items were unavailable and were not included in any order.',
-          unavailableItems,
-        },
+        warning: { message: 'Some items were unavailable.', unavailableItems },
       }),
     });
   } catch (err) {
     await session.abortTransaction();
     logError('CHECKOUT_ERROR', err, { userId: req.user._id });
-    await syslog('error', 'payment', `Checkout failed: ${err.message}`, {
-      actor:   actorFromReq(req),
-      request: { method: 'POST', path: req.originalUrl, statusCode: 500 },
-      metadata: { error: err.message },
-    });
     throw err;
   } finally { session.endSession(); }
 }));
@@ -1562,10 +2064,8 @@ router.post('/order/verify', protect, asyncHandler(async (req, res) => {
   const hmac = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET)
     .update(`${razorpay_order_id}|${razorpay_payment_id}`).digest('hex');
 
-  if (hmac !== razorpay_signature) {
-    logAudit('PAYMENT_VERIFICATION_FAILED', { userId: req.user._id, rzpOrderId: razorpay_order_id });
+  if (hmac !== razorpay_signature)
     return res.status(400).json({ success: false, message: 'Invalid payment signature.' });
-  }
 
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -1574,14 +2074,8 @@ router.post('/order/verify', protect, asyncHandler(async (req, res) => {
       'payment.razorpayOrderId': razorpay_order_id, customer: req.user._id,
     }).session(session);
 
-    if (!order) {
-      await session.abortTransaction();
-      return res.status(404).json({ success: false, message: 'Order not found.' });
-    }
-  if (order.payment?.status === 'Paid') {
-      await session.abortTransaction();
-      return res.status(200).json({ success: true, message: 'Already paid.', order });
-    }
+    if (!order) { await session.abortTransaction(); return res.status(404).json({ success: false, message: 'Order not found.' }); }
+    if (order.payment?.status === 'Paid') { await session.abortTransaction(); return res.status(200).json({ success: true, message: 'Already paid.', order }); }
 
     await decrementStock(order.items, order.store.toString(), session);
     order.payment.status            = 'Paid';
@@ -1591,8 +2085,6 @@ router.post('/order/verify', protect, asyncHandler(async (req, res) => {
     order.delivery.status           = 'Placed';
     await order.save({ session });
     await session.commitTransaction();
-
-    logAudit('PAYMENT_VERIFIED', { userId: req.user._id, orderId: order._id });
 
     const storeDoc = await PharmacyStore.findById(order.store).select('storeName').lean();
     dispatchOrderConfirmationEmail(req.user._id, order.toObject(), storeDoc?.storeName ?? 'Likeson Pharmacy');
@@ -1617,22 +2109,14 @@ router.post('/wallet/pay', protect, asyncHandler(async (req, res) => {
   session.startTransaction();
   try {
     const order = await findOrderSafe(orderId, { customer: req.user._id }, session);
-    if (!order) {
-      await session.abortTransaction();
-      return res.status(404).json({ success: false, message: 'Order not found.' });
-    }
-   if (order.payment?.status === 'Paid') {
-      await session.abortTransaction();
-      return res.status(400).json({ success: false, message: 'Order already paid.' });
-    }
+    if (!order) { await session.abortTransaction(); return res.status(404).json({ success: false, message: 'Order not found.' }); }
+    if (order.payment?.status === 'Paid') { await session.abortTransaction(); return res.status(400).json({ success: false, message: 'Order already paid.' }); }
 
     const wallet = await Wallet.findOne({ user: req.user._id }).session(session);
     if (!wallet)          throw new Error('Wallet not found.');
     if (!wallet.isActive) throw new Error('Wallet is inactive.');
     if (wallet.balance < order.billing.totalPayable)
-      throw new Error(
-        `Insufficient wallet balance. Required: ₹${order.billing.totalPayable}, Available: ₹${wallet.balance}.`
-      );
+      throw new Error(`Insufficient wallet balance. Required: ₹${order.billing.totalPayable}, Available: ₹${wallet.balance}.`);
 
     const balanceBefore = wallet.balance;
     wallet.balance      = parseFloat((wallet.balance - order.billing.totalPayable).toFixed(2));
@@ -1659,8 +2143,7 @@ router.post('/wallet/pay', protect, asyncHandler(async (req, res) => {
     await session.commitTransaction();
 
     const storeDoc   = await PharmacyStore.findById(order.store).select('storeName').lean();
-    const headerNote = `Remaining wallet balance: ₹${wallet.balance}`;
-    dispatchOrderConfirmationEmail(req.user._id, order.toObject(), storeDoc?.storeName ?? 'Likeson Pharmacy', headerNote);
+    dispatchOrderConfirmationEmail(req.user._id, order.toObject(), storeDoc?.storeName ?? 'Likeson Pharmacy', `Remaining wallet balance: ₹${wallet.balance}`);
 
     res.status(200).json({ success: true, order });
   } catch (error) {
@@ -1683,10 +2166,8 @@ router.get('/orders/my-orders', protect, asyncHandler(async (req, res) => {
   if (status) filter['delivery.status'] = status;
 
   const [orders, total] = await Promise.all([
-    PharmacyOrder.find(filter)
-      .sort({ createdAt: -1 }).skip(skip).limit(limitNum)
-      .populate('store', 'storeName address')
-      .lean(),
+    PharmacyOrder.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum)
+      .populate('store', 'storeName address').lean(),
     PharmacyOrder.countDocuments(filter),
   ]);
 
@@ -1739,71 +2220,11 @@ router.post('/order/upload-prescription', protect, asyncHandler(async (req, res)
   await order.save();
 
   res.status(200).json({
-    success: true,
-    message: 'Prescription uploaded. Pending pharmacist verification.',
+    success: true, message: 'Prescription uploaded. Pending pharmacist verification.',
     prescription: order.prescription,
   });
 }));
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/pharmacy/medicines/:id/similar
-// Fetch similar medicines based on the category of the provided medicine ID
-// ─────────────────────────────────────────────────────────────────────────────
-
-router.get('/medicines/:id/similar', cache(120), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const limit = parseInt(req.query.limit, 10) || 10;
-
-  // 1. Find the base medicine and fetch fields needed to determine similarity
-  const baseMedicine = await Medicine.findById(id)
-    .select('category genericName therapeuticClass pharmacologicalClass')
-    .lean();
-
-  if (!baseMedicine) {
-    return res.status(404).json({ success: false, message: 'Medicine not found.' });
-  }
-
-  // 2. Build the similarity conditions
-  // We want to find medicines that share at least one medical trait with the base medicine.
-  const similarityConditions = [];
-  
-  if (baseMedicine.genericName) {
-    similarityConditions.push({ genericName: baseMedicine.genericName }); // Direct substitutes
-  }
-  if (baseMedicine.therapeuticClass) {
-    similarityConditions.push({ therapeuticClass: baseMedicine.therapeuticClass }); // Same use-case
-  }
-  if (baseMedicine.pharmacologicalClass) {
-    similarityConditions.push({ pharmacologicalClass: baseMedicine.pharmacologicalClass }); // Same drug family
-  }
-
-  // 3. Construct the final query
-  const matchQuery = {
-    _id: { $ne: id },                      // Exclude the currently viewed medicine
-    isDiscontinued: false,                 // Only show active listings
-    category: baseMedicine.category,       // STRICT: Must be in the exact same category
-  };
-
-  // If we have similarity conditions, apply them using $or
-  if (similarityConditions.length > 0) {
-    matchQuery.$or = similarityConditions;
-  }
-
-  // 4. Execute the query
-  const similarMedicines = await Medicine.find(matchQuery)
-    .sort({ 'inventory.stockQuantity': -1, createdAt: -1 }) // Prioritize items in stock
-    .limit(limit)
-    .populate('inventory.storeId', 'storeName address status') 
-    .lean();
-
-  res.status(200).json({
-    success: true,
-    category: baseMedicine.category,
-    medicines: similarMedicines,
-  });
-}));
- 
 // ─────────────────────────────────────────────────────────────────────────────
 // 11b. POST /api/pharmacy/order/upload-prescription/file
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1832,7 +2253,6 @@ router.post(
     try {
       imageUrl = await uploadToImageKit(req.file.buffer, req.file.originalname, '/prescriptions/orders');
     } catch (err) {
-      logError('ORDER_PRESCRIPTION_IMAGEKIT', err, { userId: req.user._id, orderId });
       return res.status(500).json({ success: false, message: 'Failed to upload prescription to storage.' });
     }
 
@@ -1842,13 +2262,63 @@ router.post(
     await order.save();
 
     res.status(200).json({
-      success: true,
-      message: 'Prescription uploaded. Pending pharmacist verification.',
-      imageUrl,
-      prescription: order.prescription,
+      success: true, message: 'Prescription uploaded. Pending pharmacist verification.',
+      imageUrl, prescription: order.prescription,
     });
   }),
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Similar medicines
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/medicines/:id/similar', cache(120), asyncHandler(async (req, res) => {
+  const { id }  = req.params;
+  const limit   = parseInt(req.query.limit, 10) || 10;
+
+  const baseMedicine = await Medicine.findById(id)
+    .select('category genericName therapeuticClass pharmacologicalClass')
+    .lean();
+  if (!baseMedicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
+
+  const similarityConditions = [];
+  if (baseMedicine.genericName)           similarityConditions.push({ genericName: baseMedicine.genericName });
+  if (baseMedicine.therapeuticClass)      similarityConditions.push({ therapeuticClass: baseMedicine.therapeuticClass });
+  if (baseMedicine.pharmacologicalClass)  similarityConditions.push({ pharmacologicalClass: baseMedicine.pharmacologicalClass });
+
+  const matchQuery = {
+    _id:            { $ne: id },
+    isDiscontinued: false,
+    isApproved:     true,
+    isDeleted:      false,
+    category:       baseMedicine.category,
+    ...(similarityConditions.length && { $or: similarityConditions }),
+  };
+
+  const similarMedicines = await Medicine.find(matchQuery)
+    .limit(limit)
+    .lean();
+
+  // Enrich with lowest price from MedicineInventory
+  const medIds = similarMedicines.map((m) => m._id);
+  const invs   = await MedicineInventory.find({
+    medicineId: { $in: medIds }, isActive: true, isDeleted: false, availableStock: { $gt: 0 },
+  }).lean();
+  const invByMed = new Map();
+  for (const inv of invs) {
+    const mid = inv.medicineId.toString();
+    if (!invByMed.has(mid)) invByMed.set(mid, []);
+    invByMed.get(mid).push(inv);
+  }
+
+  const enriched = similarMedicines.map((med) => {
+    const invList = invByMed.get(med._id.toString()) || [];
+    const lowest  = invList.length ? Math.min(...invList.map((i) => i.finalPrice ?? Infinity)) : null;
+    return { ...med, lowestPrice: lowest, isAvailable: invList.length > 0 };
+  }).sort((a, b) => (a.isAvailable === b.isAvailable ? 0 : a.isAvailable ? -1 : 1));
+
+  res.status(200).json({ success: true, category: baseMedicine.category, medicines: enriched });
+}));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 12. GET /api/pharmacy/orders/:id/invoice
@@ -1917,18 +2387,12 @@ router.post('/order/cancel', protect, asyncHandler(async (req, res) => {
   session.startTransaction();
   try {
     const order = await findOrderSafe(orderId, { customer: req.user._id }, session);
-    if (!order) {
-      await session.abortTransaction();
-      return res.status(404).json({ success: false, message: 'Order not found.' });
-    }
+    if (!order) { await session.abortTransaction(); return res.status(404).json({ success: false, message: 'Order not found.' }); }
 
     const nonCancellable = ['Delivered', 'Return_Requested', 'Return_Accepted', 'Pickup_Assigned', 'Pickup_Done', 'Returned'];
     if (nonCancellable.includes(order.delivery.status)) {
       await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: `Cannot cancel order with status: ${order.delivery.status}.`,
-      });
+      return res.status(400).json({ success: false, message: `Cannot cancel order with status: ${order.delivery.status}.` });
     }
 
     order.cancellation.isCancelled = true;
@@ -1937,13 +2401,10 @@ router.post('/order/cancel', protect, asyncHandler(async (req, res) => {
     order.cancellation.cancelledAt = new Date();
     order.delivery.status          = 'Cancelled';
 
-if (order.payment?.status === 'Paid') {
-      order.cancellation.refundStatus = 'Requested';
-      order.cancellation.refundMethod = 'Original_Source';
+    if (order.payment?.status === 'Paid') {
       order.cancellation.refundAmount = order.billing.totalPayable;
       await incrementStock(order.items, order.store.toString(), session);
 
-      // Immediate wallet refund if paid by wallet
       if (order.payment?.method === 'Wallet') {
         const wallet = await Wallet.findOne({ user: req.user._id }).session(session);
         if (wallet) {
@@ -1965,13 +2426,24 @@ if (order.payment?.status === 'Paid') {
           order.cancellation.refundStatus = 'Processed';
           order.cancellation.refundMethod = 'Wallet';
         }
+      } else if (order.payment?.method === 'Razorpay') {
+        order.cancellation.selectedRefundMethod = order.cancellation.selectedRefundMethod || 'Online';
+        order.cancellation.refundStatus         = 'Requested';
+        order.cancellation.refundMethod         = 'Original_Source';
+        order.$locals._triggerCancellationRefund = true;
+      } else {
+        order.cancellation.refundStatus = 'None';
       }
     }
 
     await order.save({ session });
     await session.commitTransaction();
 
-    logAudit('ORDER_CANCELLED', { userId: req.user._id, orderId: order._id });
+    if (order.$locals?._triggerCancellationRefund) {
+      import('../services/refundService.js')
+        .then(({ initiateRefund }) => initiateRefund(order._id.toString(), { adminNote: `Auto-refund: order cancelled by customer` }))
+        .catch((err) => console.error('[cancel] Auto-refund failed', order.orderId, err.message));
+    }
 
     dispatchNotification(req.user._id, {
       title:        'Order Cancelled',
@@ -1979,9 +2451,7 @@ if (order.payment?.status === 'Paid') {
       type:         'Order_Cancelled',
       emailSubject: 'Order Cancellation Confirmation',
       emailBody:    `Your order #${order.orderId} has been cancelled.${
-        order.payment.status === 'Paid'
-          ? ` A refund of ₹${order.billing.totalPayable} will be processed.`
-          : ''
+        order.payment.status === 'Paid' ? ` A refund of ₹${order.billing.totalPayable} will be processed.` : ''
       }`,
       actionLink: `https://likeson.in/pharmacy/orders/${order._id}`,
     });
@@ -2006,23 +2476,20 @@ router.post('/order/request-return', protect, asyncHandler(async (req, res) => {
   if (returnReason.length < 10)
     return res.status(400).json({ success: false, message: 'returnReason must be at least 10 characters.' });
   if (!evidence || !Array.isArray(evidence) || evidence.length === 0)
-    return res.status(400).json({ success: false, message: 'Evidence is required. Please upload at least one image or video.' });
+    return res.status(400).json({ success: false, message: 'Evidence required. Upload at least one image or video.' });
 
-  const validMediaTypes = ['image', 'video'];
   for (const item of evidence) {
-    if (!item.url)
-      return res.status(400).json({ success: false, message: 'Each evidence item must have a url.' });
-    if (!validMediaTypes.includes(item.mediaType))
-      return res.status(400).json({ success: false, message: 'Each evidence mediaType must be "image" or "video".' });
+    if (!item.url) return res.status(400).json({ success: false, message: 'Each evidence item must have a url.' });
+    if (!['image', 'video'].includes(item.mediaType))
+      return res.status(400).json({ success: false, message: 'Evidence mediaType must be "image" or "video".' });
   }
 
   const validRefundMethods = ['Wallet', 'Online', 'Bank_Transfer', 'Custom_Bank'];
   if (!refundMethod || !validRefundMethods.includes(refundMethod))
-    return res.status(400).json({ success: false, message: `refundMethod is required. Valid options: ${validRefundMethods.join(', ')}.` });
+    return res.status(400).json({ success: false, message: `refundMethod required. Valid: ${validRefundMethods.join(', ')}.` });
 
   if (['Bank_Transfer', 'Custom_Bank'].includes(refundMethod)) {
-    if (!bankDetails)
-      return res.status(400).json({ success: false, message: 'bankDetails are required for bank transfer refund.' });
+    if (!bankDetails) return res.status(400).json({ success: false, message: 'bankDetails required for bank transfer refund.' });
     const reqFields = ['accountHolderName', 'accountNumber', 'ifscCode', 'bankName'];
     const missing   = reqFields.filter((f) => !bankDetails[f]);
     if (missing.length)
@@ -2060,7 +2527,7 @@ router.post('/order/request-return', protect, asyncHandler(async (req, res) => {
     body:         `Return request for order #${order.orderId} submitted.`,
     type:         'Return_Requested',
     emailSubject: 'Return Request Confirmed',
-    emailBody:    `Your return request for order #${order.orderId} has been received. Our team will review within 24 hours.\n\nRefund method selected: ${refundMethod}.`,
+    emailBody:    `Your return request for order #${order.orderId} has been received. Our team will review within 24 hours.\n\nRefund method: ${refundMethod}.`,
     actionLink:   `https://likeson.in/pharmacy/orders/${order._id}`,
   });
 
@@ -2119,58 +2586,61 @@ router.post('/wallet/add-money', protect, asyncHandler(async (req, res) => {
 
 router.post('/wallet/verify-topup', protect, asyncHandler(async (req, res) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature, amount } = req.body;
+
   if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature)
     return res.status(400).json({ success: false, message: 'Missing payment verification details.' });
+  if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0)
+    return res.status(400).json({ success: false, message: 'Valid amount is required.' });
 
   const hmac = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET)
     .update(`${razorpay_order_id}|${razorpay_payment_id}`).digest('hex');
+
   if (hmac !== razorpay_signature)
     return res.status(400).json({ success: false, message: 'Invalid payment signature.' });
 
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const wallet = await Wallet.findOne({ user: req.user._id }).session(session);
-    if (!wallet) {
-      await session.abortTransaction();
-      throw new Error('Wallet not found.');
-    }
+  const alreadyCredited = await Wallet.findOne({
+    user: req.user._id, 'transactions.transactionId': razorpay_payment_id,
+  }).lean();
+  if (alreadyCredited) return res.status(200).json({ success: true, message: 'Payment already processed.', alreadyProcessed: true });
 
-    const amountNum     = parseFloat(amount);
-    const balanceBefore = wallet.balance;
-    wallet.balance      = parseFloat((wallet.balance + amountNum).toFixed(2));
+  let wallet = await Wallet.findOne({ user: req.user._id });
+  if (!wallet) wallet = await Wallet.create({ user: req.user._id, balance: 0, createdBy: req.user._id });
+  if (!wallet.isActive) return res.status(403).json({ success: false, message: 'Wallet is inactive.' });
 
-    // Use the Wallet model's transaction schema fields correctly
-    wallet.transactions.push({
-      transactionId: `TXN-${Date.now()}`,
-      type:          'Credit',
-      amount:        amountNum,
-      purpose:       'Add_Money',       // ← matches Wallet model enum + withdrawable
-      status:        'Success',
-      balanceBefore,
-      balanceAfter:  wallet.balance,
-      description:   `Wallet top-up of ₹${amountNum}`,
-    });
+  const amountNum = parseFloat(parseFloat(amount).toFixed(2));
+  await wallet.credit(amountNum, 'Add_Money', {
+    transactionId: razorpay_payment_id,
+    description:   `Wallet top-up of ₹${amountNum} via Razorpay`,
+    note:          `razorpayOrderId: ${razorpay_order_id}`,
+  });
 
-    await wallet.save({ session });
-    await session.commitTransaction();
+  const updatedWallet = await Wallet.findOne({ user: req.user._id }).lean();
 
-    logAudit('WALLET_TOPUP', { userId: req.user._id, amount: amountNum });
-
-    res.status(200).json({ success: true, message: `Wallet topped up with ₹${amountNum}.`, wallet });
-  } catch (error) {
-    await session.abortTransaction();
-    logError('WALLET_TOPUP_ERROR', error, { userId: req.user._id });
-    throw error;
-  } finally { session.endSession(); }
+  return res.status(200).json({
+    success: true,
+    message: `Wallet topped up with ₹${amountNum}.`,
+    wallet: {
+      balance:             updatedWallet.balance,
+      withdrawableBalance: updatedWallet.withdrawableBalance,
+      lastTransactionAt:   updatedWallet.lastTransactionAt,
+    },
+  });
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 18. POST /api/pharmacy/order/direct
+// 18. POST /api/pharmacy/order/direct  (SINGLE MEDICINE, FULL BILLING)
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.post('/order/direct', protect, asyncHandler(async (req, res) => {
-  const { medicineId, quantity, address, paymentMethod = 'Razorpay', couponCode, prescription } = req.body;
+  const {
+    medicineId,
+    quantity,
+    address,
+    paymentMethod  = 'Razorpay',
+    couponCode,
+    prescription,
+    deliveryType   = 'Standard',
+  } = req.body;
   const preferredStoreId = extractStoreId(req.body.storeId) || null;
 
   if (!medicineId || !quantity || !address)
@@ -2182,7 +2652,9 @@ router.post('/order/direct', protect, asyncHandler(async (req, res) => {
   if (!['Razorpay', 'Wallet', 'COD'].includes(paymentMethod))
     return res.status(400).json({ success: false, message: 'Invalid payment method.' });
 
-  const quantityNum = parseInt(quantity, 10);
+  const quantityNum        = parseInt(quantity, 10);
+  const resolvedDeliveryType = deliveryType === 'Express' ? 'Express' : 'Standard';
+
   if (quantityNum < 1)
     return res.status(400).json({ success: false, message: 'Quantity must be at least 1.' });
 
@@ -2196,36 +2668,20 @@ router.post('/order/direct', protect, asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: err.message });
   }
 
-  const storeObjId      = resolvedStore._id;
-  const storeIdStr      = storeObjId.toString();
-  const storeOverridden = preferredStoreId && preferredStoreId !== storeIdStr;
+  const storeObjId       = resolvedStore._id;
+  const storeIdStr       = storeObjId.toString();
+  const storeOverridden  = preferredStoreId && preferredStoreId !== storeIdStr;
 
- const session = await mongoose.startSession();
+  const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    const subscriptionDiscountPct = await resolvePharmacyDiscount(req.user._id);
-    const unitPrice      = Number(inventoryEntry.pricePerUnit) || Number(medicine.mrp);
-    const subTotal       = parseFloat((unitPrice * quantityNum).toFixed(2));
-    const subDiscAmt     = parseFloat((subTotal * (subscriptionDiscountPct / 100)).toFixed(2));
-    const preCouponTotal = parseFloat(Math.max(0, subTotal - subDiscAmt).toFixed(2));
+    const [platformConfig, { pharmacyDiscountPct, planDoc }] = await Promise.all([
+      PlatformPricingConfig.getGlobal(),
+      resolveSubscriptionBenefits(req.user._id),
+    ]);
 
-    let couponDiscountAmt = 0, appliedCoupon = null;
-    if (couponCode) {
-      try {
-        const r = await validateAndApplyCoupon(couponCode, req.user._id, preCouponTotal, session);
-        couponDiscountAmt = r.discountAmount;
-        appliedCoupon     = r.coupon;
-      } catch (error) {
-        await session.abortTransaction();
-        return res.status(400).json({ success: false, message: error.message });
-      }
-    }
-
-    const totalDiscountAmount = parseFloat((subDiscAmt + couponDiscountAmt).toFixed(2));
-    const totalPayable        = parseFloat(Math.max(0, subTotal - totalDiscountAmount).toFixed(2));
-
-    const gstPct    = Number(medicine.gstPercentage) || 5;
-    const gstAmount = parseFloat((totalPayable * gstPct / (100 + gstPct)).toFixed(2));
+    const unitPrice   = Number(inventoryEntry.finalPrice) || Number(inventoryEntry.sellingPrice) || Number(medicine.mrp);
+    const gstPct      = Number(medicine.gstPercentage) || 5;
 
     const orderItem = {
       medicine:               medicine._id,
@@ -2237,10 +2693,53 @@ router.post('/order/direct', protect, asyncHandler(async (req, res) => {
       gstPercentage:          gstPct,
       quantity:               quantityNum,
       pricePerUnit:           unitPrice,
-      taxAmount:              gstAmount,
-      totalPrice:             subTotal,
+      taxAmount:              0,
+      totalPrice:             parseFloat((unitPrice * quantityNum).toFixed(2)),
       isPrescriptionRequired: medicine.isPrescriptionRequired ?? false,
     };
+
+    const { billing, appliedCoupon, deliveryResult } = await buildBilling({
+      orderItems:              [orderItem],
+      userId:                  req.user._id,
+      deliveryType:            resolvedDeliveryType,
+      platformConfig,
+      subPlanDoc:              planDoc,
+      couponCode:              couponCode || null,
+      subscriptionDiscountPct: pharmacyDiscountPct,
+      session,
+    });
+
+    const orderPrescription = medicine.isPrescriptionRequired
+      ? {
+          isRequired:         true,
+          imageUrl:           prescription?.imageUrl ?? null,
+          uploadedAt:         prescription?.imageUrl ? new Date() : null,
+          verificationStatus: prescription?.imageUrl ? 'Pending' : 'Not_Uploaded',
+        }
+      : { isRequired: false };
+
+    const order = new PharmacyOrder({
+      customer:     req.user._id,
+      store:        storeObjId,
+      items:        [orderItem],
+      prescription: orderPrescription,
+      billing,
+      delivery: {
+        address,
+        estimatedArrival: new Date(
+          Date.now() +
+          (resolvedDeliveryType === 'Express'
+            ? (resolvedStore.deliverySettings?.expressEtaMinutes ?? 30)
+            : (resolvedStore.deliverySettings?.standardEtaMinutes ?? 120)
+          ) * 60 * 1000
+        ),
+      },
+      payment: { method: paymentMethod },
+    });
+    order.adminNotes.push({
+      text:    `Delivery: ${resolvedDeliveryType}. Charge: ₹${billing.deliveryCharges}. Reason: ${deliveryResult.reason}. Platform fee: ₹${billing.platformFee}.`,
+      addedAt: new Date(),
+    });
 
     if (paymentMethod === 'COD') {
       await decrementStock([orderItem], storeIdStr, session);
@@ -2251,15 +2750,15 @@ router.post('/order/direct', protect, asyncHandler(async (req, res) => {
       const wallet = await Wallet.findOne({ user: req.user._id }).session(session);
       if (!wallet)          throw new Error('Wallet not found.');
       if (!wallet.isActive) throw new Error('Wallet is inactive.');
-      if (wallet.balance < totalPayable)
-        throw new Error(`Insufficient wallet balance. Required: ₹${totalPayable}, Available: ₹${wallet.balance}.`);
+      if (wallet.balance < billing.totalPayable)
+        throw new Error(`Insufficient wallet balance. Required: ₹${billing.totalPayable}, Available: ₹${wallet.balance}.`);
 
       const balanceBefore = wallet.balance;
-      wallet.balance      = parseFloat((wallet.balance - totalPayable).toFixed(2));
+      wallet.balance      = parseFloat((wallet.balance - billing.totalPayable).toFixed(2));
       wallet.transactions.push({
         transactionId: `TXN-${Date.now()}`,
         type:          'Debit',
-        amount:        totalPayable,
+        amount:        billing.totalPayable,
         purpose:       'Medicine_Purchase',
         referenceId:   order._id,
         onModel:       'PharmacyOrder',
@@ -2277,7 +2776,7 @@ router.post('/order/direct', protect, asyncHandler(async (req, res) => {
 
     if (paymentMethod === 'Razorpay') {
       const rzpOrder = await razorpay.orders.create({
-        amount:   Math.round(totalPayable * 100),
+        amount:   Math.round(billing.totalPayable * 100),
         currency: 'INR',
         receipt:  order._id.toString(),
       });
@@ -2288,10 +2787,8 @@ router.post('/order/direct', protect, asyncHandler(async (req, res) => {
     if (appliedCoupon) await commitCouponUsage(appliedCoupon._id, session);
     await session.commitTransaction();
 
-    logAudit('DIRECT_ORDER', { userId: req.user._id, orderId: order._id, medicineId, storeId: storeIdStr, storeOverridden });
-
     if (paymentMethod !== 'Razorpay') {
-      const headerNote = appliedCoupon ? `Coupon ${appliedCoupon.code} applied — saved ₹${couponDiscountAmt}!` : '';
+      const headerNote = appliedCoupon ? `Coupon ${appliedCoupon.code} applied!` : '';
       dispatchOrderConfirmationEmail(req.user._id, order.toObject(), resolvedStore.storeName, headerNote);
     }
 
@@ -2300,9 +2797,8 @@ router.post('/order/direct', protect, asyncHandler(async (req, res) => {
       order,
       razorpayKey:       RAZORPAY_KEY_ID,
       resolvedStoreName: resolvedStore.storeName,
-      ...(storeOverridden && {
-        notice: `Your preferred store did not have sufficient stock. Order placed from "${resolvedStore.storeName}" instead.`,
-      }),
+      billing,
+      ...(storeOverridden && { notice: `Preferred store had insufficient stock. Order placed from "${resolvedStore.storeName}".` }),
     });
   } catch (err) {
     await session.abortTransaction();
@@ -2322,7 +2818,6 @@ router.post('/order/direct/verify', protect, asyncHandler(async (req, res) => {
 
   const hmac = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET)
     .update(`${razorpay_order_id}|${razorpay_payment_id}`).digest('hex');
-
   if (hmac !== razorpay_signature)
     return res.status(400).json({ success: false, message: 'Invalid payment signature.' });
 
@@ -2333,14 +2828,8 @@ router.post('/order/direct/verify', protect, asyncHandler(async (req, res) => {
       'payment.razorpayOrderId': razorpay_order_id, customer: req.user._id,
     }).session(session);
 
-    if (!order) {
-      await session.abortTransaction();
-      return res.status(404).json({ success: false, message: 'Order not found.' });
-    }
-if (order.payment?.status === 'Paid') {
-      await session.abortTransaction();
-      return res.status(200).json({ success: true, message: 'Already paid.', order });
-    }
+    if (!order) { await session.abortTransaction(); return res.status(404).json({ success: false, message: 'Order not found.' }); }
+    if (order.payment?.status === 'Paid') { await session.abortTransaction(); return res.status(200).json({ success: true, message: 'Already paid.', order }); }
 
     await decrementStock(order.items, order.store.toString(), session);
     order.payment.status            = 'Paid';
@@ -2375,10 +2864,7 @@ router.post('/order/verify-delivery-otp', protect, asyncHandler(async (req, res)
   session.startTransaction();
   try {
     const order = await findOrderSafe(orderId, {}, session);
-    if (!order) {
-      await session.abortTransaction();
-      return res.status(404).json({ success: false, message: 'Order not found.' });
-    }
+    if (!order) { await session.abortTransaction(); return res.status(404).json({ success: false, message: 'Order not found.' }); }
 
     const orderWithOtp = await PharmacyOrder.findById(order._id)
       .select('+deliveryOtp.code +deliveryOtp.expiresAt +deliveryOtp.verified')
@@ -2414,6 +2900,70 @@ router.post('/order/verify-delivery-otp', protect, asyncHandler(async (req, res)
   } finally { session.endSession(); }
 }));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 21. GET /api/pharmacy/delivery/pricing
+// ─────────────────────────────────────────────────────────────────────────────
+// Returns delivery charge estimate for a given order total.
+// Use before checkout to show delivery pricing to user.
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/delivery/pricing', protect, asyncHandler(async (req, res) => {
+  const { orderTotal, deliveryType = 'Standard' } = req.query;
+  const orderTotalNum = parseFloat(orderTotal);
+  if (!orderTotal || isNaN(orderTotalNum) || orderTotalNum < 0)
+    return res.status(400).json({ success: false, message: 'Valid orderTotal required.' });
+
+  const [platformConfig, { pharmacyDiscountPct, planDoc }] = await Promise.all([
+    PlatformPricingConfig.getGlobal(),
+    resolveSubscriptionBenefits(req.user._id),
+  ]);
+
+  const standardResult = await resolveDeliveryCharge({
+    userId:       req.user._id,
+    orderTotal:   orderTotalNum,
+    deliveryType: 'Standard',
+    platformConfig,
+    subPlan:      planDoc,
+  });
+
+  const expressResult = await resolveDeliveryCharge({
+    userId:       req.user._id,
+    orderTotal:   orderTotalNum,
+    deliveryType: 'Express',
+    platformConfig,
+    subPlan:      planDoc,
+  });
+
+  const freeMinOrderValue = platformConfig?.pharmacy?.freeDeliveryMinOrderValue ?? 200;
+  const amountNeededForFree = Math.max(0, freeMinOrderValue - orderTotalNum);
+
+  res.status(200).json({
+    success: true,
+    orderTotal: orderTotalNum,
+    platformFee: PLATFORM_FEE_FLAT,
+    delivery: {
+      standard: {
+        charge:  standardResult.charge,
+        isFree:  standardResult.isFree,
+        reason:  standardResult.reason,
+        etaInfo: 'Delivery within 2–4 hours (store dependent)',
+      },
+      express: {
+        charge:  expressResult.charge,
+        isFree:  expressResult.isFree,
+        reason:  expressResult.reason,
+        etaInfo: 'Express delivery in 30–60 minutes',
+      },
+    },
+    subscriptionBenefit: {
+      active:      planDoc !== null,
+      freeDelivery: planDoc ? (planDoc.pharmacy?.deliveryChargePerOrder == null || planDoc.pharmacy?.deliveryChargePerOrder === 0) : false,
+    },
+    freeDeliveryThreshold: freeMinOrderValue,
+    amountNeededForFree:   planDoc ? 0 : amountNeededForFree,
+  });
+}));
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // § ERROR HANDLER
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2423,8 +2973,8 @@ router.use((err, req, res, next) => {
   logError('UNHANDLED_ERROR', err, { path: req.originalUrl, method: req.method });
 
   syslog('error', 'api', `Unhandled router error: ${err.message}`, {
-    actor:   req.user ? actorFromReq(req) : { role: 'anonymous', ip: req.ip },
-    request: { method: req.method, path: req.originalUrl, statusCode },
+    actor:    req.user ? actorFromReq(req) : { role: 'anonymous', ip: req.ip },
+    request:  { method: req.method, path: req.originalUrl, statusCode },
     metadata: { stack: err.stack?.slice(0, 500) },
   });
 

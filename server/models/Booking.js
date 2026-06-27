@@ -46,8 +46,8 @@ export const PAYMENT_STATUSES = [
   "pending_cash",
   "partially_refunded",
   "waived",
-  "pay_at_service_pending",  // NEW: QR generated, awaiting scan
-  "pay_at_service_paid",     // NEW: scanned & paid via QR
+  "pay_at_service_pending",
+  "pay_at_service_paid",
 ];
 
 export const CANCELLATION_ACTORS = [
@@ -60,6 +60,10 @@ export const CANCELLATION_ACTORS = [
   "admin",
   "system",
 ];
+
+// Cap on inline statusLog — full history lives in event-sourced log (future),
+// this stays bounded so a high-churn booking never bloats the hot document.
+const MAX_INLINE_STATUS_LOG = 20;
 
 // ── Sub-Schemas ───────────────────────────────────────────────────────────────
 
@@ -78,8 +82,8 @@ const geoPointSchema = new Schema(
 const fareBreakdownSchema = new Schema(
   {
     consultationFee: { type: Number, default: 0, min: 0 },
-    doctorShare: { type: Number, default: 0, min: 0 },     // NEW: Frozen doctor payout
-    hospitalShare: { type: Number, default: 0, min: 0 },   // NEW: Frozen hospital payout
+    doctorShare: { type: Number, default: 0, min: 0 },
+    hospitalShare: { type: Number, default: 0, min: 0 },
     careAssistantFee: { type: Number, default: 0, min: 0 },
     transportFee: { type: Number, default: 0, min: 0 },
     diagnosticFee: { type: Number, default: 0, min: 0 },
@@ -183,7 +187,6 @@ const diagnosticDetailsSchema = new Schema(
     tests: [{ type: Schema.Types.Mixed }],
     packages: [{ type: Schema.Types.Mixed }],
     testNames: [{ type: String, trim: true }],
-
     packageNames: [{ type: String, trim: true }],
     sampleCollectedAt: { type: Date },
     reportDeliveryMode: {
@@ -238,6 +241,9 @@ const ratingSchema = new Schema(
   { _id: false },
 );
 
+// Shared shape — reused for BOTH pending and confirmed subscription usage.
+// CHANGE: previously confirmedSubscriptionUsage re-declared this exact shape
+// inline as a second, near-duplicate sub-schema. Now reused directly.
 const subscriptionUsagePendingSchema = new Schema(
   {
     subId: { type: String, required: true },
@@ -302,6 +308,16 @@ const bookingSchema = new Schema(
       index: true,
     },
 
+    // ── Active-leg caches ─────────────────────────────────────────────────────
+    // NOTE (CHANGE): transportPartner / driver / solodriverpartner below are no
+    // longer the source of truth for "who is driving." A booking can span
+    // multiple Ride docs (return legs) and a driver can be REPLACED mid-ride.
+    // Source of truth = Ride.driver / Ride.transportPartner / Ride.soloPartner
+    // + AssignmentHistory. These fields are a denormalized cache of the
+    // *current active leg*, kept in sync by a post-save hook on Ride /
+    // RideParticipant whenever the active ride's driver changes. Never
+    // hand-write these directly from application code — write through the
+    // ride/assignment service instead.
     transportPartner: {
       type: Schema.Types.ObjectId,
       ref: "TransportPartner",
@@ -348,11 +364,6 @@ const bookingSchema = new Schema(
       default: null,
     },
 
-    /**
-     * ─────────────────────────────────────────────────────────────────────────
-     * TELEMEDICINE SESSION LINK
-     *
-    /** */
     consultationSessionId: {
       type: Schema.Types.ObjectId,
       ref: "Consultation",
@@ -371,10 +382,26 @@ const bookingSchema = new Schema(
       default: null,
     },
 
-    careAssistantPickupLocation: {
-      type: geoPointSchema,
+    // CHANGE: destinationLockedAt — set when the linked Ride hits
+    // 'driver_accepted'. Once set, destinationLocation becomes write-protected
+    // (see pre-validate below) except via an explicit admin-override context
+    // flag set by the service layer. Implements the spec rule: "Customer
+    // cannot change destination after driver accepts. Exception: Admin may
+    // change destination. Every destination change must be audited" — the
+    // actual audit trail lives in the standalone DestinationChangeAudit
+    // collection, this field only enforces the *timing* half of the rule.
+    destinationLockedAt: {
+      type: Date,
       default: null,
     },
+
+    // REMOVED: careAssistantPickupLocation
+    // Reason: this field stored what was, in practice, the Care Assistant's
+    // location, which directly violates the spec rule "Join Point is NOT the
+    // Care Assistant's live GPS. It is a calculated rendezvous point." That
+    // responsibility now belongs entirely to the standalone JoinPoint
+    // collection (immutable once locked, with its own lifecycle). See
+    // migration notes in architecture review doc for backfill procedure.
 
     nearestHospitalSnapshot: {
       hospital: {
@@ -382,20 +409,14 @@ const bookingSchema = new Schema(
         ref: "Hospital",
         default: null,
       },
-
       hospitalName: String,
-
       coordinates: {
         type: [Number],
         default: [],
       },
-
       address: String,
-
       etaMinutes: Number,
-
       distanceKm: Number,
-
       calculatedAt: Date,
     },
 
@@ -420,13 +441,10 @@ const bookingSchema = new Schema(
       max: 100,
     },
 
+    // CHANGE: now reuses subscriptionUsagePendingSchema directly instead of
+    // re-declaring an identical {subId, field} shape inline.
     confirmedSubscriptionUsage: {
-      type: [
-        {
-          subId: { type: String, required: true },
-          field: { type: String, required: true },
-        },
-      ],
+      type: [subscriptionUsagePendingSchema],
       default: [],
     },
 
@@ -491,6 +509,10 @@ const bookingSchema = new Schema(
       index: true,
     },
 
+    // CHANGE: capped to MAX_INLINE_STATUS_LOG entries in pre-save (see below).
+    // Full immutable history is intended to move to an event-sourced
+    // BookingStatusEvent collection in a future pass — this array stays as a
+    // bounded "recent activity" cache for UI, not the audit source of truth.
     statusLog: {
       type: [statusLogSchema],
       default: [],
@@ -542,37 +564,43 @@ const bookingSchema = new Schema(
       default: null,
     },
     internalNotes: { type: String, trim: true, select: false },
+
     // ── Pay-at-Service / QR Payment ───────────────────────────────────────────
-payAtService: {
-  enabled:            { type: Boolean, default: false },
-  razorpayPaymentLinkId:  { type: String, default: null },
-  razorpayPaymentLinkUrl: { type: String, default: null },
-  qrCodeUrl:          { type: String, default: null },
-  shortUrl:           { type: String, default: null },
-  amount:             { type: Number, default: 0 },
-  generatedAt:        { type: Date,   default: null },
-  expiresAt:          { type: Date,   default: null },
-  paidAt:             { type: Date,   default: null },
-  paidByCustomer:     { type: Boolean, default: false },
-  generatedBy:        { type: Schema.Types.ObjectId, ref: 'User', default: null },
-  notificationSentAt: { type: Date,   default: null },
-},
+    payAtService: {
+      enabled: { type: Boolean, default: false },
+      razorpayPaymentLinkId: { type: String, default: null },
+      razorpayPaymentLinkUrl: { type: String, default: null },
+      qrCodeUrl: { type: String, default: null },
+      shortUrl: { type: String, default: null },
+      amount: { type: Number, default: 0 },
+      generatedAt: { type: Date, default: null },
+      expiresAt: { type: Date, default: null },
+      paidAt: { type: Date, default: null },
+      paidByCustomer: { type: Boolean, default: false },
+      generatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+      notificationSentAt: { type: Date, default: null },
+    },
 
-// ── Collected by Partner (cash/manual) ───────────────────────────────────
-collectedByPartner: {
-  amount:      { type: Number, default: 0 },
-  collectedAt: { type: Date,   default: null },
-  collectedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
-  method:      { type: String, enum: ['cash', 'qr_razorpay', 'other'], default: null },
-  note:        { type: String, default: null },
-},
-   isTestBooking: { type: Boolean, default: false },
+    // ── Collected by Partner (cash/manual) ───────────────────────────────────
+    collectedByPartner: {
+      amount: { type: Number, default: 0 },
+      collectedAt: { type: Date, default: null },
+      collectedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+      method: {
+        type: String,
+        enum: ["cash", "qr_razorpay", "other"],
+        default: null,
+      },
+      note: { type: String, default: null },
+    },
 
-// ── Settlement Tracking ───────────────────────────────────────────────────────
-settlementProcessed:      { type: Boolean, default: false, index: true },
-settlementProcessedAt:    { type: Date, default: null },
-settlementVersion:        { type: Number, default: null },
-settlementIdempotencyKey: { type: String, default: null },
+    isTestBooking: { type: Boolean, default: false },
+
+    // ── Settlement Tracking ───────────────────────────────────────────────────
+    settlementProcessed: { type: Boolean, default: false, index: true },
+    settlementProcessedAt: { type: Date, default: null },
+    settlementVersion: { type: Number, default: null },
+    settlementIdempotencyKey: { type: String, default: null },
 
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
@@ -635,6 +663,10 @@ bookingSchema.virtual("hasActiveConsultation").get(function () {
   return !!this.consultationSessionId;
 });
 
+bookingSchema.virtual("isDestinationLocked").get(function () {
+  return !!this.destinationLockedAt;
+});
+
 // ── Pre-validate ──────────────────────────────────────────────────────────────
 
 bookingSchema.pre("validate", function () {
@@ -642,7 +674,6 @@ bookingSchema.pre("validate", function () {
 
   if (t === "full_care_ride") {
     if (!this.doctor) throw new Error("full_care_ride requires doctor");
-    // CHANGE: careAssistant optional — admin assigns manually after booking
     if (!this.patientLocation)
       throw new Error("full_care_ride requires patientLocation");
   }
@@ -683,6 +714,24 @@ bookingSchema.pre("validate", function () {
   if (this.returnRide && !this.primaryRide) {
     throw new Error("returnRide requires primaryRide to be set first");
   }
+
+  // CHANGE: destination immutability guard. Once destinationLockedAt is set
+  // (driver has accepted), destinationLocation can only change through an
+  // explicit admin-override path. The service layer sets `this._isAdminOverride
+  // = true` transiently before calling .save() when an authorized admin is
+  // making the change; it must also write a DestinationChangeAudit record in
+  // the same transaction. Schema enforces *timing only* — role authorization
+  // is the service layer's responsibility.
+  if (
+    this.isModified("destinationLocation") &&
+    !this.isNew &&
+    this.destinationLockedAt &&
+    !this._isAdminOverride
+  ) {
+    throw new Error(
+      "destinationLocation is locked after driver acceptance — admin override required",
+    );
+  }
 });
 
 // ── Pre-save ──────────────────────────────────────────────────────────────────
@@ -700,7 +749,7 @@ bookingSchema.pre("save", async function () {
     this.bookingCode = code;
   }
 
-  // statusLog fromStatus
+  // statusLog fromStatus + cap
   if (this.isModified("status") && !this.isNew) {
     const lastLog = this.statusLog?.[this.statusLog.length - 1];
     const fromStatus = lastLog?.toStatus ?? null;
@@ -710,6 +759,12 @@ bookingSchema.pre("save", async function () {
       changedBy: this.updatedBy || null,
       changedAt: new Date(),
     });
+  }
+
+  // CHANGE: cap inline statusLog — keeps the hot document bounded regardless
+  // of how many transitions/retries a booking goes through.
+  if (this.statusLog?.length > MAX_INLINE_STATUS_LOG) {
+    this.statusLog = this.statusLog.slice(-MAX_INLINE_STATUS_LOG);
   }
 
   // Sync isRated
@@ -788,7 +843,11 @@ bookingSchema.index({ "diagnosticDetails.labPartner": 1 });
 bookingSchema.index({ createdAt: -1 });
 bookingSchema.index({ bookingType: 1, status: 1, scheduledAt: 1 });
 bookingSchema.index({ "subscriptionUsagePending.0": 1, paymentStatus: 1 });
-bookingSchema.index({ consultationSessionId: 1 }); // join to Consultation
+bookingSchema.index({ consultationSessionId: 1 });
+
+// CHANGE: new sparse index — payment-gateway webhooks look up bookings by
+// transactionId. This was previously unindexed (a real lookup-path gap).
+bookingSchema.index({ "payments.transactionId": 1 }, { sparse: true });
 
 const Booking = mongoose.model("Booking", bookingSchema);
 export default Booking;

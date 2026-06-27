@@ -1,1158 +1,1414 @@
-'use client';
+"use client";
 
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { motion, AnimatePresence } from "framer-motion";
 import {
-  AlertTriangle, Clock, Package, RefreshCw, Search, Filter, BarChart2,
-  Layers, ChevronDown, X, Loader2, Building2, Edit2, Trash2, Plus,
-  TrendingDown, CheckCircle, Info, Boxes, ShieldAlert, Activity,
-  Store, ArrowUpDown, MoreVertical, Eye, Zap, Database, Bell,
-  ArrowUp, ArrowDown, ChevronRight, SlidersHorizontal, Download,
-  RotateCcw, Wifi, WifiOff, Pill, FlaskConical, Shield
-} from 'lucide-react';
+  Store,
+  Package,
+  AlertTriangle,
+  TrendingDown,
+  Clock,
+  Plus,
+  Minus,
+  RefreshCw,
+  Search,
+  Filter,
+  ChevronRight,
+  X,
+  BarChart2,
+  ShoppingCart,
+  Truck,
+  Trash2,
+  PauseCircle,
+  PlayCircle,
+  Zap,
+  Info,
+  HelpCircle,
+  CheckCircle2,
+  XCircle,
+  ArrowUpDown,
+  Box,
+  DollarSign,
+  Activity,
+  Calendar,
+  ChevronDown,
+  Eye,
+  Download,
+  Upload,
+  Bell,
+  List,
+  BarChart,
+  AlertCircle,
+  Layers,
+  MapPin,
+  Phone,
+  Mail,
+  ArrowRight,
+  Loader2,
+  BookOpen,
+  Settings,
+  Shield,
+  Warehouse,
+  FileText,
+} from "lucide-react";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, AreaChart, Area, RadialBarChart, RadialBar, Legend,
-  LineChart, Line
-} from 'recharts';
+  BarChart as ReBarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  PieChart,
+  Pie,
+  Cell,
+} from "recharts";
 
+// Redux thunks & selectors
 import {
-  fetchMedicineInventory,
-  fetchLowStockReport,
+  fetchStores,
+  fetchStoreById,
+  fetchStoreInventorySummary,
+  fetchInventoryByMedicine,
+  fetchLowStock,
   fetchExpiryAlerts,
-  addInventoryEntry,
+  addMedicineStock,
+  deductMedicineStock,
   updateInventoryEntry,
   deleteInventoryEntry,
-  fetchStores,
-  fetchInventoryStats,
-  syncAllInventory,
-  syncMedicineInventory,
+  syncAllMedicinesInventory,
+  syncOneMedicineInventory,
+  suspendStore,
+  unsuspendStore,
+  deleteStore,
+  triggerLowStockAlerts,
   fetchMedicines,
-  selectCurrentInventory,
-  selectInventoryLoading,
-  selectMedicineActionLoading,
-  selectLowStockReport,
+  fetchMedicineStats,
+  selectStores,
+  selectStoreDetail,
+  selectStoreInventorySummary,
+  selectInventory,
+  selectLowStock,
+  selectLowStockTotal,
   selectExpiryAlerts,
-  selectAllStores,
-  selectStoreLoading,
+  selectExpiryAlertTotal,
+  selectMedicines,
   selectMedicineStats,
-  selectAllMedicines,
   selectMedicineLoading,
-  selectMedicineSyncLoading,
-  selectSyncResult,
-  resetInventory,
-  clearSyncResult,
-} from '@/store/slices/medicineSlice';
+  selectActionLoading,
+  selectStorePagination,
+  selectMedicinePagination,
+  clearMedicineError,
+  clearSuccessMessage,
+  clearStoreLifecycleResult,
+  selectStoreLifecycleResult,
+  fetchStoreInventory,
+} from "@/store/slices/medicineSlice";
 
-// ── Selectors ──────────────────────────────────────────────────────────────
-const CHART_PALETTE = [
-  'var(--primary)', 'var(--secondary)', 'var(--success)',
-  'var(--warning)', 'var(--error)', 'var(--info)',
-  '#8B5CF6', '#EC4899',
+// ─── Animation variants ────────────────────────────────────────────────────────
+const fadeIn = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { duration: 0.25 } } };
+const slideRight = { hidden: { opacity: 0, x: -20 }, show: { opacity: 1, x: 0, transition: { duration: 0.3 } } };
+const slideUp = { hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } };
+const stagger = { show: { transition: { staggerChildren: 0.07 } } };
+
+// ─── Status badge config ───────────────────────────────────────────────────────
+const STATUS_CONFIG = {
+  Open:              { label: "Open",         cls: "badge-success" },
+  Closed:            { label: "Closed",       cls: "badge-error" },
+  "Under-Maintenance":{ label: "Suspended",   cls: "badge-warning" },
+  Inactive:          { label: "Inactive",     cls: "badge-error" },
+  Suspended:         { label: "Suspended",    cls: "badge-warning" },
+};
+
+const MOVEMENT_LABELS = {
+  Purchase: "Purchase",
+  Sale: "Sale",
+  Reservation: "Reserved",
+  Release: "Released",
+  Adjustment_Add: "Adj +",
+  Adjustment_Sub: "Adj −",
+  Damage: "Damage",
+  Expiry: "Expiry",
+  Return: "Return",
+  Transfer_In: "Transfer In",
+  Transfer_Out: "Transfer Out",
+};
+
+const TABS = [
+  { id: "overview",  label: "Overview",   icon: BarChart2 },
+  { id: "inventory", label: "Inventory",  icon: Package },
+  { id: "lowstock",  label: "Low Stock",  icon: TrendingDown },
+  { id: "expiry",    label: "Expiry",     icon: Clock },
+  { id: "actions",   label: "Actions",    icon: Settings },
+  { id: "help",      label: "Help",       icon: HelpCircle },
 ];
 
-// ── Motion variants ────────────────────────────────────────────────────────
-const stagger = {
-  hidden: {},
-  visible: { transition: { staggerChildren: 0.07 } },
-};
+// ─── Tiny helpers ──────────────────────────────────────────────────────────────
+const fmt = (n, d = 2) => (n == null ? "—" : Number(n).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d }));
+const fmtInt = (n) => (n == null ? "—" : Number(n).toLocaleString("en-IN"));
+const plural = (n, w) => `${fmtInt(n)} ${w}${n !== 1 ? "s" : ""}`;
 
-const fadeUp = {
-  hidden: { opacity: 0, y: 24 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } },
-};
-
-const slideRight = {
-  hidden: { opacity: 0, x: -20 },
-  visible: { opacity: 1, x: 0, transition: { duration: 0.38, ease: [0.22, 1, 0.36, 1] } },
-  exit:    { opacity: 0, x: 20, transition: { duration: 0.22 } },
-};
-
-const modalVariant = {
-  hidden: { opacity: 0, scale: 0.94, y: 16 },
-  visible: { opacity: 1, scale: 1, y: 0, transition: { duration: 0.35, ease: [0.22, 1, 0.36, 1] } },
-  exit:    { opacity: 0, scale: 0.96, y: 8, transition: { duration: 0.2 } },
-};
-
-// ── Tiny helpers ───────────────────────────────────────────────────────────
-const fmt = (n) => (n ?? 0).toLocaleString('en-IN');
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
-const daysLeft = (d) => d ? Math.ceil((new Date(d) - Date.now()) / 86_400_000) : null;
-
-// ── KPI Card ───────────────────────────────────────────────────────────────
-function KpiCard({ icon: Icon, label, value, sub, color, trend, i }) {
+// ─── Toast mini ───────────────────────────────────────────────────────────────
+function Toast({ message, type = "success", onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
   return (
-    <motion.div variants={fadeUp} custom={i}
-      className="glass-card p-5 flex flex-col gap-3 relative overflow-hidden">
-      {/* Decorative blob */}
-      <div className="absolute -right-4 -top-4 w-20 h-20 rounded-full opacity-10"
-        style={{ background: color }} />
-      <div className="flex items-start justify-between">
-        <div className="w-11 h-11 rounded-2xl flex items-center justify-center"
-          style={{ background: `${color}20`, border: `1px solid ${color}40` }}>
-          <Icon size={20} style={{ color }} />
+    <motion.div
+      initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 40 }}
+      className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3 rounded-box shadow-depth-lg border ${type === "success" ? "bg-success/10 border-success/30 text-success" : "bg-error/10 border-error/30 text-error"}`}
+    >
+      {type === "success" ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
+      <span className="text-sm font-semibold">{message}</span>
+      <button onClick={onClose} className="ml-2 btn btn-ghost btn-xs btn-circle"><X size={14} /></button>
+    </motion.div>
+  );
+}
+
+// ─── Confirm dialog ───────────────────────────────────────────────────────────
+function ConfirmDialog({ title, message, confirmLabel = "Confirm", variant = "error", onConfirm, onCancel, extraInput }) {
+  const [inputVal, setInputVal] = useState("");
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral/60 backdrop-blur-sm p-4">
+      <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="glass-card p-6 w-full max-w-md">
+        <div className={`flex items-center gap-3 mb-4 ${variant === "error" ? "text-error" : "text-warning"}`}>
+          <AlertTriangle size={22} />
+          <h3 className="font-display font-bold text-lg text-base-content">{title}</h3>
         </div>
-        {trend !== undefined && (
-          <span className="flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-xl"
-            style={{
-              color: trend >= 0 ? 'var(--error)' : 'var(--success)',
-              background: trend >= 0 ? 'var(--error)15' : 'var(--success)15',
-            }}>
-            {trend >= 0 ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
-            {Math.abs(trend)}%
-          </span>
+        <p className="text-sm text-base-content/70 mb-4">{message}</p>
+        {extraInput && (
+          <div className="mb-4">
+            <label className="label label-text mb-1">{extraInput.label}</label>
+            <input className="input-field" placeholder={extraInput.placeholder} value={inputVal} onChange={e => setInputVal(e.target.value)} />
+          </div>
         )}
-      </div>
-      <div>
-        <div className="text-3xl font-black tracking-tight" style={{ fontFamily: 'var(--font-montserrat)', color }}>
-          {fmt(value)}
+        <div className="flex gap-3 justify-end">
+          <button className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+          <button className={`btn btn-sm ${variant === "error" ? "btn-error" : "btn-warning"}`} onClick={() => onConfirm(inputVal)}>{confirmLabel}</button>
         </div>
-        <div className="text-sm font-semibold mt-0.5" style={{ color: 'var(--base-content)' }}>{label}</div>
-        {sub && <div className="text-xs mt-0.5 opacity-50">{sub}</div>}
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Stat card ────────────────────────────────────────────────────────────────
+function StatBlock({ label, value, icon: Icon, color = "primary", sub }) {
+  return (
+    <motion.div variants={slideUp} className="stat-card flex items-start gap-4">
+      <div className={`p-2.5 rounded-field bg-${color}/10`}>
+        <Icon size={20} className={`text-${color}`} />
+      </div>
+      <div className="min-w-0">
+        <div className="stat-card-value text-base-content text-2xl">{value}</div>
+        <div className="stat-card-label">{label}</div>
+        {sub && <div className="text-xs text-base-content/50 mt-0.5">{sub}</div>}
       </div>
     </motion.div>
   );
 }
 
-// ── Stock Level Pill ───────────────────────────────────────────────────────
-function StockPill({ qty, reorder }) {
-  const level = qty === 0 ? 'out' : qty <= reorder ? 'low' : 'ok';
-  const cfg = {
-    out: { label: 'Out of Stock', c: 'var(--error)',   bg: 'var(--error)15'   },
-    low: { label: 'Low Stock',    c: 'var(--warning)', bg: 'var(--warning)15' },
-    ok:  { label: 'In Stock',     c: 'var(--success)', bg: 'var(--success)15' },
-  }[level];
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap"
-      style={{ color: cfg.c, background: cfg.bg }}>
-      <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: cfg.c }} />
-      {fmt(qty)} · {cfg.label}
-    </span>
-  );
+// ─── Stock badge ──────────────────────────────────────────────────────────────
+function StockBadge({ available, low, out }) {
+  if (out) return <span className="badge badge-error badge-xs">Out of Stock</span>;
+  if (low) return <span className="badge badge-warning badge-xs">Low Stock</span>;
+  return <span className="badge badge-success badge-xs">{fmtInt(available)} units</span>;
 }
 
-// ── Expiry Chip ────────────────────────────────────────────────────────────
-function ExpiryChip({ date }) {
-  const days = daysLeft(date);
-  if (days === null) return <span className="text-xs opacity-40">—</span>;
-  const urgent = days <= 7;
-  const warn   = days <= 30;
-  const c = urgent ? 'var(--error)' : warn ? 'var(--warning)' : 'var(--success)';
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold"
-      style={{ color: c, background: `${c}18` }}>
-      {urgent && <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: c }} />}
-      {fmtDate(date)} · {days}d
-    </span>
-  );
-}
-
-// ── Section Header ─────────────────────────────────────────────────────────
-function SectionHeader({ icon: Icon, title, subtitle, color = 'var(--primary)', action }) {
-  return (
-    <div className="flex items-center justify-between px-5 py-4 border-b"
-      style={{ borderColor: 'var(--base-300)' }}>
-      <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-xl flex items-center justify-center"
-          style={{ background: `${color}18` }}>
-          <Icon size={16} style={{ color }} />
-        </div>
-        <div>
-          <div className="font-black text-sm tracking-wide" style={{ fontFamily: 'var(--font-montserrat)', color }}>
-            {title}
-          </div>
-          {subtitle && <div className="text-xs opacity-50 mt-0.5">{subtitle}</div>}
-        </div>
-      </div>
-      {action}
-    </div>
-  );
-}
-
-// ── Empty State ────────────────────────────────────────────────────────────
-function EmptyState({ icon: Icon, message, color = 'var(--primary)' }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 gap-3 opacity-40">
-      <Icon size={32} style={{ color }} />
-      <p className="text-sm font-medium">{message}</p>
-    </div>
-  );
-}
-
-// ── Loading Rows ───────────────────────────────────────────────────────────
-function LoadingRows({ cols = 5, rows = 5 }) {
-  return Array.from({ length: rows }).map((_, i) => (
-    <tr key={i} className="border-b" style={{ borderColor: 'var(--base-300)' }}>
-      {Array.from({ length: cols }).map((_, j) => (
-        <td key={j} className="px-4 py-3.5">
-          <div className="skeleton-shimmer h-3.5 rounded-lg" style={{ width: `${50 + Math.random() * 40}%` }} />
-        </td>
-      ))}
-    </tr>
-  ));
-}
-
-// ── Table ──────────────────────────────────────────────────────────────────
-function DataTable({ headers, children, loading, cols }) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full">
-        <thead>
-          <tr style={{ background: 'var(--base-200)', borderBottom: '2px solid var(--base-300)' }}>
-            {headers.map((h) => (
-              <th key={h} className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-[0.12em] opacity-50">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {loading ? <LoadingRows cols={cols || headers.length} rows={5} /> : children}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Inventory Entry Modal ──────────────────────────────────────────────────
-function InventoryModal({ open, onClose, onSubmit, initial, stores, loading, mode }) {
+// ══════════════════════════════════════════════════════════════════════════════
+// Add Stock Modal
+// ══════════════════════════════════════════════════════════════════════════════
+function AddStockModal({ medicineId, storeId, medicineName, onClose, onSuccess }) {
+  const dispatch = useDispatch();
+  const loading = useSelector(selectActionLoading);
   const [form, setForm] = useState({
-    storeId: '', stockQuantity: 0, reservedQuantity: 0, reorderLevel: 10,
-    pricePerUnit: '', batchNumber: '', location: '',
-    expiryDate: '', manufacturingDate: '', isActive: true,
+    stockQuantity: "", batchNumber: "", expiryDate: "",
+    mrp: "", sellingPrice: "", discountPercent: "0",
+    purchasePrice: "", purchaseInvoiceNo: "", supplierId: "",
+    rackLocation: "", manufacturingDate: "",
   });
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
-  useEffect(() => {
-    if (initial) {
-      setForm(f => ({
-        ...f,
-        ...initial,
-        expiryDate:       initial.expiryDate?.split?.('T')[0] || '',
-        manufacturingDate: initial.manufacturingDate?.split?.('T')[0] || '',
-      }));
-    } else {
-      setForm({
-        storeId: '', stockQuantity: 0, reservedQuantity: 0, reorderLevel: 10,
-        pricePerUnit: '', batchNumber: '', location: '',
-        expiryDate: '', manufacturingDate: '', isActive: true,
-      });
-    }
-  }, [initial, open]);
+  const submit = async () => {
+    const payload = {
+      medicineId, storeId,
+      stockQuantity: Number(form.stockQuantity),
+      batchNumber: form.batchNumber,
+      expiryDate: form.expiryDate,
+      mrp: Number(form.mrp),
+      sellingPrice: Number(form.sellingPrice),
+      discountPercent: Number(form.discountPercent || 0),
+    };
+    if (form.purchasePrice) payload.purchasePrice = Number(form.purchasePrice);
+    if (form.purchaseInvoiceNo) payload.purchaseInvoiceNo = form.purchaseInvoiceNo;
+    if (form.supplierId) payload.supplierId = form.supplierId;
+    if (form.rackLocation) payload.rackLocation = form.rackLocation;
+    if (form.manufacturingDate) payload.manufacturingDate = form.manufacturingDate;
+    const res = await dispatch(addMedicineStock(payload));
+    if (!res.error) { onSuccess("Stock added successfully."); onClose(); }
+  };
 
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const Field = ({ label, k, type = "text", required, placeholder, note }) => (
+    <div>
+      <label className="label label-text mb-1">{label}{required && <span className="text-error ml-1">*</span>}</label>
+      <input className="input-field" type={type} value={form[k]} onChange={e => set(k, e.target.value)} placeholder={placeholder} />
+      {note && <div className="text-[11px] text-base-content/50 mt-1 leading-tight">{note}</div>}
+    </div>
+  );
 
-  const fields = [
-    { label: 'Stock Qty',         key: 'stockQuantity',    type: 'number', req: true },
-    { label: 'Reserved Qty',      key: 'reservedQuantity', type: 'number' },
-    { label: 'Reorder Level',     key: 'reorderLevel',     type: 'number' },
-    { label: 'Price / Unit (₹)',  key: 'pricePerUnit',     type: 'number' },
-    { label: 'Batch Number',      key: 'batchNumber',      type: 'text'   },
-    { label: 'Location (Rack)',   key: 'location',         type: 'text'   },
-    { label: 'Expiry Date',       key: 'expiryDate',       type: 'date',  req: true },
-    { label: 'Mfg Date',          key: 'manufacturingDate',type: 'date'   },
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral/60 backdrop-blur-sm p-4">
+      <motion.div initial={{ scale: 0.92, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="glass-card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-display font-bold text-lg text-base-content">Add Stock — {medicineName}</h3>
+          <button className="btn btn-ghost btn-circle btn-sm" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-5">
+          <Field label="Quantity" k="stockQuantity" type="number" required placeholder="e.g., 50" note="Number of physical units received." />
+          <Field label="Batch Number" k="batchNumber" required placeholder="e.g., BATCH123" note="Manufacturer's unique batch identifier." />
+          <Field label="Expiry Date" k="expiryDate" type="date" required note="Must be a future date." />
+          <Field label="Manufacturing Date" k="manufacturingDate" type="date" note="Optional manufacturing date." />
+          <Field label="MRP (₹)" k="mrp" type="number" required placeholder="e.g., 150" note="Maximum Retail Price printed on packaging." />
+          <Field label="Selling Price (₹)" k="sellingPrice" type="number" required placeholder="e.g., 120" note="Actual selling price at this store." />
+          <Field label="Discount %" k="discountPercent" type="number" placeholder="e.g., 10" note="Calculates final price automatically." />
+          <Field label="Purchase Price (₹)" k="purchasePrice" type="number" placeholder="e.g., 90" note="Internal cost price (hidden from customers)." />
+          <Field label="Invoice No." k="purchaseInvoiceNo" placeholder="e.g., INV-001" note="Reference invoice for this stock." />
+          <Field label="Rack Location" k="rackLocation" placeholder="e.g., Aisle 3, Rack B" note="Physical storage location." />
+        </div>
+        <div className="flex gap-3 justify-end mt-6">
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary btn-sm" onClick={submit} disabled={loading}>
+            {loading ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />} Add Stock
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Deduct Stock Modal
+// ══════════════════════════════════════════════════════════════════════════════
+function DeductStockModal({ medicineId, storeId, medicineName, availableStock, onClose, onSuccess }) {
+  const dispatch = useDispatch();
+  const loading = useSelector(selectActionLoading);
+  const [form, setForm] = useState({ quantity: "", batchNumber: "", reason: "", movementType: "Adjustment_Sub" });
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
+  const submit = async () => {
+    const res = await dispatch(deductMedicineStock({
+      medicineId, storeId,
+      quantity: Number(form.quantity),
+      batchNumber: form.batchNumber || undefined,
+      reason: form.reason,
+      movementType: form.movementType,
+    }));
+    if (!res.error) { onSuccess("Stock deducted."); onClose(); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral/60 backdrop-blur-sm p-4">
+      <motion.div initial={{ scale: 0.92, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="glass-card p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-display font-bold text-lg text-base-content flex items-center gap-2">
+            <Minus size={18} className="text-error" /> Deduct Stock — {medicineName}
+          </h3>
+          <button className="btn btn-ghost btn-circle btn-sm" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="alert alert-warning mb-4 text-sm"><AlertTriangle size={15} /> Available: {fmtInt(availableStock)} units</div>
+        <div className="space-y-5">
+          <div>
+            <label className="label label-text mb-1">Quantity <span className="text-error">*</span></label>
+            <input className="input-field" type="number" value={form.quantity} onChange={e => set("quantity", e.target.value)} placeholder="e.g., 5" />
+            <div className="text-[11px] text-base-content/50 mt-1 leading-tight">Exact number of units to deduct from stock.</div>
+          </div>
+          <div>
+            <label className="label label-text mb-1">Movement Type</label>
+            <select className="input-field" value={form.movementType} onChange={e => set("movementType", e.target.value)}>
+              {["Adjustment_Sub","Damage","Expiry","Transfer_Out"].map(t => <option key={t} value={t}>{MOVEMENT_LABELS[t]}</option>)}
+            </select>
+            <div className="text-[11px] text-base-content/50 mt-1 leading-tight">Reason for the stock deduction for accounting purposes.</div>
+          </div>
+          <div>
+            <label className="label label-text mb-1">Batch Number (optional)</label>
+            <input className="input-field" value={form.batchNumber} onChange={e => set("batchNumber", e.target.value)} placeholder="e.g., BATCH123" />
+            <div className="text-[11px] text-base-content/50 mt-1 leading-tight">Leave blank to use FEFO auto-selection (deducts closest expiring batch first).</div>
+          </div>
+          <div>
+            <label className="label label-text mb-1">Reason (optional)</label>
+            <input className="input-field" value={form.reason} onChange={e => set("reason", e.target.value)} placeholder="e.g., Damaged during transit" />
+            <div className="text-[11px] text-base-content/50 mt-1 leading-tight">Short descriptive note for the audit logs.</div>
+          </div>
+        </div>
+        <div className="flex gap-3 justify-end mt-6">
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
+          <button className="btn btn-error btn-sm" onClick={submit} disabled={loading}>
+            {loading ? <Loader2 size={15} className="animate-spin" /> : <Minus size={15} />} Deduct
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Update Inventory Pricing Modal
+// ══════════════════════════════════════════════════════════════════════════════
+function UpdateInventoryModal({ entry, onClose, onSuccess }) {
+  const dispatch = useDispatch();
+  const loading = useSelector(selectActionLoading);
+  const [form, setForm] = useState({
+    mrp: entry?.mrp ?? "",
+    sellingPrice: entry?.sellingPrice ?? "",
+    discountPercent: entry?.discountPercent ?? 0,
+    reorderLevel: entry?.reorderLevel ?? 10,
+    rackLocation: entry?.rackLocation ?? "",
+  });
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const medicineId = entry?.medicineId?._id || entry?.medicineId;
+  const storeId = entry?.storeId?._id || entry?.storeId;
+
+  const submit = async () => {
+    const res = await dispatch(updateInventoryEntry({ medicineId, storeId, updates: {
+      mrp: Number(form.mrp),
+      sellingPrice: Number(form.sellingPrice),
+      discountPercent: Number(form.discountPercent),
+      reorderLevel: Number(form.reorderLevel),
+      rackLocation: form.rackLocation,
+    }}));
+    if (!res.error) { onSuccess("Inventory updated."); onClose(); }
+  };
+
+  const formFields = [
+    ["MRP (₹)", "mrp", "number", "e.g., 150", "The maximum retail price."],
+    ["Selling Price (₹)", "sellingPrice", "number", "e.g., 130", "Actual selling price before discounts."],
+    ["Discount %", "discountPercent", "number", "e.g., 10", "Percentage discount applied at checkout."],
+    ["Reorder Level", "reorderLevel", "number", "e.g., 15", "Low stock alerts will trigger below this quantity."],
+    ["Rack Location", "rackLocation", "text", "e.g., Shelf A2", "Internal reference for physical placement."]
   ];
 
-  if (!open) return null;
-
   return (
-    <AnimatePresence>
-      <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-        <motion.div className="absolute inset-0 bg-black/60 backdrop-blur-md"
-          onClick={onClose} />
-        <motion.div variants={modalVariant} initial="hidden" animate="visible" exit="exit"
-          className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl border shadow-2xl"
-          style={{ background: 'var(--base-100)', borderColor: 'var(--base-300)' }}>
-
-          {/* Modal Header */}
-          <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b"
-            style={{ borderColor: 'var(--base-300)' }}>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl flex items-center justify-center"
-                style={{ background: 'var(--primary)20' }}>
-                {mode === 'edit' ? <Edit2 size={18} style={{ color: 'var(--primary)' }} />
-                  : <Plus size={18} style={{ color: 'var(--primary)' }} />}
-              </div>
-              <div>
-                <h3 className="text-lg font-black" style={{ fontFamily: 'var(--font-montserrat)', color: 'var(--base-content)' }}>
-                  {mode === 'edit' ? 'Update Inventory' : 'Add Inventory Entry'}
-                </h3>
-                <p className="text-xs opacity-50">Store-specific stock record</p>
-              </div>
-            </div>
-            <button onClick={onClose}
-              className="w-8 h-8 rounded-xl flex items-center justify-center hover:bg-base-200 transition-colors">
-              <X size={16} />
-            </button>
-          </div>
-
-          <div className="p-6 flex flex-col gap-4">
-            {mode === 'add' && (
-              <div>
-                <label className="block text-xs font-bold mb-1.5 uppercase tracking-wider opacity-60">
-                  Store <span className="text-error">*</span>
-                </label>
-                <select value={form.storeId} onChange={e => set('storeId', e.target.value)}
-                  className="input-field w-full text-sm">
-                  <option value="">Select store…</option>
-                  {stores.map(s => (
-                    <option key={s._id} value={s._id}>
-                      {s.storeName}{s.address?.city ? ` — ${s.address.city}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-3">
-              {fields.map(({ label, key, type, req }) => (
-                <div key={key}>
-                  <label className="block text-xs font-bold mb-1.5 uppercase tracking-wider opacity-60">
-                    {label}{req && <span className="text-error ml-1">*</span>}
-                  </label>
-                  <input type={type} value={form[key] ?? ''}
-                    onChange={e => set(key, type === 'number' ? Number(e.target.value) : e.target.value)}
-                    className="input-field w-full text-sm" />
-                </div>
-              ))}
-            </div>
-
-            {mode === 'edit' && (
-              <label className="flex items-center gap-2.5 cursor-pointer">
-                <div className="relative">
-                  <input type="checkbox" id="active" checked={form.isActive}
-                    onChange={e => set('isActive', e.target.checked)} className="sr-only" />
-                  <div className="w-9 h-5  flex items-center   rounded-full transition-colors"
-                    style={{ background: form.isActive ? 'var(--success)' : 'var(--base-300)' }}>
-                    <div className="w-3.5 h-3.5  bg-white  -translate-y-[1px] rounded-full shadow transition-transform mt-[3px]"
-                      style={{ transform: `translateX(${form.isActive ? '18px' : '4px'})` }} />
-                  </div>
-                </div>
-                <span className="text-sm font-semibold">Entry Active</span>
-              </label>
-            )}
-          </div>
-
-          <div className="flex gap-3 px-6 pb-6">
-            <button onClick={onClose} className="btn-secondary flex-1 py-2.5 text-sm">Cancel</button>
-            <button onClick={() => onSubmit(form)} disabled={loading}
-              className="btn-primary-cta flex-1 py-2.5 flex items-center justify-center gap-2">
-              {loading ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle size={15} />}
-              {mode === 'edit' ? 'Update Entry' : 'Add Entry'}
-            </button>
-          </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
-  );
-}
-
-// ── Low Stock Table ────────────────────────────────────────────────────────
-function LowStockTable({ data, loading, page, setPage }) {
-  const { data: rows = [], total = 0, metadata = {} } = data;
-  const totalPages = metadata.totalPages ?? 1;
-
-  return (
-    <div className="glass-card overflow-hidden">
-      <SectionHeader
-        icon={TrendingDown}
-        title="Low Stock Report"
-        subtitle={`${fmt(total)} items require attention`}
-        color="var(--warning)"
-        action={
-          <span className="badge badge-warning">{fmt(total)} items</span>
-        }
-      />
-      <DataTable
-        loading={loading}
-        headers={['Medicine', 'Store', 'Stock Level', 'Reorder At', 'Expiry', 'Price']}
-      >
-        {rows.map((item, i) => (
-          <motion.tr key={`low-${item._id}-${i}`}
-            variants={fadeUp} initial="hidden" animate="visible" custom={i}
-            className="border-b group hover:bg-base-200/40 transition-colors"
-            style={{ borderColor: 'var(--base-300)' }}>
-            <td className="px-4 py-3.5">
-              <div className="font-semibold text-sm">{item.brandName || item.name}</div>
-              <div className="text-xs opacity-45 mt-0.5">{item.genericName}</div>
-            </td>
-            <td className="px-4 py-3.5">
-              <div className="flex items-center gap-1.5">
-                <Building2 size={12} style={{ color: 'var(--secondary)' }} />
-                <span className="text-sm">{item.inventory?.storeId?.storeName || '—'}</span>
-              </div>
-            </td>
-            <td className="px-4 py-3.5">
-              <StockPill qty={item.inventory?.stockQuantity ?? 0} reorder={item.inventory?.reorderLevel ?? 10} />
-            </td>
-            <td className="px-4 py-3.5">
-              <span className="font-mono text-sm">{item.inventory?.reorderLevel ?? 10}</span>
-            </td>
-            <td className="px-4 py-3.5">
-              <ExpiryChip date={item.inventory?.expiryDate} />
-            </td>
-            <td className="px-4 py-3.5 text-sm font-mono">
-              ₹{item.inventory?.pricePerUnit ?? '—'}
-            </td>
-          </motion.tr>
-        ))}
-        {!loading && rows.length === 0 && (
-          <tr><td colSpan={6}>
-            <EmptyState icon={CheckCircle} message="No low stock items — all good!" color="var(--success)" />
-          </td></tr>
-        )}
-      </DataTable>
-      <Pagination page={page} total={totalPages} onChange={setPage} />
-    </div>
-  );
-}
-
-// ── Expiry Table ───────────────────────────────────────────────────────────
-function ExpiryTable({ data, loading, page, setPage }) {
-  const { data: rows = [], total = 0, withinDays = 30, metadata = {} } = data;
-  const totalPages = metadata.totalPages ?? 1;
-
-  return (
-    <div className="glass-card overflow-hidden">
-      <SectionHeader
-        icon={Clock}
-        title="Expiry Alerts"
-        subtitle={`${fmt(total)} items expiring within ${withinDays} days`}
-        color="var(--error)"
-        action={<span className="badge badge-error">{fmt(total)} items</span>}
-      />
-      <DataTable loading={loading} headers={['Medicine', 'Store', 'Batch', 'Expires', 'Days Left', 'Qty']}>
-        {rows.map((item, i) => {
-          const days = daysLeft(item.inventory?.expiryDate);
-          return (
-            <motion.tr key={`exp-${item._id}-${i}`}
-              variants={fadeUp} initial="hidden" animate="visible" custom={i}
-              className="border-b hover:bg-base-200/40 transition-colors"
-              style={{ borderColor: 'var(--base-300)' }}>
-              <td className="px-4 py-3.5">
-                <div className="font-semibold text-sm">{item.brandName || item.name}</div>
-              </td>
-              <td className="px-4 py-3.5 text-sm">{item.inventory?.storeId?.storeName || '—'}</td>
-              <td className="px-4 py-3.5 text-xs font-mono opacity-60">{item.inventory?.batchNumber || '—'}</td>
-              <td className="px-4 py-3.5 text-sm">{fmtDate(item.inventory?.expiryDate)}</td>
-              <td className="px-4 py-3.5"><ExpiryChip date={item.inventory?.expiryDate} /></td>
-              <td className="px-4 py-3.5 text-sm font-mono">{fmt(item.inventory?.stockQuantity)}</td>
-            </motion.tr>
-          );
-        })}
-        {!loading && rows.length === 0 && (
-          <tr><td colSpan={6}>
-            <EmptyState icon={CheckCircle} message="No expiry alerts" color="var(--success)" />
-          </td></tr>
-        )}
-      </DataTable>
-      <Pagination page={page} total={totalPages} onChange={setPage} />
-    </div>
-  );
-}
-
-// ── Pagination ─────────────────────────────────────────────────────────────
-function Pagination({ page, total, onChange }) {
-  if (total <= 1) return null;
-  return (
-    <div className="flex items-center justify-between px-5 py-3 border-t"
-      style={{ borderColor: 'var(--base-300)' }}>
-      <span className="text-xs opacity-40 font-medium">Page {page} of {total}</span>
-      <div className="flex gap-1.5">
-        <button disabled={page <= 1} onClick={() => onChange(p => p - 1)}
-          className="px-3.5 py-1.5 rounded-xl text-xs font-bold disabled:opacity-30 hover:bg-base-200 transition-colors">
-          ← Prev
-        </button>
-        <button disabled={page >= total} onClick={() => onChange(p => p + 1)}
-          className="px-3.5 py-1.5 rounded-xl text-xs font-bold disabled:opacity-30 hover:bg-base-200 transition-colors">
-          Next →
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Per-Medicine Inventory Panel ───────────────────────────────────────────
-function MedicineInventoryPanel({ medicines, stores, dispatch }) {
-  const inventory     = useSelector(selectCurrentInventory);
-  const invLoading    = useSelector(selectInventoryLoading);
-  const actionLoading = useSelector(selectMedicineActionLoading);
-
-  const [selectedMed, setSelectedMed] = useState('');
-  const [showModal, setShowModal]     = useState(false);
-  const [modalMode, setModalMode]     = useState('add');
-  const [editEntry, setEditEntry]     = useState(null);
-  const [medSearch, setMedSearch]     = useState('');
-
-  const filtered = medicines.filter(m =>
-    !medSearch || m.brandName?.toLowerCase().includes(medSearch.toLowerCase()) ||
-    m.genericName?.toLowerCase().includes(medSearch.toLowerCase())
-  );
-
-  const loadInventory = (id) => {
-    setSelectedMed(id);
-    dispatch(resetInventory());
-    dispatch(fetchMedicineInventory(id));
-  };
-
-  const handleAdd = async (form) => {
-    if (!selectedMed) return;
-    const res = await dispatch(addInventoryEntry({ medicineId: selectedMed, entryData: form }));
-    if (!res.error) setShowModal(false);
-  };
-
-  const handleUpdate = async (form) => {
-    if (!selectedMed || !editEntry) return;
-    const sid = editEntry.storeId?._id || editEntry.storeId;
-    const res = await dispatch(updateInventoryEntry({ medicineId: selectedMed, storeId: sid, updateData: form }));
-    if (!res.error) { setShowModal(false); setEditEntry(null); }
-  };
-
-  const handleDelete = async (entry, hard = false) => {
-    if (!selectedMed) return;
-    const sid = entry.storeId?._id || entry.storeId;
-    if (!confirm(`${hard ? 'Permanently delete' : 'Deactivate'} this inventory entry?`)) return;
-    dispatch(deleteInventoryEntry({ medicineId: selectedMed, storeId: sid, hard }));
-  };
-
-  const currentMed = medicines.find(m => m._id === selectedMed);
-
-  return (
-    <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-5">
-      {/* Medicine Selector */}
-      <div className="glass-card overflow-hidden flex flex-col max-h-[680px]">
-        <SectionHeader icon={Pill} title="Select Medicine" subtitle={`${filtered.length} medicines`} />
-        <div className="p-4 border-b" style={{ borderColor: 'var(--base-300)' }}>
-          <div className="relative">
-            <Search size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 opacity-40" />
-            <input placeholder="Search medicine…" value={medSearch}
-              onChange={e => setMedSearch(e.target.value)}
-              className="input-field w-full pl-9 text-sm py-2.5" />
-          </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral/60 backdrop-blur-sm p-4">
+      <motion.div initial={{ scale: 0.92, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="glass-card p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-display font-bold text-lg text-base-content">Update Pricing & Config</h3>
+          <button className="btn btn-ghost btn-circle btn-sm" onClick={onClose}><X size={16} /></button>
         </div>
-        <div className="overflow-y-auto flex flex-col divide-y" style={{ divideColor: 'var(--base-300)' }}>
-          {filtered.slice(0, 60).map(med => (
-            <button key={med._id} onClick={() => loadInventory(med._id)}
-              className="flex items-center gap-3 px-4 py-3 text-left transition-all group"
-              style={{
-                background: selectedMed === med._id
-                  ? 'linear-gradient(90deg, var(--primary)12, transparent)'
-                  : 'transparent',
-                borderLeft: selectedMed === med._id ? '3px solid var(--primary)' : '3px solid transparent',
-              }}>
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-                style={{ background: selectedMed === med._id ? 'var(--primary)20' : 'var(--base-200)' }}>
-                <Pill size={13} style={{ color: selectedMed === med._id ? 'var(--primary)' : 'var(--base-content)' }} />
-              </div>
-              <div className="min-w-0">
-                <div className="text-sm font-semibold truncate" style={{ color: selectedMed === med._id ? 'var(--primary)' : 'var(--base-content)' }}>
-                  {med.brandName}
-                </div>
-                <div className="text-xs opacity-45 truncate">{med.category} · ₹{med.mrp}</div>
-              </div>
-              {selectedMed === med._id && <ChevronRight size={14} style={{ color: 'var(--primary)' }} className="ml-auto flex-shrink-0" />}
-            </button>
+        <div className="space-y-5">
+          {formFields.map(([lbl, k, type, placeholder, note]) => (
+            <div key={k}>
+              <label className="label label-text mb-1">{lbl}</label>
+              <input className="input-field" type={type} value={form[k]} onChange={e => set(k, e.target.value)} placeholder={placeholder} />
+              <div className="text-[11px] text-base-content/50 mt-1 leading-tight">{note}</div>
+            </div>
           ))}
-          {filtered.length === 0 && <EmptyState icon={Search} message="No medicines found" />}
         </div>
-      </div>
-
-      {/* Inventory Table */}
-      <AnimatePresence mode="wait">
-        {selectedMed ? (
-          <motion.div key={selectedMed} variants={slideRight} initial="hidden" animate="visible" exit="exit"
-            className="glass-card overflow-hidden flex flex-col">
-            <SectionHeader
-              icon={Database}
-              title={`${currentMed?.brandName} — Store Inventory`}
-              subtitle={`${inventory.length} store entries`}
-              color="var(--secondary)"
-              action={
-                <button onClick={() => { setModalMode('add'); setEditEntry(null); setShowModal(true); }}
-                  className="btn-primary-cta text-xs py-2 px-4 flex items-center gap-1.5">
-                  <Plus size={13} /> Add Entry
-                </button>
-              }
-            />
-
-            {invLoading ? (
-              <div className="flex items-center justify-center py-20">
-                <div className="flex flex-col items-center gap-3">
-                  <Loader2 size={32} className="animate-spin" style={{ color: 'var(--primary)' }} />
-                  <span className="text-xs opacity-40 font-medium">Loading inventory…</span>
-                </div>
-              </div>
-            ) : (
-              <DataTable headers={['Store', 'Stock', 'Reserved', 'Reorder', 'Expiry', 'Price/Unit', 'Status', '']}>
-                {inventory.map((inv, i) => {
-                  const storeName = inv.storeId?.storeName
-                    || stores.find(s => s._id === inv.storeId)?.storeName || 'Unknown Store';
-                  return (
-                    <motion.tr key={`inv-${inv.storeId}-${i}`}
-                      variants={fadeUp} initial="hidden" animate="visible" custom={i}
-                      className="border-b group hover:bg-base-200/40 transition-colors"
-                      style={{ borderColor: 'var(--base-300)' }}>
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-2">
-                          <Building2 size={13} style={{ color: 'var(--secondary)' }} />
-                          <span className="text-sm font-medium">{storeName}</span>
-                        </div>
-                        {inv.location && <div className="text-xs opacity-40 mt-0.5 pl-5">{inv.location}</div>}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <StockPill qty={inv.stockQuantity} reorder={inv.reorderLevel} />
-                      </td>
-                      <td className="px-4 py-3.5 text-sm font-mono opacity-60">{fmt(inv.reservedQuantity)}</td>
-                      <td className="px-4 py-3.5 text-sm font-mono opacity-60">{inv.reorderLevel ?? 10}</td>
-                      <td className="px-4 py-3.5"><ExpiryChip date={inv.expiryDate} /></td>
-                      <td className="px-4 py-3.5 text-sm font-mono">₹{inv.pricePerUnit ?? '—'}</td>
-                      <td className="px-4 py-3.5">
-                        {inv.isActive
-                          ? <span className="badge badge-success text-[10px] py-0.5">Active</span>
-                          : <span className="badge badge-error text-[10px] py-0.5">Inactive</span>}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button title="Edit"
-                            onClick={() => { setEditEntry(inv); setModalMode('edit'); setShowModal(true); }}
-                            className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-primary/15 transition-colors">
-                            <Edit2 size={12} style={{ color: 'var(--primary)' }} />
-                          </button>
-                          <button title="Deactivate"
-                            onClick={() => handleDelete(inv, false)}
-                            className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-error/15 transition-colors">
-                            <Trash2 size={12} style={{ color: 'var(--error)' }} />
-                          </button>
-                        </div>
-                      </td>
-                    </motion.tr>
-                  );
-                })}
-                {inventory.length === 0 && (
-                  <tr><td colSpan={8}>
-                    <EmptyState icon={Database} message="No inventory entries — click Add Entry to create one" />
-                  </td></tr>
-                )}
-              </DataTable>
-            )}
-          </motion.div>
-        ) : (
-          <motion.div key="empty" variants={fadeUp} initial="hidden" animate="visible"
-            className="glass-card flex items-center justify-center min-h-[400px]">
-            <div className="text-center opacity-30">
-              <Boxes size={48} className="mx-auto mb-3" />
-              <p className="text-sm font-semibold">Select a medicine to view its inventory</p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <InventoryModal
-        open={showModal}
-        onClose={() => { setShowModal(false); setEditEntry(null); }}
-        onSubmit={modalMode === 'edit' ? handleUpdate : handleAdd}
-        initial={editEntry}
-        stores={stores}
-        loading={actionLoading}
-        mode={modalMode}
-      />
-    </div>
-  );
-}
-
-// ── Sync Panel ─────────────────────────────────────────────────────────────
-function SyncPanel({ dispatch, syncLoading, syncResult }) {
-  const medicines = useSelector(selectAllMedicines);
-  const [selectedId, setSelectedId] = useState('');
-  const [search, setSearch] = useState('');
-
-  useEffect(() => { return () => dispatch(clearSyncResult()); }, [dispatch]);
-
-  const handleSyncAll = () => {
-    if (confirm('This will sync inventory for ALL medicines across ALL stores. Continue?')) {
-      dispatch(syncAllInventory());
-    }
-  };
-
-  const handleSyncSingle = () => {
-    if (!selectedId) return;
-    dispatch(syncMedicineInventory(selectedId));
-  };
-
-  const filtered = medicines.filter(m =>
-    !search || m.brandName?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  return (
-    <div className="flex flex-col gap-5">
-      {/* Bulk Sync */}
-      <div className="glass-card overflow-hidden">
-        <SectionHeader
-          icon={Zap}
-          title="Bulk Inventory Sync"
-          subtitle="Add zero-stock entries across all medicines for all active stores"
-          color="var(--warning)"
-        />
-        <div className="p-6">
-          <div className="rounded-2xl p-4 mb-5" style={{ background: 'var(--warning)10', border: '1px solid var(--warning)30' }}>
-            <p className="text-sm opacity-80 leading-relaxed">
-              <strong>When to use:</strong> Run this once after adding a new PharmacyStore. It will add a zero-stock entry
-              for every existing medicine in the new store. Existing stock data is never overwritten.
-            </p>
-          </div>
-          <button onClick={handleSyncAll} disabled={syncLoading}
-            className="btn-primary-cta flex items-center gap-2 py-3">
-            {syncLoading ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16} />}
-            Sync All Medicines × All Stores
+        <div className="flex gap-3 justify-end mt-6">
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary btn-sm" onClick={submit} disabled={loading}>
+            {loading ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} Update
           </button>
         </div>
-      </div>
+      </motion.div>
+    </div>
+  );
+}
 
-      {/* Single Medicine Sync */}
-      <div className="glass-card overflow-hidden">
-        <SectionHeader
-          icon={Activity}
-          title="Single Medicine Sync"
-          subtitle="Sync inventory for one specific medicine"
-          color="var(--info)"
-        />
-        <div className="p-6 flex flex-col gap-4">
-          <div className="relative">
-            <Search size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 opacity-40" />
-            <input placeholder="Search medicine…" value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="input-field w-full pl-9 text-sm" />
-          </div>
-          <div className="max-h-48 overflow-y-auto rounded-2xl border" style={{ borderColor: 'var(--base-300)' }}>
-            {filtered.slice(0, 30).map(m => (
-              <button key={m._id} onClick={() => setSelectedId(m._id)}
-                className="flex items-center gap-3 px-4 py-3 w-full text-left hover:bg-base-200 transition-colors border-b text-sm"
-                style={{
-                  borderColor: 'var(--base-300)',
-                  background: selectedId === m._id ? 'var(--info)12' : undefined,
-                  color: selectedId === m._id ? 'var(--info)' : undefined,
-                }}>
-                <Pill size={13} />
-                <span className="font-medium">{m.brandName}</span>
-                <span className="opacity-40 ml-auto">{m.category}</span>
-              </button>
+// ══════════════════════════════════════════════════════════════════════════════
+// Help Section
+// ══════════════════════════════════════════════════════════════════════════════
+function HelpSection() {
+  const [open, setOpen] = useState(null);
+  const toggle = id => setOpen(p => p === id ? null : id);
+
+  const sections = [
+    {
+      id: "overview",
+      icon: BookOpen,
+      title: "Page Overview",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p>Stores &amp; Inventory Management is the central hub for <strong>superadmin</strong> and <strong>admin</strong> roles to manage every pharmacy store's stock, pricing, expiry, and lifecycle.</p>
+          <p>The page uses a <strong>split-panel layout</strong>: left panel lists all stores, right panel shows the selected store's full inventory detail.</p>
+          <ul className="list-disc pl-5 space-y-1">
+            <li>Select any store → right panel loads immediately</li>
+            <li>Tabs switch between Overview, Inventory, Low Stock, Expiry, Actions, and Help</li>
+            <li>All data synced live from MongoDB via Redux thunks</li>
+          </ul>
+        </div>
+      ),
+    },
+    {
+      id: "stores",
+      icon: Store,
+      title: "Store List (Left Panel)",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p>Shows all pharmacy stores — both <strong>Owned</strong> and <strong>Partnered</strong> types.</p>
+          <div className="grid grid-cols-2 gap-2">
+            {[["Open","Green badge — store accepting orders"],["Closed","Red — not accepting orders"],["Under-Maintenance","Yellow — suspended by admin"],["Inactive","Red — permanently deactivated"]].map(([s,d]) => (
+              <div key={s} className="bg-base-200 rounded-field p-2">
+                <div className="font-semibold text-xs text-base-content">{s}</div>
+                <div className="text-xs text-base-content/60">{d}</div>
+              </div>
             ))}
           </div>
-          <button onClick={handleSyncSingle} disabled={!selectedId || syncLoading}
-            className="btn-secondary flex items-center gap-2 py-2.5 disabled:opacity-40">
-            {syncLoading ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />}
-            Sync Selected Medicine
-          </button>
+          <p><strong>Search</strong> filters by store name in real time. <strong>Filter</strong> button toggles status/type filter panel.</p>
         </div>
-      </div>
+      ),
+    },
+    {
+      id: "overview-tab",
+      icon: BarChart2,
+      title: "Overview Tab",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p>Summary of the selected store's inventory health:</p>
+          <ul className="list-disc pl-5 space-y-1">
+            <li><strong>Total SKUs</strong> — unique medicines registered for this store</li>
+            <li><strong>Total Units</strong> — all physical stock across all batches</li>
+            <li><strong>MRP Value</strong> — theoretical max revenue at MRP × stock</li>
+            <li><strong>Sell Value</strong> — actual revenue potential at final price × available stock</li>
+            <li><strong>Low Stock</strong> — items at or below reorder level (default 10 units)</li>
+            <li><strong>Out of Stock</strong> — items with zero available units</li>
+            <li><strong>Expiring Soon</strong> — batches expiring within 30 days</li>
+          </ul>
+          <p>Charts show stock health breakdown and value distribution. Refresh button reloads data from server.</p>
+        </div>
+      ),
+    },
+    {
+      id: "inventory-tab",
+      icon: Package,
+      title: "Inventory Tab",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p>Full medicine inventory list for the selected store. Each row shows:</p>
+          <ul className="list-disc pl-5 space-y-1">
+            <li>Medicine name, brand, category</li>
+            <li>Stock status badge (Out of Stock / Low Stock / available units)</li>
+            <li>MRP, Selling Price, Final Price (after discount)</li>
+            <li>Active batch expiry date</li>
+            <li>Rack location</li>
+            <li>Action buttons: <strong>Add Stock</strong>, <strong>Deduct</strong>, <strong>Edit Pricing</strong>, <strong>Delete Entry</strong></li>
+          </ul>
+          <p>Search filters medicines by name in real time. Sync Inventory button creates placeholder records for any store-medicine pairs missing an inventory doc.</p>
+        </div>
+      ),
+    },
+    {
+      id: "addstock",
+      icon: Plus,
+      title: "Adding Stock (Purchase / Top-up)",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p>Click <strong>+ Stock</strong> on any inventory row. Fill the form:</p>
+          <ul className="list-disc pl-5 space-y-1">
+            <li><strong>Quantity</strong> — units being received (required)</li>
+            <li><strong>Batch Number</strong> — manufacturer batch ID (required)</li>
+            <li><strong>Expiry Date</strong> — as printed on pack (required)</li>
+            <li><strong>MRP &amp; Selling Price</strong> — required; sets store pricing for this batch</li>
+            <li><strong>Discount %</strong> — auto-computes Final Price</li>
+            <li><strong>Purchase Price</strong> — cost price, hidden from customers</li>
+            <li><strong>Invoice No.</strong> — purchase invoice reference</li>
+            <li><strong>Rack Location</strong> — physical shelf (e.g. Aisle-3/Rack-B)</li>
+          </ul>
+          <p>System creates a <strong>MedicineBatch</strong> document and updates <strong>MedicineInventory</strong> atomically in a MongoDB session. An <strong>InventoryMovement</strong> ledger entry is appended (type: Purchase).</p>
+          <div className="alert alert-info text-xs"><Info size={13}/> If batch number already exists, quantities are added to that batch (top-up).</div>
+        </div>
+      ),
+    },
+    {
+      id: "deductstock",
+      icon: Minus,
+      title: "Deducting Stock",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p>Click <strong>Deduct</strong> on any inventory row. Select movement type:</p>
+          <div className="space-y-1">
+            {[["Adjustment_Sub","Manual correction — stock count mismatch"],["Damage","Physical damage, shrinkage"],["Expiry","Expired stock removal"],["Transfer_Out","Moving stock to another store"]].map(([t,d]) => (
+              <div key={t} className="flex gap-2 text-xs">
+                <span className="badge badge-secondary badge-sm shrink-0">{t}</span>
+                <span className="text-base-content/70">{d}</span>
+              </div>
+            ))}
+          </div>
+          <p>Leave batch number blank to use <strong>FEFO</strong> (First Expire First Out) auto-selection. Specify batch number to deduct from a specific batch.</p>
+          <p>System validates available stock &gt; requested quantity before deducting. Logs to InventoryMovement ledger.</p>
+        </div>
+      ),
+    },
+    {
+      id: "lowstock-tab",
+      icon: TrendingDown,
+      title: "Low Stock Tab",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p>Lists all medicines in this store with <code className="bg-base-200 px-1 rounded text-xs">availableStock ≤ reorderLevel</code> (default: 10 units).</p>
+          <p><strong>Trigger Alerts</strong> button sends email + in-app notifications to admins and pharmacy staff for all low-stock items in this store.</p>
+          <p>Each row shows current stock, reorder level, and a direct <strong>Restock</strong> shortcut that opens the Add Stock modal.</p>
+          <div className="alert alert-warning text-xs"><AlertTriangle size={13}/> Out-of-stock items also appear here (0 units available).</div>
+        </div>
+      ),
+    },
+    {
+      id: "expiry-tab",
+      icon: Clock,
+      title: "Expiry Alerts Tab",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p>Shows batches expiring within <strong>30 days</strong> (configurable). Sorted by earliest expiry first (FEFO order).</p>
+          <p>Each row shows: batch number, medicine, expiry date, days remaining, remaining quantity.</p>
+          <p>Action: use <strong>Deduct → Expiry</strong> to formally write off expired batches from stock. This updates MedicineInventory and logs to InventoryMovement.</p>
+          <div className="alert alert-error text-xs"><XCircle size={13}/> Do not sell or dispense near-expiry stock without pharmacy review.</div>
+        </div>
+      ),
+    },
+    {
+      id: "actions-tab",
+      icon: Settings,
+      title: "Store Actions Tab",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p>Critical lifecycle operations for the selected store:</p>
+          <div className="space-y-2">
+            {[
+              ["Sync Inventory","Creates zero-stock MedicineInventory placeholder records for any medicine not yet linked to this store. Safe to run anytime.","success"],
+              ["Trigger Low Stock Alerts","Fires email + notification alerts for all medicines below reorder level in this store.","warning"],
+              ["Suspend Store","Sets store status to Under-Maintenance. All inventory records set isActive=false. Orders not accepted. Stock data preserved.","warning"],
+              ["Unsuspend Store","Re-opens store. All inventory restored to active. Low-stock alerts auto-fire on resume.","success"],
+              ["Delete Store","Permanently removes store. All MedicineInventory and MedicineBatch records soft-deleted. Medicine catalogue untouched. Irreversible.","error"],
+            ].map(([action, desc, type]) => (
+              <div key={action} className={`border-l-4 pl-3 py-1 border-${type}`}>
+                <div className="font-semibold text-xs text-base-content">{action}</div>
+                <div className="text-xs text-base-content/60">{desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: "sync",
+      icon: RefreshCw,
+      title: "Inventory Sync (Global)",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p><strong>Sync All Stores</strong> (top-right toolbar) runs a global sync: for every active medicine × every active store, ensures a MedicineInventory doc exists.</p>
+          <p>This is safe to run after adding new medicines or new stores. It only creates missing records — never overwrites existing stock data.</p>
+          <p>Result shows: total medicines scanned, stores synced, entries added.</p>
+        </div>
+      ),
+    },
+    {
+      id: "roles",
+      icon: Shield,
+      title: "Role Permissions",
+      content: (
+        <div className="space-y-2 text-sm text-base-content/80">
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            {[
+              ["Action","Admin","Superadmin"],
+              ["View Stores","✓","✓"],
+              ["Add Stock","✓","✓"],
+              ["Deduct Stock","✓","✓"],
+              ["Edit Pricing","✓","✓"],
+              ["Delete Entry","✓","✓"],
+              ["Suspend Store","✓","✓"],
+              ["Unsuspend Store","✓","✓"],
+              ["Delete Store","✗","✓"],
+              ["Sync All","✗","✓"],
+              ["Trigger Alerts","✓","✓"],
+            ].map(([a,ad,sa], i) => (
+              <div key={i} className={`contents ${i === 0 ? "font-bold" : ""}`}>
+                <span className={`${i === 0 ? "font-semibold text-base-content" : "text-base-content/70"} py-1`}>{a}</span>
+                <span className={`text-center py-1 ${ad === "✓" ? "text-success" : "text-error"}`}>{ad}</span>
+                <span className={`text-center py-1 ${sa === "✓" ? "text-success" : "text-error"}`}>{sa}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: "models",
+      icon: Layers,
+      title: "Data Model Reference",
+      content: (
+        <div className="space-y-3 text-sm text-base-content/80">
+          <p>Key MongoDB collections used by this page:</p>
+          <div className="space-y-2">
+            {[
+              ["Medicine","Global product catalogue. No stock data. One doc per product."],
+              ["MedicineInventory","Stock + pricing per store per medicine. One doc = one store + one medicine."],
+              ["MedicineBatch","Physical batch. One doc per batch per store. FEFO via fifoPriority field."],
+              ["InventoryMovement","Append-only ledger. Every stock change creates one entry. Cannot be updated."],
+              ["PharmacyStore","Store profile, location, status, financials, delivery config."],
+            ].map(([m,d]) => (
+              <div key={m} className="bg-base-200 rounded-field p-2">
+                <div className="font-mono text-xs font-bold text-primary">{m}</div>
+                <div className="text-xs text-base-content/60">{d}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ),
+    },
+  ];
 
-      {/* Sync Result */}
-      <AnimatePresence>
-        {syncResult && (
-          <motion.div variants={fadeUp} initial="hidden" animate="visible" exit={{ opacity: 0 }}
-            className="glass-card p-5"
-            style={{ border: '1px solid var(--success)40', background: 'var(--success)08' }}>
-            <div className="flex items-center gap-2 mb-3">
-              <CheckCircle size={16} style={{ color: 'var(--success)' }} />
-              <span className="font-bold text-sm" style={{ color: 'var(--success)' }}>Sync Complete</span>
-              <button onClick={() => dispatch(clearSyncResult())} className="ml-auto opacity-40 hover:opacity-70">
-                <X size={14} />
-              </button>
-            </div>
-            {syncResult.type === 'bulk' ? (
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  { l: 'Medicines', v: syncResult.totalMedicines },
-                  { l: 'Synced',    v: syncResult.medicinesSynced },
-                  { l: 'New Entries', v: syncResult.totalEntriesAdded },
-                ].map(({ l, v }) => (
-                  <div key={l} className="text-center">
-                    <div className="text-2xl font-black" style={{ color: 'var(--success)' }}>{fmt(v)}</div>
-                    <div className="text-xs opacity-50">{l}</div>
-                  </div>
-                ))}
+  return (
+    <motion.div variants={fadeIn} initial="hidden" animate="show" className="space-y-3">
+      <div className="flex items-center gap-3 mb-2">
+        <HelpCircle size={20} className="text-primary" />
+        <h3 className="font-display font-bold text-lg text-base-content">Help &amp; Reference</h3>
+      </div>
+      <p className="text-sm text-base-content/60 mb-4">Everything you need to understand and operate this page.</p>
+      <div className="space-y-2">
+        {sections.map(s => (
+          <div key={s.id} className="border border-base-300 rounded-box overflow-hidden">
+            <button
+              className="w-full flex items-center justify-between p-4 text-left hover:bg-base-200 transition-colors"
+              onClick={() => toggle(s.id)}
+            >
+              <div className="flex items-center gap-3">
+                <s.icon size={16} className="text-primary shrink-0" />
+                <span className="font-semibold text-sm text-base-content">{s.title}</span>
               </div>
-            ) : (
-              <div className="text-sm">
-                Added <strong>{fmt(syncResult.addedCount)}</strong> new store entries.
-                Total entries: <strong>{fmt(syncResult.totalInventoryEntries)}</strong>
-              </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+              <ChevronDown size={15} className={`text-base-content/50 transition-transform ${open === s.id ? "rotate-180" : ""}`} />
+            </button>
+            <AnimatePresence>
+              {open === s.id && (
+                <motion.div
+                  initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div className="p-4 border-t border-base-300 bg-base-100">{s.content}</div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        ))}
+      </div>
+    </motion.div>
   );
 }
 
-// ── Analytics Charts ───────────────────────────────────────────────────────
-function AnalyticsTab({ stores, stats }) {
-  const categoryData = (stats?.categoryDistribution || []).map(c => ({
-    name: c._id || 'Other',
-    count: c.count,
-    avgPrice: Math.round(c.avgPrice || 0),
-  }));
-
-  const storeStatusData = [
-    { name: 'Open',        value: stores.filter(s => s.status === 'Open').length },
-    { name: 'Closed',      value: stores.filter(s => s.status === 'Closed').length },
-    { name: 'Maintenance', value: stores.filter(s => s.status === 'Under-Maintenance').length },
-    { name: 'Inactive',    value: stores.filter(s => s.status === 'Inactive').length },
+// ══════════════════════════════════════════════════════════════════════════════
+// Overview Chart panel
+// ══════════════════════════════════════════════════════════════════════════════
+function OverviewCharts({ summary, storeName }) {
+  if (!summary) return null;
+  const pieData = [
+    { name: "In Stock", value: Math.max(0, summary.totalSKUs - summary.lowStockCount - summary.outOfStockCount), fill: "var(--success)" },
+    { name: "Low Stock", value: summary.lowStockCount, fill: "var(--warning)" },
+    { name: "Out of Stock", value: summary.outOfStockCount, fill: "var(--error)" },
   ].filter(d => d.value > 0);
 
-  const mockTrend = Array.from({ length: 14 }, (_, i) => ({
-    day: `D-${14 - i}`,
-    lowStock: Math.floor(Math.random() * 25 + 5),
-    expiring: Math.floor(Math.random() * 12 + 2),
-    synced:   Math.floor(Math.random() * 8),
-  }));
-
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div className="rounded-2xl border px-3 py-2.5 shadow-xl text-xs"
-        style={{ background: 'var(--base-100)', borderColor: 'var(--base-300)' }}>
-        <div className="font-bold mb-1.5 opacity-60">{label}</div>
-        {payload.map(p => (
-          <div key={p.name} className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
-            <span>{p.name}: <strong>{p.value}</strong></span>
-          </div>
-        ))}
-      </div>
-    );
-  };
+  const barData = [
+    { label: "Total SKUs", value: summary.totalSKUs },
+    { label: "Low Stock", value: summary.lowStockCount },
+    { label: "Out of Stock", value: summary.outOfStockCount },
+    { label: "Expiring Soon", value: summary.expiringSoonCount },
+    { label: "Active Batches", value: summary.activeBatchCount },
+  ];
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-      {/* Category Distribution */}
-      <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={0} className="glass-card p-5">
-        <SectionHeader icon={BarChart2} title="Medicines by Category" color="var(--primary)" />
-        <div className="pt-4">
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={categoryData.slice(0, 8)} margin={{ top: 4, right: 8, left: -10, bottom: 50 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" vertical={false} />
-              <XAxis dataKey="name" angle={-35} textAnchor="end"
-                tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.55 }} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.55 }} />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="count" name="Count" radius={[6, 6, 0, 0]} maxBarSize={40}>
-                {categoryData.slice(0, 8).map((_, i) => (
-                  <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </motion.div>
-
-      {/* Store Status */}
-      <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={1} className="glass-card p-5">
-        <SectionHeader icon={Store} title="Store Status Distribution" color="var(--secondary)" />
-        <div className="pt-4">
-          <ResponsiveContainer width="100%" height={260}>
-            <PieChart>
-              <Pie data={storeStatusData} dataKey="value" nameKey="name"
-                cx="50%" cy="50%" innerRadius={60} outerRadius={95}
-                paddingAngle={3}
-                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                labelLine={false}>
-                {storeStatusData.map((_, i) => (
-                  <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
-                ))}
-              </Pie>
-              <Tooltip content={<CustomTooltip />} />
-              <Legend iconType="circle" iconSize={8}
-                wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }} />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </motion.div>
-
-      {/* Alert Trend */}
-      <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={2}
-        className="glass-card p-5 col-span-full">
-        <SectionHeader icon={Activity} title="14-Day Alert Trend" subtitle="Low stock & expiry signals" color="var(--warning)" />
-        <div className="pt-4">
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={mockTrend}>
-              <defs>
-                {[
-                  { id: 'low', c: 'var(--warning)' },
-                  { id: 'exp', c: 'var(--error)' },
-                ].map(({ id, c }) => (
-                  <linearGradient key={id} id={id} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor={c} stopOpacity={0.3} />
-                    <stop offset="95%" stopColor={c} stopOpacity={0} />
-                  </linearGradient>
-                ))}
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" vertical={false} />
-              <XAxis dataKey="day" tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.5 }} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--base-content)', opacity: 0.5 }} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: '11px' }} />
-              <Area type="monotone" dataKey="lowStock" name="Low Stock" stroke="var(--warning)"
-                strokeWidth={2.5} fill="url(#low)" dot={false} />
-              <Area type="monotone" dataKey="expiring"  name="Expiring"  stroke="var(--error)"
-                strokeWidth={2.5} fill="url(#exp)" dot={false} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </motion.div>
-
-      {/* Stats Summary */}
-      <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={3}
-        className="glass-card p-5 col-span-full">
-        <SectionHeader icon={Database} title="Inventory Health Summary" color="var(--info)" />
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-5">
-          {[
-            { label: 'Total Stock Units', value: fmt(stats?.totalStock ?? 0),         color: 'var(--primary)' },
-            { label: 'Low Stock Alerts',  value: fmt(stats?.lowStockAlerts ?? 0),      color: 'var(--warning)' },
-            { label: 'Expiry Alerts',     value: fmt(stats?.expiryAlerts ?? 0),        color: 'var(--error)'   },
-            { label: 'Discontinued',      value: fmt(stats?.discontinuedCount ?? 0),   color: 'var(--neutral)' },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="text-center p-4 rounded-2xl"
-              style={{ background: `${color}10`, border: `1px solid ${color}25` }}>
-              <div className="text-2xl font-black" style={{ color, fontFamily: 'var(--font-montserrat)' }}>
-                {value}
-              </div>
-              <div className="text-xs font-semibold mt-1 opacity-60">{label}</div>
-            </div>
-          ))}
-        </div>
-      </motion.div>
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mt-5">
+      <div className="card p-4">
+        <div className="text-sm font-semibold text-base-content mb-3 flex items-center gap-2"><BarChart size={15} /> Stock Health</div>
+        <ResponsiveContainer width="100%" height={200}>
+          <ReBarChart data={barData} barSize={24}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300)" />
+            <XAxis dataKey="label" tick={{ fontSize: 10, fill: "var(--base-content)" }} />
+            <YAxis tick={{ fontSize: 10, fill: "var(--base-content)" }} />
+            <Tooltip contentStyle={{ background: "var(--base-200)", border: "1px solid var(--base-300)", borderRadius: "8px", fontSize: 12 }} />
+            <Bar dataKey="value" fill="var(--primary)" radius={[4,4,0,0]} />
+          </ReBarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="card p-4">
+        <div className="text-sm font-semibold text-base-content mb-3 flex items-center gap-2"><Activity size={15} /> SKU Distribution</div>
+        <ResponsiveContainer width="100%" height={200}>
+          <PieChart>
+            <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
+              {pieData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
+            </Pie>
+            <Tooltip contentStyle={{ background: "var(--base-200)", border: "1px solid var(--base-300)", borderRadius: "8px", fontSize: 12 }} />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }
 
-// ── Tab Button ─────────────────────────────────────────────────────────────
-function TabBtn({ active, icon: Icon, label, badge, onClick }) {
-  return (
-    <button onClick={onClick}
-      className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all relative"
-      style={{
-        background: active ? 'var(--primary)' : 'transparent',
-        color:      active ? 'var(--primary-content)' : 'var(--base-content)',
-        border:     active ? 'none' : '1.5px solid var(--base-300)',
-        boxShadow:  active ? '0 4px 14px var(--primary)40' : 'none',
-      }}>
-      <Icon size={15} />
-      {label}
-      {badge > 0 && (
-        <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] rounded-full text-[10px] font-black flex items-center justify-center px-1"
-          style={{ background: 'var(--error)', color: 'var(--error-content)' }}>
-          {badge > 99 ? '99+' : badge}
-        </span>
-      )}
-    </button>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MAIN PAGE
-// ═══════════════════════════════════════════════════════════════════════════
-export default function InventoryManagement() {
+// ══════════════════════════════════════════════════════════════════════════════
+// Right Panel — Store Detail
+// ══════════════════════════════════════════════════════════════════════════════
+function StoreDetailPanel({ store, onLifecycle }) {
   const dispatch = useDispatch();
-  const user     = useSelector((s) => s.user?.user) ?? null;
+  const summary = useSelector(selectStoreInventorySummary);
+  const inventory = useSelector(selectInventory);
+  const lowStock = useSelector(selectLowStock);
+  const lowStockTotal = useSelector(selectLowStockTotal);
+  const expiryAlerts = useSelector(selectExpiryAlerts);
+  const expiryAlertTotal = useSelector(selectExpiryAlertTotal);
+  const loading = useSelector(selectMedicineLoading);
+  const actionLoading = useSelector(selectActionLoading);
 
-  const lowStockReport = useSelector(selectLowStockReport);
-  const expiryAlerts   = useSelector(selectExpiryAlerts);
-  const stores         = useSelector(selectAllStores);
-  const medicines      = useSelector(selectAllMedicines);
-  const invLoading     = useSelector(selectInventoryLoading);
-  const medLoading     = useSelector(selectMedicineLoading);
-  const syncLoading    = useSelector(selectMedicineSyncLoading);
-  const syncResult     = useSelector(selectSyncResult);
-  const stats          = useSelector(selectMedicineStats);
+  const [tab, setTab] = useState("overview");
+  const [invSearch, setInvSearch] = useState("");
+  const [modal, setModal] = useState(null); // { type, data }
+  const [toast, setToast] = useState(null);
+  const [confirm, setConfirm] = useState(null);
 
-  const [tab,         setTab]         = useState('alerts');
-  const [expiryDays,  setExpiryDays]  = useState(30);
-  const [storeFilter, setStoreFilter] = useState('');
-  const [lowPage,     setLowPage]     = useState(1);
-  const [expPage,     setExpPage]     = useState(1);
-  const [refreshKey,  setRefreshKey]  = useState(0);
+  const storeId = store?._id;
 
-  // Initial data load
-  useEffect(() => {
-    dispatch(fetchStores({}));
-    dispatch(fetchMedicines({ limit: 200 }));
-    dispatch(fetchInventoryStats());
-  }, [dispatch]);
+  const showToast = useCallback((msg, type = "success") => setToast({ msg, type }), []);
 
-  // Reload reports when filters change
-  const loadLow = useCallback(() => {
-    dispatch(fetchLowStockReport({
-      storeId: storeFilter || undefined,
-      page:    lowPage,
-      limit:   20,
-    }));
-  }, [dispatch, storeFilter, lowPage]);
+  const loadData = useCallback(() => {
+    if (!storeId) return;
+    dispatch(fetchStoreInventorySummary(storeId));
+    dispatch(fetchStoreInventory(storeId)); 
+    dispatch(fetchLowStock({ storeId }));
+    dispatch(fetchExpiryAlerts({ storeId }));
+  }, [dispatch, storeId]);
 
-  const loadExpiry = useCallback(() => {
-    dispatch(fetchExpiryAlerts({
-      days:    expiryDays,
-      storeId: storeFilter || undefined,
-      page:    expPage,
-      limit:   20,
-    }));
-  }, [dispatch, storeFilter, expiryDays, expPage]);
+  const filteredInv = useMemo(() => {
+    if (!invSearch) return inventory;
+    const q = invSearch.toLowerCase();
+    return inventory.filter(i => {
+      const med = i.medicineId;
+      return (med?.brandName?.toLowerCase().includes(q) || med?.genericName?.toLowerCase().includes(q) || med?.name?.toLowerCase().includes(q));
+    });
+  }, [inventory, invSearch]);
 
-  useEffect(() => { loadLow(); }, [loadLow]);
-  useEffect(() => { loadExpiry(); }, [loadExpiry]);
+  const handleSuspend = () => setConfirm({
+    title: "Suspend Store",
+    message: `Suspend "${store.storeName}"? All inventory paused. Stock preserved.`,
+    confirmLabel: "Suspend",
+    variant: "warning",
+    extraInput: { label: "Reason (optional)", placeholder: "e.g. Licence renewal" },
+    onConfirm: async (reason) => {
+      setConfirm(null);
+      const res = await dispatch(suspendStore({ storeId, reason }));
+      if (!res.error) { showToast("Store suspended."); loadData(); onLifecycle(); }
+    },
+  });
 
-  const refresh = () => {
-    setRefreshKey(k => k + 1);
-    loadLow();
-    loadExpiry();
-    dispatch(fetchInventoryStats());
+  const handleUnsuspend = () => setConfirm({
+    title: "Reopen Store",
+    message: `Reopen "${store.storeName}"? All inventory restored and low-stock alerts fire.`,
+    confirmLabel: "Reopen",
+    variant: "warning",
+    onConfirm: async () => {
+      setConfirm(null);
+      const res = await dispatch(unsuspendStore(storeId));
+      if (!res.error) { showToast("Store reopened."); loadData(); onLifecycle(); }
+    },
+  });
+
+  const handleDelete = () => setConfirm({
+    title: "Delete Store",
+    message: `Permanently delete "${store.storeName}"? All inventory soft-deleted. Cannot be undone.`,
+    confirmLabel: "Delete Forever",
+    variant: "error",
+    onConfirm: async () => {
+      setConfirm(null);
+      const res = await dispatch(deleteStore(storeId));
+      if (!res.error) { showToast("Store deleted."); onLifecycle(); }
+    },
+  });
+
+  const handleTriggerAlerts = async () => {
+    const res = await dispatch(triggerLowStockAlerts({ storeId }));
+    if (!res.error) showToast("Low-stock alerts triggered.");
   };
 
-  const tabs = [
-    { id: 'alerts',    icon: ShieldAlert, label: 'Alerts',   badge: (lowStockReport.total || 0) + (expiryAlerts.total || 0) },
-    { id: 'browse',    icon: Boxes,       label: 'Browse',   badge: 0 },
-    { id: 'analytics', icon: BarChart2,   label: 'Analytics',badge: 0 },
-    { id: 'sync',      icon: RotateCcw,   label: 'Sync',     badge: 0 },
-  ];
+  const handleSyncOne = async () => {
+    const res = await dispatch(syncOneMedicineInventory(storeId));
+    if (!res.error) { showToast("Inventory synced."); loadData(); }
+  };
+
+  const handleDeleteEntry = (entry) => setConfirm({
+    title: "Remove Inventory Entry",
+    message: `Remove inventory record for "${entry.medicineId?.brandName}"? Stock data lost.`,
+    confirmLabel: "Remove",
+    variant: "error",
+    onConfirm: async () => {
+      setConfirm(null);
+      const mId = entry.medicineId?._id || entry.medicineId;
+      const sId = entry.storeId?._id || entry.storeId || storeId;
+      const res = await dispatch(deleteInventoryEntry({ medicineId: mId, storeId: sId }));
+      if (!res.error) { showToast("Entry removed."); loadData(); }
+    },
+  });
+
+  const statusCfg = STATUS_CONFIG[store?.status] || STATUS_CONFIG.Closed;
+  const isSuspended = store?.status === "Under-Maintenance" || store?.status === "Suspended";
 
   return (
-    <div className="min-h-screen" style={{ background: 'var(--base-100)' }}>
-
-      {/* ── Top Header ─────────────────────────────────────── */}
-      <motion.div className="sticky top-0 z-30 border-b px-6 py-4"
-        style={{
-          background: 'color-mix(in srgb, var(--base-100) 92%, transparent)',
-          backdropFilter: 'blur(16px)',
-          borderColor: 'var(--base-300)',
-        }}
-        initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 max-w-[1600px] mx-auto">
-          <div className="flex items-center gap-4">
-            <div className="w-11 h-11 rounded-2xl flex items-center justify-center"
-              style={{ background: 'var(--bg-gradient-primary)', boxShadow: '0 4px 14px var(--primary)50' }}>
-              <FlaskConical size={20} style={{ color: 'var(--primary-content)' }} />
+    <div className="flex flex-col h-full">
+      {/* Store header */}
+      <div className="p-5 border-b border-base-300 bg-base-100">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="font-display font-bold text-xl text-base-content truncate">{store.storeName}</h2>
+              <span className={`badge ${statusCfg.cls}`}>{statusCfg.label}</span>
+              <span className="badge badge-secondary badge-xs">{store.storeType}</span>
             </div>
-            <div>
-              <h1 className="text-xl font-black tracking-tight"
-                style={{ fontFamily: 'var(--font-montserrat)', color: 'var(--base-content)' }}>
-                Inventory <span className="text-gradient-primary">Management</span>
-              </h1>
-              <p className="text-xs opacity-50 mt-0.5">
-                Multi-store stock control · {user?.name && `${user.name} · `}
-                <span style={{ color: 'var(--primary)' }}>{user?.role}</span>
-              </p>
+            <div className="flex items-center gap-4 mt-1 text-xs text-base-content/60 flex-wrap">
+              {store.address?.city && <span className="flex items-center gap-1"><MapPin size={11} />{store.address.city}, {store.address.state}</span>}
+              {store.contact?.phone && <span className="flex items-center gap-1"><Phone size={11} />{store.contact.phone}</span>}
+              {store.contact?.email && <span className="flex items-center gap-1"><Mail size={11} />{store.contact.email}</span>}
             </div>
           </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Store filter */}
-            <select value={storeFilter}
-              onChange={e => { setStoreFilter(e.target.value); setLowPage(1); setExpPage(1); }}
-              className="input-field text-sm py-2 min-w-[160px]">
-              <option value="">All Stores</option>
-              {stores.map(s => <option key={s._id} value={s._id}>{s.storeName}</option>)}
-            </select>
-
-            {/* Expiry days */}
-            <select value={expiryDays}
-              onChange={e => { setExpiryDays(Number(e.target.value)); setExpPage(1); }}
-              className="input-field text-sm py-2">
-              {[7, 15, 30, 60, 90].map(d => <option key={d} value={d}>Expiry ≤ {d}d</option>)}
-            </select>
-
-            <button onClick={refresh}
-              className="btn-secondary flex items-center gap-2 text-sm py-2 px-4">
-              <RefreshCw size={14} className={invLoading ? 'animate-spin' : ''} />
-              Refresh
-            </button>
-          </div>
+          <button className="btn btn-ghost btn-sm btn-circle shrink-0" onClick={loadData}>
+            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+          </button>
         </div>
-      </motion.div>
+      </div>
 
-      <div className="px-6 py-6 max-w-[1600px] mx-auto flex flex-col gap-6">
+      {/* Tabs */}
+      <div className="flex gap-1 px-4 pt-3 border-b border-base-300 overflow-x-auto scrollbar-thin">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold whitespace-nowrap rounded-t-field border-b-2 transition-colors ${tab === t.id ? "border-primary text-primary" : "border-transparent text-base-content/60 hover:text-base-content"}`}
+          >
+            <t.icon size={13} />{t.label}
+          </button>
+        ))}
+      </div>
 
-        {/* ── KPI Row ──────────────────────────────────────── */}
-        <motion.div className="grid grid-cols-2 sm:grid-cols-4 gap-4"
-          variants={stagger} initial="hidden" animate="visible">
-          <KpiCard i={0} icon={TrendingDown} label="Low / Out of Stock" value={lowStockReport.total}
-            color="var(--warning)" trend={12} />
-          <KpiCard i={1} icon={Clock} label={`Expiring ≤ ${expiryDays}d`} value={expiryAlerts.total}
-            color="var(--error)" trend={-5} />
-          <KpiCard i={2} icon={Store} label="Active Stores" value={stores.filter(s => s.status !== 'Inactive').length}
-            color="var(--info)" sub={`${stores.length} total`} />
-          <KpiCard i={3} icon={Pill} label="Medicine Catalog" value={medicines.length}
-            color="var(--primary)" sub={`${stats?.discontinuedCount ?? 0} discontinued`} />
-        </motion.div>
-
-        {/* ── Stats Bar ────────────────────────────────────── */}
-        <motion.div variants={fadeUp} initial="hidden" animate="visible"
-          className="glass-card px-5 py-4 flex flex-wrap gap-6">
-          {[
-            { l: 'Total Stock Units', v: fmt(stats?.totalStock ?? 0), c: 'var(--primary)'  },
-            { l: 'Low Stock Alerts',  v: fmt(stats?.lowStockAlerts ?? 0), c: 'var(--warning)' },
-            { l: 'Expiry Alerts (30d)', v: fmt(stats?.expiryAlerts ?? 0), c: 'var(--error)'   },
-            { l: 'Discontinued',      v: fmt(stats?.discontinuedCount ?? 0), c: 'var(--neutral)' },
-          ].map(({ l, v, c }) => (
-            <div key={l} className="flex items-center gap-3">
-              <div className="w-2 h-8 rounded-full" style={{ background: c }} />
-              <div>
-                <div className="text-lg font-black" style={{ color: c, fontFamily: 'var(--font-montserrat)' }}>{v}</div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider opacity-50">{l}</div>
-              </div>
-            </div>
-          ))}
-        </motion.div>
-
-        {/* ── Tabs ─────────────────────────────────────────── */}
-        <div className="flex gap-2 flex-wrap">
-          {tabs.map(t => (
-            <TabBtn key={t.id} active={tab === t.id} icon={t.icon}
-              label={t.label} badge={t.badge} onClick={() => setTab(t.id)} />
-          ))}
-        </div>
-
-        {/* ── Tab Content ──────────────────────────────────── */}
+      {/* Tab content */}
+      <div className="flex-1 overflow-y-auto p-5">
         <AnimatePresence mode="wait">
 
-          {tab === 'alerts' && (
-            <motion.div key="alerts"
-              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.3 }}
-              className="flex flex-col gap-5">
-              <LowStockTable data={lowStockReport} loading={invLoading}
-                page={lowPage} setPage={setLowPage} />
-              <ExpiryTable data={expiryAlerts} loading={invLoading}
-                page={expPage} setPage={setExpPage} />
+          {/* ── OVERVIEW ── */}
+          {tab === "overview" && (
+            <motion.div key="overview" variants={fadeIn} initial="hidden" animate="show">
+              {loading && !summary ? (
+                <div className="flex items-center justify-center h-40"><Loader2 size={28} className="animate-spin text-primary" /></div>
+              ) : summary ? (
+                <>
+                  <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                    <StatBlock label="Total SKUs" value={fmtInt(summary.totalSKUs)} icon={Layers} />
+                    <StatBlock label="Total Units" value={fmtInt(summary.totalUnits)} icon={Box} />
+                    <StatBlock label="MRP Value" value={`₹${fmt(summary.totalMRPValue, 0)}`} icon={DollarSign} color="secondary" />
+                    <StatBlock label="Sell Value" value={`₹${fmt(summary.totalSellValue, 0)}`} icon={TrendingDown} color="accent" />
+                    <StatBlock label="Low Stock" value={fmtInt(summary.lowStockCount)} icon={AlertTriangle} color="warning" sub={`threshold: ${summary.lowStockThreshold} units`} />
+                    <StatBlock label="Out of Stock" value={fmtInt(summary.outOfStockCount)} icon={XCircle} color="error" />
+                    <StatBlock label="Expiring Soon" value={fmtInt(summary.expiringSoonCount)} icon={Clock} color="warning" sub={`within ${summary.expiryAlertDays} days`} />
+                    <StatBlock label="Active Batches" value={fmtInt(summary.activeBatchCount)} icon={Warehouse} color="info" />
+                  </motion.div>
+                  <OverviewCharts summary={summary} storeName={store.storeName} />
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-40 text-base-content/40 gap-2">
+                  <Package size={32} /><span className="text-sm">No data available</span>
+                </div>
+              )}
             </motion.div>
           )}
 
-          {tab === 'browse' && (
-            <motion.div key="browse"
-              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.3 }}>
-              <MedicineInventoryPanel medicines={medicines} stores={stores} dispatch={dispatch} />
+          {/* ── INVENTORY ── */}
+          {tab === "inventory" && (
+            <motion.div key="inventory" variants={fadeIn} initial="hidden" animate="show">
+              <div className="flex items-center gap-3 mb-4 flex-wrap">
+                <div className="relative flex-1 min-w-48">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <input className="input-field pl-9" placeholder="Search medicines…" value={invSearch} onChange={e => setInvSearch(e.target.value)} />
+                </div>
+                <button className="btn btn-outline btn-sm gap-1.5" onClick={handleSyncOne} disabled={actionLoading}>
+                  <RefreshCw size={13} />Sync Inventory
+                </button>
+              </div>
+              {loading && inventory.length === 0 ? (
+                <div className="flex items-center justify-center h-40"><Loader2 size={28} className="animate-spin text-primary" /></div>
+              ) : filteredInv.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-40 text-base-content/40 gap-2">
+                  <Package size={32} /><span className="text-sm">No inventory records</span>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {filteredInv.map((entry, i) => {
+                    const med = entry.medicineId;
+                    const batch = entry.batchId;
+                    const daysLeft = batch?.expiryDate ? Math.ceil((new Date(batch.expiryDate) - new Date()) / 86400000) : null;
+                    return (
+                      <motion.div key={entry._id || i} variants={slideUp} initial="hidden" animate="show" className="card p-4 hover:border-primary/30">
+                        <div className="flex items-start justify-between gap-3 flex-wrap">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-sm text-base-content">{med?.brandName || "—"}</span>
+                              <span className="text-xs text-base-content/50">{med?.genericName}</span>
+                              {med?.category && <span className="badge badge-secondary badge-xs">{med.category}</span>}
+                            </div>
+                            <div className="flex items-center gap-3 mt-1.5 flex-wrap text-xs text-base-content/60">
+                              <StockBadge available={entry.availableStock} low={entry.isLowStock} out={entry.isOutOfStock} />
+                              <span>MRP ₹{fmt(entry.mrp)}</span>
+                              <span>Sell ₹{fmt(entry.sellingPrice)}</span>
+                              {entry.discountPercent > 0 && <span className="text-success">{entry.discountPercent}% off → ₹{fmt(entry.finalPrice)}</span>}
+                              {batch?.expiryDate && (
+                                <span className={`flex items-center gap-1 ${daysLeft < 30 ? "text-error" : daysLeft < 90 ? "text-warning" : ""}`}>
+                                  <Calendar size={10} />Exp: {new Date(batch.expiryDate).toLocaleDateString("en-IN")}
+                                  {daysLeft !== null && <span>({daysLeft}d)</span>}
+                                </span>
+                              )}
+                              {entry.rackLocation && <span className="flex items-center gap-1"><MapPin size={10}/>{entry.rackLocation}</span>}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                            <button
+                              className="btn btn-success btn-xs gap-1"
+                              onClick={() => setModal({ type: "addStock", data: { medicineId: med?._id || entry.medicineId, medicineName: med?.brandName, storeId } })}
+                            >
+                              <Plus size={12} /> Stock
+                            </button>
+                            <button
+                              className="btn btn-error btn-xs gap-1"
+                              onClick={() => setModal({ type: "deductStock", data: { medicineId: med?._id || entry.medicineId, medicineName: med?.brandName, storeId, availableStock: entry.availableStock } })}
+                            >
+                              <Minus size={12} /> Deduct
+                            </button>
+                            <button
+                              className="btn btn-outline btn-xs gap-1"
+                              onClick={() => setModal({ type: "updateInv", data: entry })}
+                            >
+                              <Settings size={12} /> Edit
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-xs btn-circle text-error"
+                              onClick={() => handleDeleteEntry(entry)}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )}
             </motion.div>
           )}
 
-          {tab === 'analytics' && (
-            <motion.div key="analytics"
-              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.3 }}>
-              <AnalyticsTab stores={stores} stats={stats} />
+          {/* ── LOW STOCK ── */}
+          {tab === "lowstock" && (
+            <motion.div key="lowstock" variants={fadeIn} initial="hidden" animate="show">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                <div className="flex items-center gap-2 text-warning">
+                  <TrendingDown size={18} />
+                  <span className="font-semibold text-sm">{plural(lowStockTotal, "item")} below reorder level</span>
+                </div>
+                <button className="btn btn-warning btn-sm gap-1.5" onClick={handleTriggerAlerts} disabled={actionLoading}>
+                  <Bell size={13} /> Trigger Alerts
+                </button>
+              </div>
+              {loading && lowStock.length === 0 ? (
+                <div className="flex items-center justify-center h-40"><Loader2 size={28} className="animate-spin text-primary" /></div>
+              ) : lowStock.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-40 text-success gap-2">
+                  <CheckCircle2 size={32} /><span className="text-sm font-semibold">All stock levels healthy</span>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {lowStock.map((entry, i) => {
+                    const med = entry.medicineId;
+                    return (
+                      <motion.div key={entry._id || i} variants={slideUp} initial="hidden" animate="show" className={`card p-4 border-l-4 ${entry.isOutOfStock ? "border-l-error" : "border-l-warning"}`}>
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-sm text-base-content">{med?.brandName || "—"}</div>
+                            <div className="text-xs text-base-content/60 mt-0.5">{med?.genericName} · {med?.category}</div>
+                            <div className="flex items-center gap-3 mt-1.5 text-xs flex-wrap">
+                              <span className={`font-bold ${entry.isOutOfStock ? "text-error" : "text-warning"}`}>
+                                {fmtInt(entry.availableStock)} units available
+                              </span>
+                              <span className="text-base-content/50">Reorder: {entry.reorderLevel} units</span>
+                              <span className="text-base-content/50">MRP ₹{fmt(entry.mrp)}</span>
+                            </div>
+                          </div>
+                          <button
+                            className="btn btn-primary btn-xs gap-1 shrink-0"
+                            onClick={() => setModal({ type: "addStock", data: { medicineId: med?._id || entry.medicineId, medicineName: med?.brandName, storeId } })}
+                          >
+                            <Plus size={12} /> Restock
+                          </button>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )}
             </motion.div>
           )}
 
-          {tab === 'sync' && (
-            <motion.div key="sync"
-              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.3 }}>
-              <SyncPanel dispatch={dispatch} syncLoading={syncLoading} syncResult={syncResult} />
+          {/* ── EXPIRY ── */}
+          {tab === "expiry" && (
+            <motion.div key="expiry" variants={fadeIn} initial="hidden" animate="show">
+              <div className="flex items-center gap-2 mb-4 text-warning">
+                <Clock size={18} />
+                <span className="font-semibold text-sm">{plural(expiryAlertTotal, "batch")} expiring within 30 days</span>
+              </div>
+              {loading && expiryAlerts.length === 0 ? (
+                <div className="flex items-center justify-center h-40"><Loader2 size={28} className="animate-spin text-primary" /></div>
+              ) : expiryAlerts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-40 text-success gap-2">
+                  <CheckCircle2 size={32} /><span className="text-sm font-semibold">No batches expiring soon</span>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {expiryAlerts.map((entry, i) => {
+                    const med = entry.medicineId;
+                    const daysLeft = entry.expiryDate ? Math.ceil((new Date(entry.expiryDate) - new Date()) / 86400000) : 0;
+                    return (
+                      <motion.div key={entry._id || i} variants={slideUp} initial="hidden" animate="show" className={`card p-4 border-l-4 ${daysLeft <= 7 ? "border-l-error" : "border-l-warning"}`}>
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-sm text-base-content">{med?.brandName || "—"}</div>
+                            <div className="text-xs text-base-content/60 mt-0.5">Batch: {entry.batchNumber}</div>
+                            <div className="flex items-center gap-3 mt-1.5 text-xs flex-wrap">
+                              <span className={`font-bold ${daysLeft <= 7 ? "text-error" : "text-warning"}`}>{daysLeft} days left</span>
+                              <span className="text-base-content/50">Expiry: {new Date(entry.expiryDate).toLocaleDateString("en-IN")}</span>
+                              <span className="text-base-content/50">{fmtInt(entry.remainingQuantity)} units remaining</span>
+                            </div>
+                          </div>
+                          <button
+                            className="btn btn-error btn-xs gap-1 shrink-0"
+                            onClick={() => setModal({ type: "deductStock", data: { medicineId: med?._id || entry.medicineId, medicineName: med?.brandName, storeId, availableStock: entry.remainingQuantity } })}
+                          >
+                            <Minus size={12} /> Write Off
+                          </button>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )}
             </motion.div>
           )}
+
+          {/* ── ACTIONS ── */}
+          {tab === "actions" && (
+            <motion.div key="actions" variants={fadeIn} initial="hidden" animate="show" className="space-y-4 max-w-xl">
+              <h3 className="font-display font-bold text-base text-base-content mb-2">Store Lifecycle &amp; Bulk Actions</h3>
+
+              {/* Sync */}
+              <div className="card p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 font-semibold text-sm text-base-content"><RefreshCw size={14} className="text-info" /> Sync Inventory</div>
+                    <div className="text-xs text-base-content/60 mt-1">Create missing MedicineInventory placeholders for this store. Safe to run anytime.</div>
+                  </div>
+                  <button className="btn btn-outline btn-sm shrink-0" onClick={handleSyncOne} disabled={actionLoading}>Sync</button>
+                </div>
+              </div>
+
+              {/* Trigger alerts */}
+              <div className="card p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 font-semibold text-sm text-base-content"><Bell size={14} className="text-warning" /> Trigger Low-Stock Alerts</div>
+                    <div className="text-xs text-base-content/60 mt-1">Fire email + in-app notifications to admins and pharmacy staff for all items below reorder level.</div>
+                  </div>
+                  <button className="btn btn-warning btn-sm shrink-0" onClick={handleTriggerAlerts} disabled={actionLoading}>Trigger</button>
+                </div>
+              </div>
+
+              {/* Suspend / Unsuspend */}
+              {!isSuspended ? (
+                <div className="card p-4 border-warning/30">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 font-semibold text-sm text-base-content"><PauseCircle size={14} className="text-warning" /> Suspend Store</div>
+                      <div className="text-xs text-base-content/60 mt-1">Pause operations. All inventory set inactive. Stock data preserved. Orders blocked.</div>
+                    </div>
+                    <button className="btn btn-warning btn-sm shrink-0" onClick={handleSuspend} disabled={actionLoading}>Suspend</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="card p-4 border-success/30">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 font-semibold text-sm text-base-content"><PlayCircle size={14} className="text-success" /> Reopen Store</div>
+                      <div className="text-xs text-base-content/60 mt-1">Restore store to Open status. All inventory re-activated. Low-stock alerts auto-fire.</div>
+                    </div>
+                    <button className="btn btn-success btn-sm shrink-0" onClick={handleUnsuspend} disabled={actionLoading}>Reopen</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Delete */}
+              <div className="card p-4 border-error/30">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 font-semibold text-sm text-base-content"><Trash2 size={14} className="text-error" /> Delete Store</div>
+                    <div className="text-xs text-base-content/60 mt-1">Permanently remove store. All inventory soft-deleted. Medicine catalogue untouched. Irreversible.</div>
+                  </div>
+                  <button className="btn btn-error btn-sm shrink-0" onClick={handleDelete} disabled={actionLoading}>Delete</button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ── HELP ── */}
+          {tab === "help" && <HelpSection />}
 
         </AnimatePresence>
       </div>
+
+      {/* Modals */}
+      <AnimatePresence>
+        {modal?.type === "addStock" && (
+          <AddStockModal key="addStock" {...modal.data} onClose={() => setModal(null)} onSuccess={(m) => { showToast(m); loadData(); }} />
+        )}
+        {modal?.type === "deductStock" && (
+          <DeductStockModal key="deductStock" {...modal.data} onClose={() => setModal(null)} onSuccess={(m) => { showToast(m); loadData(); }} />
+        )}
+        {modal?.type === "updateInv" && (
+          <UpdateInventoryModal key="updateInv" entry={modal.data} onClose={() => setModal(null)} onSuccess={(m) => { showToast(m); loadData(); }} />
+        )}
+        {confirm && (
+          <ConfirmDialog key="confirm" {...confirm} onCancel={() => setConfirm(null)} />
+        )}
+        {toast && (
+          <Toast key="toast" message={toast.msg} type={toast.type} onClose={() => setToast(null)} />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Left Panel — Store List
+// ══════════════════════════════════════════════════════════════════════════════
+function StoreList({ selectedId, onSelect, onReload }) {
+  const dispatch = useDispatch();
+  const stores = useSelector(selectStores);
+  const pagination = useSelector(selectStorePagination);
+  const loading = useSelector(selectMedicineLoading);
+
+  const [search, setSearch] = useState("");
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filters, setFilters] = useState({ status: "", storeType: "" });
+
+  const load = useCallback((page = 1) => {
+    dispatch(fetchStores({ page, limit: 20, search: search || undefined, status: filters.status || undefined, storeType: filters.storeType || undefined }));
+  }, [dispatch, search, filters]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = useMemo(() => {
+    if (!search) return stores;
+    const q = search.toLowerCase();
+    return stores.filter(s => s.storeName?.toLowerCase().includes(q) || s.address?.city?.toLowerCase().includes(q));
+  }, [stores, search]);
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="p-4 border-b border-base-300">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-display font-bold text-base text-base-content flex items-center gap-2">
+            <Store size={16} className="text-primary" /> Pharmacy Stores
+          </h2>
+          <span className="badge badge-primary badge-sm">{pagination.total || stores.length}</span>
+        </div>
+        <div className="relative">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+          <input className="input-field pl-8 text-xs" placeholder="Search stores…" value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+        <div className="flex gap-2 mt-2">
+          <button className="btn btn-ghost btn-xs gap-1 flex-1" onClick={() => setFilterOpen(p => !p)}>
+            <Filter size={11} /> Filter
+          </button>
+          <button className="btn btn-ghost btn-xs gap-1" onClick={() => { load(); onReload?.(); }}>
+            <RefreshCw size={11} className={loading ? "animate-spin" : ""} />
+          </button>
+        </div>
+        <AnimatePresence>
+          {filterOpen && (
+            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+              <div className="pt-2 space-y-2">
+                <select className="input-field text-xs" value={filters.status} onChange={e => setFilters(p => ({ ...p, status: e.target.value }))}>
+                  <option value="">All Statuses</option>
+                  {["Open","Closed","Under-Maintenance","Inactive"].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select className="input-field text-xs" value={filters.storeType} onChange={e => setFilters(p => ({ ...p, storeType: e.target.value }))}>
+                  <option value="">All Types</option>
+                  <option value="Owned">Owned</option>
+                  <option value="Partnered">Partnered</option>
+                </select>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* List */}
+      <div className="flex-1 overflow-y-auto scrollbar-thin">
+        {loading && filtered.length === 0 ? (
+          <div className="flex items-center justify-center h-40"><Loader2 size={22} className="animate-spin text-primary" /></div>
+        ) : filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-40 text-base-content/40 gap-2">
+            <Store size={28} /><span className="text-xs">No stores found</span>
+          </div>
+        ) : (
+          <motion.div variants={stagger} initial="hidden" animate="show" className="p-2 space-y-1">
+            {filtered.map(store => {
+              const cfg = STATUS_CONFIG[store.status] || STATUS_CONFIG.Closed;
+              const isSelected = store._id === selectedId;
+              return (
+                <motion.button
+                  key={store._id}
+                  variants={slideRight}
+                  onClick={() => onSelect(store)}
+                  className={`w-full text-left rounded-box p-3 transition-all border ${isSelected ? "border-primary/50 bg-primary/5" : "border-transparent hover:bg-base-200"}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-semibold text-xs text-base-content truncate">{store.storeName}</span>
+                        {isSelected && <ChevronRight size={12} className="text-primary shrink-0" />}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        <span className={`badge ${cfg.cls} badge-xs`}>{cfg.label}</span>
+                        <span className="text-xs text-base-content/50">{store.storeType}</span>
+                      </div>
+                      {store.address?.city && <div className="text-xs text-base-content/40 mt-0.5 flex items-center gap-1"><MapPin size={9}/>{store.address.city}</div>}
+                    </div>
+                    <div className="flex-col items-end gap-1 hidden sm:flex">
+                      <div className={`status-dot status-dot-${store.status === "Open" ? "success" : store.status === "Under-Maintenance" ? "warning" : "error"}`} />
+                    </div>
+                  </div>
+                </motion.button>
+              );
+            })}
+          </motion.div>
+        )}
+      </div>
+
+      {/* Pagination */}
+      {pagination.pages > 1 && (
+        <div className="p-2 border-t border-base-300 flex items-center justify-between">
+          <button className="btn btn-ghost btn-xs" disabled={pagination.page <= 1} onClick={() => load(pagination.page - 1)}>Prev</button>
+          <span className="text-xs text-base-content/60">{pagination.page} / {pagination.pages}</span>
+          <button className="btn btn-ghost btn-xs" disabled={pagination.page >= pagination.pages} onClick={() => load(pagination.page + 1)}>Next</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Main Page
+// ══════════════════════════════════════════════════════════════════════════════
+export default function StoresInventoryManagement() {
+  const dispatch = useDispatch();
+  const actionLoading = useSelector(selectActionLoading);
+  const lifecycleResult = useSelector(selectStoreLifecycleResult);
+
+  const [selectedStore, setSelectedStore] = useState(null);
+  const [globalToast, setGlobalToast] = useState(null);
+  const [syncAllLoading, setSyncAllLoading] = useState(false);
+
+  // Show lifecycle results as toast
+  useEffect(() => {
+    if (lifecycleResult?.message) {
+      setGlobalToast({ msg: lifecycleResult.message, type: lifecycleResult.type === "deleted" ? "error" : "success" });
+      if (lifecycleResult.type === "deleted") setSelectedStore(null);
+      dispatch(clearStoreLifecycleResult());
+    }
+  }, [lifecycleResult, dispatch]);
+
+  const handleSyncAll = async () => {
+    setSyncAllLoading(true);
+    const res = await dispatch(syncAllMedicinesInventory());
+    setSyncAllLoading(false);
+    if (!res.error) setGlobalToast({ msg: `Sync complete. ${res.payload?.totalEntriesAdded ?? 0} entries added.`, type: "success" });
+  };
+
+  const handleStoreSelect = (store) => {
+    setSelectedStore(store);
+  };
+
+  const handleLifecycle = () => {
+    // Refresh store list after lifecycle action
+    dispatch(fetchStores({ page: 1, limit: 20 }));
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-base-100">
+      {/* Top bar */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-base-300 bg-base-100 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-field bg-primary/10">
+            <Warehouse size={18} className="text-primary" />
+          </div>
+          <div>
+            <h1 className="font-display font-bold text-base text-base-content">Stores &amp; Inventory</h1>
+            <p className="text-xs text-base-content/50">Manage stock, pricing, batches, and store lifecycle</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            className="btn btn-outline btn-sm gap-1.5"
+            onClick={handleSyncAll}
+            disabled={syncAllLoading}
+            title="Sync all medicines across all stores"
+          >
+            {syncAllLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            Sync All
+          </button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left panel */}
+        <div className="w-64 xl:w-72 shrink-0 border-r border-base-300 flex flex-col overflow-hidden">
+          <StoreList
+            selectedId={selectedStore?._id}
+            onSelect={handleStoreSelect}
+            onReload={handleLifecycle}
+          />
+        </div>
+
+        {/* Right panel */}
+        <div className="flex-1 overflow-hidden flex flex-col">
+          <AnimatePresence mode="wait">
+            {selectedStore ? (
+              <motion.div key={selectedStore._id} variants={fadeIn} initial="hidden" animate="show" className="flex-1 overflow-hidden flex flex-col">
+                <StoreDetailPanel store={selectedStore} onLifecycle={handleLifecycle} />
+              </motion.div>
+            ) : (
+              <motion.div key="empty" variants={fadeIn} initial="hidden" animate="show" className="flex-1 flex flex-col items-center justify-center gap-4 text-base-content/40">
+                <div className="p-6 rounded-full bg-base-200">
+                  <Store size={40} className="text-base-content/20" />
+                </div>
+                <div className="text-center">
+                  <div className="font-semibold text-sm text-base-content/60">Select a store</div>
+                  <div className="text-xs mt-1">Choose a pharmacy store from the left panel to view and manage its inventory</div>
+                </div>
+                <div className="flex flex-col items-center gap-2 text-xs text-base-content/30 mt-4">
+                  <ArrowRight size={14} />
+                  <span>Stock · Pricing · Batches · Expiry · Actions</span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+
+      {/* Global toast */}
+      <AnimatePresence>
+        {globalToast && (
+          <Toast key="gtost" message={globalToast.msg} type={globalToast.type} onClose={() => setGlobalToast(null)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

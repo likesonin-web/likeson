@@ -1,24 +1,14 @@
-/**
- * services/chatSocketService.js
- * Fixes applied:
- *  - Call model was imported from wrong path (used inline import in handler but never declared at top)
- *  - call_initiate: removed manual call-ending logic (belongs in agoraService.initiateCall,
- *    which already throws 409 if activeCall exists — caller should handle in UI)
- *  - All socket event handlers: added missing await guards
- *  - disconnect: gracefully handle errors
- *  - user:online broadcast: use targeted rooms not chatNs.emit (don't broadcast to all sockets)
- */
+ 
 
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
-import { Conversation, Message, Call } from '../models/chat.js';  // ← FIX: Call was missing
+import { Conversation, Message, Call } from '../models/chat.js';
 import chatService from './chatService.js';
 import agoraService from './chat/agoraService.js';
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
-const emitError = (socket, event, message) =>
-  socket.emit(`${event}:error`, { message });
+const emitError = (socket, event, message) => socket.emit(`${event}:error`, { message });
 
 // ─── Socket auth middleware ───────────────────────────────────────────────────
 
@@ -49,6 +39,19 @@ const convoRoom = (conversationId) => `convo:${conversationId}`;
 const userRoom  = (userId)         => `user:${userId}`;
 const callRoom  = (callId)         => `call:${callId}`;
 
+/**
+ * Broadcast presence only to rooms the user actually shares with others,
+ * instead of every connected socket on the namespace.
+ */
+const broadcastPresenceToContacts = async (chatNs, userId, payload) => {
+  const convos = await Conversation.find({ 'participants.user': userId })
+    .select('_id')
+    .lean();
+  for (const c of convos) {
+    chatNs.to(convoRoom(c._id.toString())).emit('user:online', payload);
+  }
+};
+
 // ─── Main attach ─────────────────────────────────────────────────────────────
 
 export const attachChatSocket = (io) => {
@@ -64,9 +67,10 @@ export const attachChatSocket = (io) => {
     await chatService.setUserOnline(userId, socket.id);
     await User.findByIdAndUpdate(userId, { isOnline: true, lastActiveAt: new Date() });
 
-    // FIX: emit only to conversations this user participates in, not ALL sockets
-    // Use userRoom broadcast — other participants will receive via their conversation rooms
-    socket.broadcast.emit('user:online', { userId, isOnline: true });
+    // FIX: scoped to shared conversations only, not namespace-wide broadcast
+    broadcastPresenceToContacts(chatNs, userId, { userId, isOnline: true }).catch((err) =>
+      console.error('[Socket] presence broadcast error:', err.message),
+    );
 
     console.log(`[Socket] ${socket.user.name} (${userRole}) connected — ${socket.id}`);
 
@@ -80,7 +84,7 @@ export const attachChatSocket = (io) => {
         if (!convo) return emitError(socket, 'join_conversation', 'Conversation not found');
 
         const isMember = convo.participants.some(
-          (p) => (p.user._id || p.user).toString() === userId && !p.isDeleted
+          (p) => (p.user._id || p.user).toString() === userId && !p.isDeleted,
         );
         if (!isMember) return emitError(socket, 'join_conversation', 'Not a member');
 
@@ -103,25 +107,17 @@ export const attachChatSocket = (io) => {
     socket.on('send_message', async (data, ack) => {
       try {
         const { conversationId, type = 'text', text, replyTo, location, cardPayload } = data;
-
         if (!conversationId) throw new Error('conversationId required');
 
         const msg = await chatService.sendMessage({
           conversationId,
           senderId: userId,
-          type,
-          text,
-          location,
-          cardPayload,
-          replyTo,
+          type, text, location, cardPayload, replyTo,
         });
 
-        // Populate sender for consistent shape in clients
-        const populated = await msg.populate('sender', 'name avatar role');
+        chatNs.to(convoRoom(conversationId)).emit('new_message', msg);
 
-        chatNs.to(convoRoom(conversationId)).emit('new_message', populated);
-
-        if (ack) ack({ success: true, message: populated });
+        if (ack) ack({ success: true, message: msg });
       } catch (err) {
         emitError(socket, 'send_message', err.message);
         if (ack) ack({ success: false, error: err.message });
@@ -132,9 +128,7 @@ export const attachChatSocket = (io) => {
       try {
         await chatService.markMessagesRead(conversationId, userId);
         chatNs.to(convoRoom(conversationId)).emit('messages_read', {
-          conversationId,
-          readBy:  userId,
-          readAt:  new Date(),
+          conversationId, readBy: userId, readAt: new Date(),
         });
       } catch (err) {
         emitError(socket, 'mark_read', err.message);
@@ -145,9 +139,7 @@ export const attachChatSocket = (io) => {
       try {
         await chatService.markMessagesDelivered(conversationId, userId);
         chatNs.to(convoRoom(conversationId)).emit('messages_delivered', {
-          conversationId,
-          deliveredTo: userId,
-          deliveredAt: new Date(),
+          conversationId, deliveredTo: userId, deliveredAt: new Date(),
         });
       } catch (err) {
         emitError(socket, 'mark_delivered', err.message);
@@ -158,12 +150,11 @@ export const attachChatSocket = (io) => {
       try {
         await chatService.setTyping(conversationId, userId, isTyping);
         socket.to(convoRoom(conversationId)).emit('user_typing', {
-          conversationId,
-          userId,
-          userName: socket.user.name,
-          isTyping,
+          conversationId, userId, userName: socket.user.name, isTyping,
         });
-      } catch (_) { /* suppress typing errors */ }
+      } catch (_) {
+        /* suppress typing errors — non-critical, ephemeral */
+      }
     });
 
     socket.on('edit_message', async ({ messageId, text }, ack) => {
@@ -186,9 +177,7 @@ export const attachChatSocket = (io) => {
 
         if (scope === 'for_all') {
           chatNs.to(convoRoom(msg.conversation.toString())).emit('message_deleted', {
-            messageId,
-            conversationId: msg.conversation,
-            scope,
+            messageId, conversationId: msg.conversation, scope,
           });
         }
         if (ack) ack({ success: true, ...result });
@@ -205,9 +194,7 @@ export const attachChatSocket = (io) => {
 
         const reactions = await chatService.reactToMessage(messageId, userId, emoji);
         chatNs.to(convoRoom(msg.conversation.toString())).emit('message_reaction', {
-          messageId,
-          conversationId: msg.conversation,
-          reactions,
+          messageId, conversationId: msg.conversation, reactions,
         });
         if (ack) ack({ success: true, reactions });
       } catch (err) {
@@ -220,21 +207,20 @@ export const attachChatSocket = (io) => {
     // CALL SIGNALING
     // ══════════════════════════════════════════════════════════════════════
 
+    /**
+     * FIX: no more manual activeCall read-then-write here. agoraService
+     * .initiateCall() does the atomic claim internally and throws 409 if
+     * a call is already active — caught below like any other error.
+     */
     socket.on('call_initiate', async ({ conversationId, type = 'audio' }, ack) => {
       try {
-        const convo = await Conversation.findById(conversationId).select('participants type activeCall');
+        const convo = await Conversation.findById(conversationId).select('participants type');
         if (!convo) throw new Error('Conversation not found');
 
-        // FIX: If there's already an active call in this conversation, return 409
-        // Do NOT silently end it here — frontend must handle this case explicitly
-        if (convo.activeCall?.callId) {
-          const existingCall = await Call.findById(convo.activeCall.callId).select('status');
-          if (existingCall && ['ringing', 'ongoing'].includes(existingCall.status)) {
-            throw new Error('A call is already active in this conversation');
-          }
-          // Stale activeCall ref — clean up
-          await Conversation.findByIdAndUpdate(conversationId, { $unset: { activeCall: 1 } });
-        }
+        const isMember = convo.participants.some(
+          (p) => (p.user._id || p.user).toString() === userId && !p.isDeleted,
+        );
+        if (!isMember) throw Object.assign(new Error('Not a member'), { statusCode: 403 });
 
         const invitedIds = convo.participants
           .filter((p) => (p.user._id || p.user).toString() !== userId && !p.isDeleted)
@@ -287,10 +273,7 @@ export const attachChatSocket = (io) => {
         socket.join(callRoom(callId));
 
         chatNs.to(callRoom(callId)).emit('call_participant_joined', {
-          callId,
-          userId,
-          name:   socket.user.name,
-          avatar: socket.user.avatar,
+          callId, userId, name: socket.user.name, avatar: socket.user.avatar,
         });
 
         if (ack) ack({
@@ -313,12 +296,10 @@ export const attachChatSocket = (io) => {
         const call = await agoraService.endCall(callId, userId, 'declined');
 
         chatNs.to(callRoom(callId)).emit('call_declined', {
-          callId,
-          declinedBy: { id: userId, name: socket.user.name },
+          callId, declinedBy: { id: userId, name: socket.user.name },
         });
         chatNs.to(userRoom(call.initiator.toString())).emit('call_declined', {
-          callId,
-          declinedBy: { id: userId, name: socket.user.name },
+          callId, declinedBy: { id: userId, name: socket.user.name },
         });
 
         socket.leave(callRoom(callId));
@@ -334,9 +315,7 @@ export const attachChatSocket = (io) => {
         const call = await agoraService.endCall(callId, userId, 'ended');
 
         chatNs.to(callRoom(callId)).emit('call_ended', {
-          callId,
-          endedBy:  { id: userId, name: socket.user.name },
-          duration: call.duration,
+          callId, endedBy: { id: userId, name: socket.user.name }, duration: call.duration,
         });
 
         socket.leave(callRoom(callId));
@@ -352,8 +331,7 @@ export const attachChatSocket = (io) => {
         await agoraService.endCall(callId, userId, 'cancelled');
 
         chatNs.to(callRoom(callId)).emit('call_cancelled', {
-          callId,
-          cancelledBy: { id: userId, name: socket.user.name },
+          callId, cancelledBy: { id: userId, name: socket.user.name },
         });
 
         socket.leave(callRoom(callId));
@@ -374,12 +352,17 @@ export const attachChatSocket = (io) => {
       }
     });
 
+    /**
+     * FIX: now verifies the socket has actually joined this call's room
+     * before relaying mute/cam state — previously any authenticated socket
+     * could spoof state updates for a callId it was never part of.
+     */
     socket.on('call_mute_toggle', ({ callId, isMuted, isCamOff }) => {
+      if (!socket.rooms.has(callRoom(callId))) {
+        return emitError(socket, 'call_mute_toggle', 'Not part of this call');
+      }
       socket.to(callRoom(callId)).emit('call_participant_state', {
-        callId,
-        userId,
-        isMuted:  isMuted  ?? false,
-        isCamOff: isCamOff ?? false,
+        callId, userId, isMuted: isMuted ?? false, isCamOff: isCamOff ?? false,
       });
     });
 
@@ -390,11 +373,12 @@ export const attachChatSocket = (io) => {
     socket.on('disconnect', async () => {
       try {
         await chatService.setUserOffline(userId);
-        await User.findByIdAndUpdate(userId, {
-          isOnline: false,
-          lastseen: new Date(),
-        });
-        socket.broadcast.emit('user:online', { userId, isOnline: false, lastseen: new Date() });
+        const lastseen = new Date();
+        await User.findByIdAndUpdate(userId, { isOnline: false, lastseen });
+
+        // FIX: scoped broadcast, same as connect
+        await broadcastPresenceToContacts(chatNs, userId, { userId, isOnline: false, lastseen });
+
         console.log(`[Socket] ${socket.user.name} disconnected`);
       } catch (err) {
         console.error('[Socket] disconnect cleanup error:', err.message);
@@ -402,12 +386,12 @@ export const attachChatSocket = (io) => {
     });
 
     // ── Initial state ─────────────────────────────────────────────────────
-    const unread = await chatService.getTotalUnreadCount(userId);
-    socket.emit('init', {
-      userId,
-      unreadCount: unread,
-      serverTime:  new Date(),
-    });
+    try {
+      const unread = await chatService.getTotalUnreadCount(userId);
+      socket.emit('init', { userId, unreadCount: unread, serverTime: new Date() });
+    } catch (err) {
+      console.error('[Socket] init emit error:', err.message);
+    }
   });
 
   return chatNs;

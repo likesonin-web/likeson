@@ -16,6 +16,7 @@ import {
   selectSettlementSummary,
   selectLoading,
 } from '@/store/slices/soloDriverSlice';
+import BackButton from '../../../../components/BackButton';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -173,7 +174,8 @@ export default function SettlementHistory() {
   return (
     <div className="min-h-screen" style={{ background: 'var(--base-100)' }}>
       <div className="max-w-3xl mx-auto px-4 py-8">
-
+              <BackButton className=' my-2 rounded-md px-3' />
+        
         {/* Header */}
         <motion.div variants={fadeUp} initial="hidden" animate="show" className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">

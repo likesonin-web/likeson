@@ -5,12 +5,13 @@
  * ────────────────────────────────────────────────────────────
  * Enterprise-grade 2-step restock request flow.
  * Architecture:
- *   • All API calls via Redux thunks (pharmacyStoreSlice)
- *   • Fully memoised sub-components to prevent re-renders
- *   • Debounced search input (avoids hammering API on keypress)
- *   • Skeleton loaders for medicine list
- *   • Accessible: ARIA roles, keyboard navigable, live regions
- *   • Mobile-first responsive layout
+ * • All API calls via Redux thunks (pharmacyStoreSlice)
+ * • Fully memoised sub-components to prevent re-renders
+ * • Debounced search input (avoids hammering API on keypress)
+ * • Skeleton loaders for medicine list
+ * • Accessible: ARIA roles, keyboard navigable, live regions
+ * • Mobile-first responsive layout
+ * • Updated for flattened Inventory + Populated Medicine schema
  */
 
 import {
@@ -37,9 +38,9 @@ import {
   TrendingUp,
   Hash,
   Info,
-  Star,
   Clock,
   BarChart3,
+  Layers
 } from 'lucide-react';
 
 import {
@@ -230,11 +231,13 @@ const StepIndicator = memo(function StepIndicator({ step }) {
 /* ═══════════════════════════════════════════════════════════════
    MedicineRow  — memoised list item (step 1)
 ═══════════════════════════════════════════════════════════════ */
-const MedicineRow = memo(function MedicineRow({ med, onSelect }) {
-  const inv   = useMemo(() => (med.storeInventory || []).reduce((s, x) => s + (x.stockQuantity || 0), 0), [med.storeInventory]);
-  const isLow = inv <= 5;
+const MedicineRow = memo(function MedicineRow({ invRecord, onSelect }) {
+  const med = invRecord.medicineId || {};
+  const inv = invRecord.availableStock ?? 0;
+  const reorderThreshold = invRecord.reorderLevel || 5;
+  const isLow = inv <= reorderThreshold;
 
-  const handleClick = useCallback(() => onSelect(med), [med, onSelect]);
+  const handleClick = useCallback(() => onSelect(invRecord), [invRecord, onSelect]);
 
   return (
     <motion.button
@@ -243,19 +246,19 @@ const MedicineRow = memo(function MedicineRow({ med, onSelect }) {
       initial="hidden"
       animate="visible"
       onClick={handleClick}
-      className="card p-4 text-left w-full flex items-center gap-3.5 hover:border-primary group transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className="card p-4 text-left w-full flex items-center gap-4 hover:border-primary group transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
       aria-label={`Select ${med.brandName}, current stock: ${inv} units${isLow ? ', low stock' : ''}`}
     >
       <div
         className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${isLow ? 'bg-warning/15' : 'bg-primary/10'}`}
         aria-hidden="true"
       >
-        <Pill size={19} className={isLow ? 'text-warning' : 'text-primary'} />
+        <Pill size={20} className={isLow ? 'text-warning' : 'text-primary'} />
       </div>
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-bold text-sm text-base-content">{med.brandName}</span>
+        <div className="flex items-center gap-2 flex-wrap mb-1">
+          <span className="font-bold text-sm text-base-content">{med.brandName || 'Unknown Product'}</span>
           {isLow && inv > 0 && (
             <span className="badge badge-warning text-[10px]">Low Stock</span>
           )}
@@ -263,20 +266,23 @@ const MedicineRow = memo(function MedicineRow({ med, onSelect }) {
             <span className="badge badge-error text-[10px]">Out of Stock</span>
           )}
         </div>
-        <p className="text-xs text-base-content/50 truncate mt-0.5">
-          {med.genericName} · {med.dosage}
+        <p className="text-xs text-base-content/50 truncate">
+          {med.genericName} {med.dosage ? `· ${med.dosage}` : ''}
         </p>
-        <p className="text-[11px] mt-1 text-base-content/40">
-          Current stock:{' '}
-          <span className={`font-bold ${inv === 0 ? 'text-error' : isLow ? 'text-warning' : 'text-success'}`}>
-            {inv} units
-          </span>
-        </p>
+        <div className="flex items-center gap-3 mt-1.5">
+          <p className="text-[11px] text-base-content/40 flex items-center gap-1">
+            <Layers size={11}/>
+            Current stock:{' '}
+            <span className={`font-bold tabular-nums ${inv === 0 ? 'text-error' : isLow ? 'text-warning' : 'text-success'}`}>
+              {inv} units
+            </span>
+          </p>
+        </div>
       </div>
 
       <ChevronRight
-        size={17}
-        className="text-base-content/30 group-hover:text-primary transition-colors shrink-0"
+        size={18}
+        className="text-base-content/25 group-hover:text-primary group-hover:translate-x-0.5 transition-all shrink-0"
         aria-hidden="true"
       />
     </motion.button>
@@ -294,12 +300,14 @@ const SuccessState = memo(function SuccessState() {
       exit={{   scale: 0.85, opacity: 0 }}
       role="status"
       aria-live="polite"
-      className="card p-10 text-center mb-5 border-success/40 bg-success/5"
+      className="card p-10 text-center mb-5 border-success/40 bg-success/5 shadow-sm"
     >
-      <CheckCircle2 size={52} className="text-success mx-auto mb-3" aria-hidden="true" />
-      <h3 className="text-xl font-black text-base-content font-montserrat">Request Submitted!</h3>
-      <p className="text-sm text-base-content/55 mt-1.5">
-        The restock request has been logged and forwarded to procurement.
+      <div className="w-16 h-16 rounded-full bg-success/20 flex items-center justify-center mx-auto mb-4">
+        <CheckCircle2 size={36} className="text-success" aria-hidden="true" />
+      </div>
+      <h3 className="text-xl font-black text-base-content font-montserrat tracking-tight">Request Submitted!</h3>
+      <p className="text-sm text-base-content/55 mt-2 max-w-sm mx-auto">
+        Your restock request has been securely logged and forwarded to the procurement desk.
       </p>
     </motion.div>
   );
@@ -317,20 +325,20 @@ const RecentRequestItem = memo(function RecentRequestItem({ entry, index }) {
       initial={{ opacity: 0, x: 10 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ delay: index * 0.05 }}
-      className="flex items-center gap-3 p-3 rounded-xl bg-base-200"
+      className="flex items-center gap-3 p-3.5 rounded-xl bg-base-100 border border-base-200 shadow-sm"
       aria-label={`${entry.name}, ${entry.quantity} units, ${entry.urgency} urgency`}
     >
       <div
-        className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${cfg.bgClass}`}
+        className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${cfg.bgClass}`}
         aria-hidden="true"
       >
-        <Icon size={13} style={{ color: cfg.colorVar }} />
+        <Icon size={14} style={{ color: cfg.colorVar }} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold text-base-content truncate">{entry.name}</p>
-        <p className="text-[10px] text-base-content/45">{entry.quantity} units · {entry.urgency}</p>
+        <p className="text-xs font-bold text-base-content truncate">{entry.name}</p>
+        <p className="text-[10px] font-medium text-base-content/50 mt-0.5">{entry.quantity} units · <span style={{ color: cfg.colorVar }}>{entry.urgency}</span></p>
       </div>
-      <CheckCircle2 size={13} className="text-success shrink-0" aria-hidden="true" />
+      <CheckCircle2 size={14} className="text-success shrink-0" aria-hidden="true" />
     </motion.div>
   );
 });
@@ -340,21 +348,23 @@ const RecentRequestItem = memo(function RecentRequestItem({ entry, index }) {
 ═══════════════════════════════════════════════════════════════ */
 const UrgencyGuide = memo(function UrgencyGuide() {
   return (
-    <div className="card p-5">
-      <h2 className="font-bold text-base-content text-sm mb-3 flex items-center gap-2">
-        <Info size={13} className="text-info" aria-hidden="true" />
+    <div className="card p-5 bg-base-100 border border-base-200 shadow-sm">
+      <h2 className="font-bold text-base-content text-sm mb-4 flex items-center gap-2">
+        <Info size={14} className="text-info" aria-hidden="true" />
         Urgency Guide
       </h2>
-      <dl className="space-y-2">
+      <dl className="space-y-3">
         {URGENCY_KEYS.map(k => {
           const cfg  = URGENCY_CONFIG[k];
           const Icon = cfg.icon;
           return (
-            <div key={k} className="flex items-start gap-2">
-              <Icon size={12} style={{ color: cfg.colorVar }} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <div key={k} className="flex items-start gap-2.5">
+              <div className={`p-1.5 rounded-md ${cfg.bgClass}`}>
+                <Icon size={12} style={{ color: cfg.colorVar }} className="shrink-0" aria-hidden="true" />
+              </div>
               <div>
-                <dt className="inline text-xs font-bold text-base-content">{cfg.label}:</dt>
-                <dd className="inline text-xs text-base-content/50 ml-1">{cfg.desc}</dd>
+                <dt className="text-xs font-bold text-base-content">{cfg.label}</dt>
+                <dd className="text-[10px] font-medium text-base-content/50 mt-0.5">{cfg.desc}</dd>
               </div>
             </div>
           );
@@ -379,7 +389,7 @@ export default function RequestRestockPage() {
 
   /* ── Local state */
   const [search,    setSearch]    = useState('');
-  const [selected,  setSelected]  = useState(null);
+  const [selected,  setSelected]  = useState(null); // Full MedicineInventory doc
   const [step,      setStep]      = useState(1);
   const [urgency,   setUrgency]   = useState('Medium');
   const [quantity,  setQuantity]  = useState('');
@@ -413,7 +423,12 @@ export default function RequestRestockPage() {
     setSubmitted(true);
     if (selected) {
       setHistory(h => [
-        { name: selected.brandName || selected.name, quantity: Number(quantity), urgency, time: new Date() },
+        { 
+          name: selected.medicineId?.brandName || selected.medicineId?.name || 'Unknown', 
+          quantity: Number(quantity), 
+          urgency, 
+          time: new Date() 
+        },
         ...h.slice(0, 4),
       ]);
     }
@@ -432,14 +447,12 @@ export default function RequestRestockPage() {
   }, [successRequest, dispatch, selected, quantity, urgency]);
 
   /* ── Derived */
-  const currStock = useMemo(() => {
-    if (!selected) return 0;
-    return (selected.storeInventory || []).reduce((s, i) => s + (i.stockQuantity || 0), 0);
-  }, [selected]);
+  const currStock = useMemo(() => selected?.availableStock ?? 0, [selected]);
+  const medData = selected?.medicineId;
 
   /* ── Callbacks */
-  const handleMedSelect = useCallback(med => {
-    setSelected(med);
+  const handleMedSelect = useCallback((invRecord) => {
+    setSelected(invRecord);
     setStep(2);
     dispatch(clearError('requestStock'));
   }, [dispatch]);
@@ -451,16 +464,16 @@ export default function RequestRestockPage() {
   }, [dispatch]);
 
   const handleUrgencySelect = useCallback(val => setUrgency(val), []);
-
   const handlePresetClick = useCallback(val => setQuantity(String(val)), []);
-
   const handleQuantityChange = useCallback(e => setQuantity(e.target.value), []);
 
   const handleSubmit = useCallback(e => {
     e.preventDefault();
     if (!selected || !quantity) return;
+    
+    // Crucial: Pass the actual Medicine _id, not the Inventory _id
     dispatch(requestStock({
-      medicineId:       selected._id,
+      medicineId:       selected.medicineId._id,
       requiredQuantity: Number(quantity),
       urgency,
     }));
@@ -478,7 +491,7 @@ export default function RequestRestockPage() {
         initial="hidden"
         animate="visible"
         custom={0}
-        className="mb-8"
+        className="mb-8 max-w-6xl mx-auto"
       >
         <div className="flex items-center gap-3 mb-0.5">
           {step === 2 && (
@@ -496,10 +509,10 @@ export default function RequestRestockPage() {
               <ShoppingCart size={24} className="text-primary" aria-hidden="true" />
               <span className="text-gradient-primary">Request Restock</span>
             </h1>
-            <p className="text-sm text-base-content/55 mt-0.5">
+            <p className="text-sm text-base-content/55 mt-0.5 font-medium">
               {step === 1
-                ? 'Select a medicine to request replenishment'
-                : `Restock request for ${selected?.brandName}`}
+                ? 'Select an inventory item to request replenishment'
+                : `Restock request for ${medData?.brandName}`}
             </p>
           </div>
         </div>
@@ -508,7 +521,7 @@ export default function RequestRestockPage() {
       </motion.header>
 
       {/* ── LAYOUT GRID ──────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-[1100px]">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
 
         {/* ── MAIN COLUMN ─────────────────────────────────────── */}
         <div className="lg:col-span-2">
@@ -530,11 +543,11 @@ export default function RequestRestockPage() {
                   initial="hidden"
                   animate="visible"
                   custom={1}
-                  className="card p-4 mb-4"
+                  className="card p-3 mb-4 shadow-sm border border-base-300"
                 >
                   <div className="relative">
                     <Search
-                      size={14}
+                      size={16}
                       className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
                       aria-hidden="true"
                     />
@@ -542,9 +555,9 @@ export default function RequestRestockPage() {
                       type="search"
                       value={search}
                       onChange={handleSearchChange}
-                      placeholder="Search medicines by name, brand…"
+                      placeholder="Search inventory by brand, generic name..."
                       aria-label="Search medicines"
-                      className="input-field w-full pl-9"
+                      className="input-field w-full pl-10 bg-base-200/50"
                       autoComplete="off"
                     />
                   </div>
@@ -552,7 +565,7 @@ export default function RequestRestockPage() {
 
                 {/* list */}
                 <div
-                  className="space-y-2.5"
+                  className="space-y-3"
                   role="list"
                   aria-label="Medicine search results"
                   aria-busy={loadingMeds}
@@ -562,15 +575,16 @@ export default function RequestRestockPage() {
                         <MedicineRowSkeleton key={i} />
                       ))
                     : medicines.length > 0
-                      ? medicines.map(med => (
-                          <div key={med._id} role="listitem">
-                            <MedicineRow med={med} onSelect={handleMedSelect} />
+                      ? medicines.map(invRecord => (
+                          <div key={invRecord._id} role="listitem">
+                            <MedicineRow invRecord={invRecord} onSelect={handleMedSelect} />
                           </div>
                         ))
                       : (
-                          <div className="text-center py-16 text-base-content/40" role="status">
-                            <Package size={34} className="mx-auto mb-3 opacity-30" aria-hidden="true" />
-                            <p className="text-sm">No medicines found</p>
+                          <div className="card p-12 text-center border-dashed border-base-300 bg-base-100/50" role="status">
+                            <Package size={40} className="mx-auto mb-4 text-base-content/20" aria-hidden="true" />
+                            <h3 className="font-bold text-lg text-base-content">No inventory found</h3>
+                            <p className="text-sm text-base-content/50 mt-1">Try adjusting your search criteria.</p>
                           </div>
                         )
                   }
@@ -594,35 +608,38 @@ export default function RequestRestockPage() {
                   initial="hidden"
                   animate="visible"
                   custom={0}
-                  className="glass-card p-5 mb-5"
-                  aria-label={`Selected medicine: ${selected?.brandName}`}
+                  className="card bg-base-100 shadow-sm border border-base-200 p-5 mb-5"
+                  aria-label={`Selected medicine: ${medData?.brandName}`}
                 >
                   <div className="flex items-center gap-4">
                     <div
-                      className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-secondary flex items-center justify-center shrink-0"
+                      className="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0"
                       aria-hidden="true"
                     >
-                      <Pill size={22} className="text-white" />
+                      <Pill size={24} className="text-primary" />
                     </div>
                     <div>
-                      <h2 className="font-black text-xl text-base-content font-montserrat">
-                        {selected?.brandName}
+                      <h2 className="font-black text-xl text-base-content font-montserrat leading-tight">
+                        {medData?.brandName}
                       </h2>
-                      <p className="text-sm text-base-content/55">
-                        {selected?.genericName} · {selected?.dosage}
-                      </p>
-                      <p className="text-xs mt-1 text-base-content/45">
-                        Current stock:{' '}
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="badge badge-info badge-outline text-[10px]">{medData?.category}</span>
+                        <span className="text-xs text-base-content/50">
+                          {medData?.genericName} {medData?.dosage ? `· ${medData.dosage}` : ''}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-2">
+                        <span className="text-[11px] font-bold text-base-content/50 uppercase tracking-widest">
+                          In Stock:
+                        </span>
                         <span
-                          className={`font-bold ${
-                            currStock === 0 ? 'text-error'
-                              : currStock <= 5 ? 'text-warning'
-                              : 'text-success'
+                          className={`font-black text-sm tabular-nums ${
+                            currStock === 0 ? 'text-error' : currStock <= (selected?.reorderLevel || 5) ? 'text-warning' : 'text-success'
                           }`}
                         >
                           {currStock} units
                         </span>
-                      </p>
+                      </div>
                     </div>
                   </div>
                 </motion.div>
@@ -642,12 +659,12 @@ export default function RequestRestockPage() {
                     custom={1}
                     noValidate
                   >
-                    <div className="card p-6 space-y-6">
+                    <div className="card p-6 space-y-6 shadow-sm border border-base-200">
 
                       {/* urgency */}
                       <fieldset>
                         <legend className="block text-xs font-bold text-base-content/60 mb-3 uppercase tracking-wider">
-                          Urgency Level <span className="text-error" aria-hidden="true">*</span>
+                          Priority / Urgency Level <span className="text-error" aria-hidden="true">*</span>
                         </legend>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3" role="group" aria-label="Select urgency level">
                           {URGENCY_KEYS.map(u => (
@@ -672,11 +689,11 @@ export default function RequestRestockPage() {
 
                         {/* presets */}
                         <div
-                          className="flex items-center gap-2 mb-3 flex-wrap"
+                          className="flex items-center gap-2 mb-3 flex-wrap bg-base-200/50 p-2 rounded-xl border border-base-200"
                           role="group"
                           aria-label="Quick quantity presets"
                         >
-                          <span className="text-xs text-base-content/40">Quick:</span>
+                          <span className="text-xs font-semibold text-base-content/40 px-2 uppercase tracking-wider">Presets:</span>
                           {QUANTITY_PRESETS.map(v => (
                             <QuantityPreset
                               key={v}
@@ -690,7 +707,7 @@ export default function RequestRestockPage() {
                         {/* manual input */}
                         <div className="relative">
                           <Hash
-                            size={13}
+                            size={14}
                             className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/35"
                             aria-hidden="true"
                           />
@@ -701,7 +718,7 @@ export default function RequestRestockPage() {
                             required
                             value={quantity}
                             onChange={handleQuantityChange}
-                            placeholder="Enter quantity…"
+                            placeholder="Enter specific quantity..."
                             aria-label="Required quantity"
                             className="input-field w-full pl-9"
                           />
@@ -709,19 +726,19 @@ export default function RequestRestockPage() {
                       </div>
 
                       {/* info notice */}
-                      <div className="alert alert-info text-xs rounded-xl" role="note">
-                        <Info size={13} className="text-info shrink-0" aria-hidden="true" />
-                        <span>
+                      <div className="alert bg-info/10 border-info/20 text-info-content text-xs rounded-xl flex items-start p-4" role="note">
+                        <Info size={16} className="text-info shrink-0 mt-0.5" aria-hidden="true" />
+                        <span className="font-medium leading-relaxed text-base-content/70">
                           This request will be logged and procurement will be notified.
-                          No inventory changes are made until stock is physically received.
+                          Your physical inventory will remain unchanged until the stock is formally received via a Purchase Order.
                         </span>
                       </div>
 
                       {/* error */}
                       {errorRequest && (
-                        <div className="alert alert-error text-xs" role="alert">
-                          <AlertCircle size={13} className="shrink-0" aria-hidden="true" />
-                          <span>{errorRequest?.message || 'Failed to submit request. Please try again.'}</span>
+                        <div className="alert alert-error text-xs rounded-xl" role="alert">
+                          <AlertCircle size={14} className="shrink-0" aria-hidden="true" />
+                          <span className="font-semibold">{errorRequest?.message || 'Failed to submit request. Please try again.'}</span>
                         </div>
                       )}
 
@@ -729,13 +746,13 @@ export default function RequestRestockPage() {
                       <button
                         type="submit"
                         disabled={loadingRequest || !quantity || Number(quantity) < 1}
-                        className="btn-primary-cta w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="btn btn-primary w-full flex items-center justify-center gap-2 font-bold text-sm uppercase tracking-wider h-12 disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
                         aria-busy={loadingRequest}
                       >
                         {loadingRequest
-                          ? <Loader2 size={15} className="animate-spin" aria-hidden="true" />
-                          : <ShoppingCart size={15} aria-hidden="true" />}
-                        {loadingRequest ? 'Submitting…' : 'Submit Restock Request'}
+                          ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                          : <ShoppingCart size={16} aria-hidden="true" />}
+                        {loadingRequest ? 'Transmitting Request...' : 'Submit Restock Request'}
                       </button>
                     </div>
                   </motion.form>
@@ -746,7 +763,7 @@ export default function RequestRestockPage() {
         </div>
 
         {/* ── SIDEBAR ──────────────────────────────────────────── */}
-        <aside className="space-y-4" aria-label="Request history and guide">
+        <aside className="space-y-6" aria-label="Request history and guide">
 
           {/* recent requests */}
           <motion.div
@@ -754,20 +771,20 @@ export default function RequestRestockPage() {
             initial="hidden"
             animate="visible"
             custom={3}
-            className="card p-5"
+            className="card p-5 bg-base-100 shadow-sm border border-base-200"
           >
-            <h2 className="font-bold text-base-content text-sm mb-4 flex items-center gap-2">
-              <BarChart3 size={14} className="text-primary" aria-hidden="true" />
-              Recent Requests
+            <h2 className="font-bold text-base-content text-sm mb-4 flex items-center gap-2 uppercase tracking-widest">
+              <BarChart3 size={15} className="text-primary" aria-hidden="true" />
+              Session Requests
             </h2>
 
             {history.length === 0 ? (
-              <div className="text-center py-8 text-base-content/35" role="status">
-                <ShoppingCart size={26} className="mx-auto mb-2 opacity-40" aria-hidden="true" />
-                <p className="text-xs">No requests yet this session</p>
+              <div className="text-center py-10 bg-base-200/50 rounded-xl border border-dashed border-base-300" role="status">
+                <ShoppingCart size={28} className="mx-auto mb-3 opacity-20 text-base-content" aria-hidden="true" />
+                <p className="text-xs font-semibold text-base-content/40">No requests submitted yet.</p>
               </div>
             ) : (
-              <div className="space-y-2.5" role="list" aria-label="Recent restock requests">
+              <div className="space-y-3" role="list" aria-label="Recent restock requests">
                 {history.map((entry, i) => (
                   <div key={i} role="listitem">
                     <RecentRequestItem entry={entry} index={i} />
@@ -789,5 +806,5 @@ export default function RequestRestockPage() {
         </aside>
       </div>
     </div>
-  );
+  ); 
 }

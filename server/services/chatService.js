@@ -1,14 +1,4 @@
-/**
- * services/chatService.js
- * Fixes applied:
- *  - sendMediaMessage V1 removed (race condition). Use V2 only.
- *  - getConversationById: handle both populated and unpopulated participants.user
- *  - getUserConversations: same populated/unpopulated guard
- *  - getMessages: same guard
- *  - getOrCreateDirectConversation: prevent duplicate direct convos under race
- *  - markMessagesRead: only update if conversation exists for participant
- *  - duplicate export removed (markMessagesDelivered appeared twice)
- */
+ 
 
 import mongoose from 'mongoose';
 import ImageKit from 'imagekit';
@@ -28,12 +18,13 @@ const CHAT_MEDIA_FOLDER = '/chat-media';
 
 // ─── Cache keys ───────────────────────────────────────────────────────────────
 
-const UNREAD_KEY  = (userId) => `chat:unread:${userId}`;
-const ONLINE_KEY  = (userId) => `chat:online:${userId}`;
-const TYPING_KEY  = (convId, userId) => `chat:typing:${convId}:${userId}`;
+const UNREAD_KEY = (userId) => `chat:unread:${userId}`;
+const ONLINE_KEY = (userId) => `chat:online:${userId}`;
+const TYPING_KEY = (convId, userId) => `chat:typing:${convId}:${userId}`;
 
-// ─── Internal helper: resolve participant user id ─────────────────────────────
-// Handles both populated { user: { _id: ... } } and unpopulated { user: ObjectId }
+const EDIT_WINDOW_MS = 15 * 60 * 1000; // 15 min — adjust to taste
+
+// ─── Internal helper: resolve participant user id (populated or not) ─────────
 
 const resolveUserId = (p) => {
   if (!p?.user) return null;
@@ -46,12 +37,13 @@ const resolveUserId = (p) => {
 
 /**
  * getOrCreateDirectConversation
- * FIX: Use findOneAndUpdate with upsert=false + create inside session to prevent
- *      duplicate direct convos under concurrent requests.
+ * FIX: transaction-wrapped check-then-insert. No unique index exists on the
+ * participant pair, so the only way to prevent duplicate DMs under concurrent
+ * requests is to serialize the check+create via a session transaction.
  */
 export const getOrCreateDirectConversation = async (userId, targetUserId) => {
-  const uId  = userId.toString();
-  const tId  = targetUserId.toString();
+  const uId = userId.toString();
+  const tId = targetUserId.toString();
 
   if (uId === tId) {
     throw Object.assign(new Error('Cannot chat with yourself'), { statusCode: 400 });
@@ -59,21 +51,26 @@ export const getOrCreateDirectConversation = async (userId, targetUserId) => {
 
   const blocked = await UserBlock.findOne({
     $or: [
-      { blocker: userId,       blocked: targetUserId },
+      { blocker: userId, blocked: targetUserId },
       { blocker: targetUserId, blocked: userId },
     ],
   });
   if (blocked) throw Object.assign(new Error('Unable to message this user'), { statusCode: 403 });
 
-  // Find existing — both users must be non-deleted participants
-  let convo = await Conversation.findOne({
-    type: 'direct',
-    $and: [
-      { 'participants': { $elemMatch: { user: userId,       isDeleted: false } } },
-      { 'participants': { $elemMatch: { user: targetUserId, isDeleted: false } } },
-    ],
-  });
+  const findExisting = (session) =>
+    Conversation.findOne(
+      {
+        type: 'direct',
+        $and: [
+          { participants: { $elemMatch: { user: userId, isDeleted: false } } },
+          { participants: { $elemMatch: { user: targetUserId, isDeleted: false } } },
+        ],
+      },
+      null,
+      { session },
+    );
 
+  let convo = await findExisting(null);
   if (convo) return convo;
 
   const [userA, userB] = await Promise.all([
@@ -82,30 +79,29 @@ export const getOrCreateDirectConversation = async (userId, targetUserId) => {
   ]);
   if (!userB) throw Object.assign(new Error('Target user not found'), { statusCode: 404 });
 
-  // Guard race: two requests creating same DM simultaneously
-  // Try insert; if duplicate key → find again
+  const session = await mongoose.startSession();
   try {
-    convo = await Conversation.create({
-      type: 'direct',
-      participants: [
-        { user: userId,       role: userA.role, joinedAt: new Date() },
-        { user: targetUserId, role: userB.role, joinedAt: new Date() },
-      ],
-    });
-  } catch (err) {
-    if (err.code === 11000) {
-      // Duplicate — race condition, fetch the one that was created
-      convo = await Conversation.findOne({
-        type: 'direct',
-        $and: [
-          { 'participants': { $elemMatch: { user: userId,       isDeleted: false } } },
-          { 'participants': { $elemMatch: { user: targetUserId, isDeleted: false } } },
+    await session.withTransaction(async () => {
+      // Re-check inside the transaction — closes the race window
+      convo = await findExisting(session);
+      if (convo) return;
+
+      const created = await Conversation.create(
+        [
+          {
+            type: 'direct',
+            participants: [
+              { user: userId, role: userA.role, joinedAt: new Date() },
+              { user: targetUserId, role: userB.role, joinedAt: new Date() },
+            ],
+          },
         ],
-      });
-      if (!convo) throw err;
-    } else {
-      throw err;
-    }
+        { session },
+      );
+      convo = created[0];
+    });
+  } finally {
+    await session.endSession();
   }
 
   return convo;
@@ -142,11 +138,7 @@ export const getUserConversations = async (userId, { page = 1, limit = 20, type 
   const skip = (page - 1) * limit;
   const filter = {
     participants: {
-      $elemMatch: {
-        user:       userId,
-        isDeleted:  false,
-        isArchived: false,
-      },
+      $elemMatch: { user: userId, isDeleted: false, isArchived: false },
     },
   };
   if (type) filter.type = type;
@@ -165,8 +157,8 @@ export const getUserConversations = async (userId, { page = 1, limit = 20, type 
   const unreadCounts = await MessageStatus.aggregate([
     {
       $match: {
-        user:    new mongoose.Types.ObjectId(userId),
-        readAt:  null,
+        user: new mongoose.Types.ObjectId(userId),
+        readAt: null,
         conversation: { $in: conversations.map((c) => c._id) },
       },
     },
@@ -188,7 +180,6 @@ export const getUserConversations = async (userId, { page = 1, limit = 20, type 
 
 /**
  * getConversationById
- * FIX: membership check handles both populated and unpopulated user field
  */
 export const getConversationById = async (conversationId, userId) => {
   const convo = await Conversation.findById(conversationId)
@@ -197,9 +188,7 @@ export const getConversationById = async (conversationId, userId) => {
 
   if (!convo) throw Object.assign(new Error('Conversation not found'), { statusCode: 404 });
 
-  const isMember = convo.participants.some(
-    (p) => resolveUserId(p) === userId.toString() && !p.isDeleted
-  );
+  const isMember = convo.participants.some((p) => resolveUserId(p) === userId.toString() && !p.isDeleted);
   if (!isMember) throw Object.assign(new Error('Access denied'), { statusCode: 403 });
 
   return convo;
@@ -238,7 +227,7 @@ export const addGroupMembers = async (conversationId, adminId, memberIds) => {
   for (const u of users) {
     const existingIdx = convo.participants.findIndex((p) => p.user.toString() === u._id.toString());
     if (existingIdx !== -1) {
-      convo.participants[existingIdx].isDeleted = false; // re-add soft-deleted
+      convo.participants[existingIdx].isDeleted = false;
     } else {
       convo.participants.push({ user: u._id, role: u.role, joinedAt: new Date() });
     }
@@ -256,13 +245,11 @@ export const removeGroupMember = async (conversationId, adminId, memberId) => {
 
   const isAdmin = convo.participants.find((p) => p.user.toString() === adminId.toString())?.isAdmin;
   const isSelf  = adminId.toString() === memberId.toString();
-
   if (!isAdmin && !isSelf) throw Object.assign(new Error('Not authorised'), { statusCode: 403 });
 
   const idx = convo.participants.findIndex((p) => p.user.toString() === memberId.toString());
-  if (idx !== -1) {
-    convo.participants[idx].isDeleted = true;
-  }
+  if (idx !== -1) convo.participants[idx].isDeleted = true;
+
   await convo.save();
   return convo;
 };
@@ -289,10 +276,15 @@ export const updateGroupAdminStatus = async (conversationId, adminId, targetMemb
 
 /**
  * blockConversation
+ * FIX: requester must actually be a participant — old code let anyone with
+ * a valid conversationId block a DM they're not in.
  */
 export const blockConversation = async (conversationId, userId) => {
   const convo = await Conversation.findById(conversationId);
   if (!convo || convo.type !== 'direct') throw Object.assign(new Error('Direct chat not found'), { statusCode: 404 });
+
+  const isMember = convo.participants.some((p) => p.user.toString() === userId.toString() && !p.isDeleted);
+  if (!isMember) throw Object.assign(new Error('Not a member of this conversation'), { statusCode: 403 });
 
   convo.isBlocked = true;
   convo.blockedBy = userId;
@@ -301,16 +293,12 @@ export const blockConversation = async (conversationId, userId) => {
 };
 
 /**
- * clearConversation — soft-delete all messages for requesting user
+ * clearConversation
  */
 export const clearConversation = async (conversationId, userId) => {
   await Message.updateMany(
-    {
-      conversation:  conversationId,
-      deletedForAll: false,
-      deletedFor:    { $ne: userId },
-    },
-    { $addToSet: { deletedFor: userId } }
+    { conversation: conversationId, deletedForAll: false, deletedFor: { $ne: userId } },
+    { $addToSet: { deletedFor: userId } },
   );
   return { success: true, message: 'Chat history cleared for user' };
 };
@@ -321,7 +309,7 @@ export const clearConversation = async (conversationId, userId) => {
 export const getConversationMedia = async (conversationId, userId, { limit = 50, page = 1, type } = {}) => {
   await getConversationById(conversationId, userId);
 
-  const skip   = (page - 1) * limit;
+  const skip = (page - 1) * limit;
   const filter = {
     conversation:  conversationId,
     deletedForAll: false,
@@ -343,25 +331,16 @@ export const getConversationMedia = async (conversationId, userId, { limit = 50,
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * sendMessage — text, location, order_card, contact, sticker
+ * sendMessage
  */
 export const sendMessage = async ({
-  conversationId,
-  senderId,
-  type = 'text',
-  text,
-  location,
-  cardPayload,
-  replyTo,
-  forwardedFrom,
+  conversationId, senderId, type = 'text', text, location, cardPayload, replyTo, forwardedFrom,
 }) => {
   const convo = await Conversation.findById(conversationId).select('participants isBlocked type');
   if (!convo) throw Object.assign(new Error('Conversation not found'), { statusCode: 404 });
   if (convo.isBlocked) throw Object.assign(new Error('This conversation is blocked'), { statusCode: 403 });
 
-  const isMember = convo.participants.some(
-    (p) => p.user.toString() === senderId.toString() && !p.isDeleted
-  );
+  const isMember = convo.participants.some((p) => p.user.toString() === senderId.toString() && !p.isDeleted);
   if (!isMember) throw Object.assign(new Error('Not a member'), { statusCode: 403 });
 
   if (type === 'text' && !text?.trim()) {
@@ -380,18 +359,20 @@ export const sendMessage = async ({
   });
 
   const otherParticipants = convo.participants.filter(
-    (p) => p.user.toString() !== senderId.toString() && !p.isDeleted
+    (p) => p.user.toString() !== senderId.toString() && !p.isDeleted,
   );
 
   if (otherParticipants.length > 0) {
-    await MessageStatus.insertMany(
-      otherParticipants.map((p) => ({
-        message:      msg._id,
-        conversation: conversationId,
-        user:         p.user,
-      })),
-      { ordered: false },
-    );
+    try {
+      await MessageStatus.insertMany(
+        otherParticipants.map((p) => ({ message: msg._id, conversation: conversationId, user: p.user })),
+        { ordered: false },
+      );
+    } catch (err) {
+      // FIX: log instead of silently swallowing — partial insertMany failures
+      // mean some participants silently never get delivery/read receipts.
+      console.error('[chatService.sendMessage] MessageStatus insertMany partial failure:', err.message);
+    }
     for (const p of otherParticipants) {
       await redisClient.del(UNREAD_KEY(p.user.toString())).catch(() => {});
     }
@@ -402,24 +383,15 @@ export const sendMessage = async ({
 
 /**
  * sendMediaMessageV2 — single atomic upload + create
- * FIX: V1 removed (had race condition between sendMessage + findOneAndUpdate patch)
  */
 export const sendMediaMessageV2 = async ({
-  conversationId,
-  senderId,
-  fileBuffer,
-  originalName,
-  mimeType,
-  fileSize,
-  duration,
+  conversationId, senderId, fileBuffer, originalName, mimeType, fileSize, duration,
 }) => {
   const convo = await Conversation.findById(conversationId).select('participants isBlocked');
   if (!convo) throw Object.assign(new Error('Conversation not found'), { statusCode: 404 });
   if (convo.isBlocked) throw Object.assign(new Error('Conversation blocked'), { statusCode: 403 });
 
-  const isMember = convo.participants.some(
-    (p) => p.user.toString() === senderId.toString() && !p.isDeleted
-  );
+  const isMember = convo.participants.some((p) => p.user.toString() === senderId.toString() && !p.isDeleted);
   if (!isMember) throw Object.assign(new Error('Not a member'), { statusCode: 403 });
 
   let type = 'file';
@@ -430,12 +402,17 @@ export const sendMediaMessageV2 = async ({
   const folder   = `${CHAT_MEDIA_FOLDER}/${conversationId}`;
   const fileName = `${Date.now()}-${originalName.replace(/[^a-z0-9.\-_]/gi, '_')}`;
 
-  const uploadResp = await imagekit.upload({
-    file:              fileBuffer.toString('base64'),
-    fileName,
-    folder,
-    useUniqueFileName: false,
-  });
+  let uploadResp;
+  try {
+    uploadResp = await imagekit.upload({
+      file:              fileBuffer.toString('base64'),
+      fileName,
+      folder,
+      useUniqueFileName: false,
+    });
+  } catch (err) {
+    throw Object.assign(new Error(`Media upload failed: ${err.message}`), { statusCode: 502 });
+  }
 
   const msg = await Message.create({
     conversation: conversationId,
@@ -453,14 +430,16 @@ export const sendMediaMessageV2 = async ({
     },
   });
 
-  const others = convo.participants.filter(
-    (p) => p.user.toString() !== senderId.toString() && !p.isDeleted
-  );
+  const others = convo.participants.filter((p) => p.user.toString() !== senderId.toString() && !p.isDeleted);
   if (others.length > 0) {
-    await MessageStatus.insertMany(
-      others.map((p) => ({ message: msg._id, conversation: conversationId, user: p.user })),
-      { ordered: false },
-    );
+    try {
+      await MessageStatus.insertMany(
+        others.map((p) => ({ message: msg._id, conversation: conversationId, user: p.user })),
+        { ordered: false },
+      );
+    } catch (err) {
+      console.error('[chatService.sendMediaMessageV2] MessageStatus insertMany partial failure:', err.message);
+    }
     for (const p of others) {
       await redisClient.del(UNREAD_KEY(p.user.toString())).catch(() => {});
     }
@@ -471,22 +450,15 @@ export const sendMediaMessageV2 = async ({
 
 /**
  * getMessages — cursor-based pagination
- * FIX: membership check uses resolveUserId helper for populated/unpopulated safety
  */
 export const getMessages = async (conversationId, userId, { limit = 50, before } = {}) => {
   const convo = await Conversation.findById(conversationId).select('participants');
   if (!convo) throw Object.assign(new Error('Conversation not found'), { statusCode: 404 });
 
-  const isMember = convo.participants.some(
-    (p) => (p.user._id || p.user).toString() === userId.toString() && !p.isDeleted
-  );
+  const isMember = convo.participants.some((p) => resolveUserId(p) === userId.toString() && !p.isDeleted);
   if (!isMember) throw Object.assign(new Error('Access denied'), { statusCode: 403 });
 
-  const filter = {
-    conversation:  conversationId,
-    deletedForAll: false,
-    deletedFor:    { $ne: userId },
-  };
+  const filter = { conversation: conversationId, deletedForAll: false, deletedFor: { $ne: userId } };
   if (before) {
     const pivot = await Message.findById(before).select('createdAt');
     if (pivot) filter.createdAt = { $lt: pivot.createdAt };
@@ -501,7 +473,6 @@ export const getMessages = async (conversationId, userId, { limit = 50, before }
 
   const reversed = messages.reverse();
 
-  // Attach delivery status for messages sent BY this user
   const myMessageIds = reversed
     .filter((m) => {
       const sid = m.sender?._id?.toString() || m.sender?.toString();
@@ -512,19 +483,8 @@ export const getMessages = async (conversationId, userId, { limit = 50, before }
   let statusMap = {};
   if (myMessageIds.length > 0) {
     const statuses = await MessageStatus.aggregate([
-      {
-        $match: {
-          message: { $in: myMessageIds },
-          user:    { $ne: new mongoose.Types.ObjectId(userId) },
-        },
-      },
-      {
-        $group: {
-          _id:         '$message',
-          readAt:      { $max: '$readAt' },
-          deliveredAt: { $max: '$deliveredAt' },
-        },
-      },
+      { $match: { message: { $in: myMessageIds }, user: { $ne: new mongoose.Types.ObjectId(userId) } } },
+      { $group: { _id: '$message', readAt: { $max: '$readAt' }, deliveredAt: { $max: '$deliveredAt' } } },
     ]);
     for (const s of statuses) {
       statusMap[s._id.toString()] = { readAt: s.readAt, deliveredAt: s.deliveredAt };
@@ -546,14 +506,11 @@ export const markMessagesRead = async (conversationId, userId) => {
     { conversation: conversationId, user: userId, readAt: null },
     { $set: { readAt: now, deliveredAt: now } },
   );
-
   await Conversation.updateOne(
     { _id: conversationId, 'participants.user': userId },
     { $set: { 'participants.$.lastReadAt': now } },
   );
-
   await redisClient.del(UNREAD_KEY(userId.toString())).catch(() => {});
-
   return { markedAt: now };
 };
 
@@ -564,7 +521,7 @@ export const markMessagesDelivered = async (conversationId, userId) => {
   const now = new Date();
   await MessageStatus.updateMany(
     { conversation: conversationId, user: userId, deliveredAt: null },
-    { $set: { deliveredAt: now } }
+    { $set: { deliveredAt: now } },
   );
   return { deliveredAt: now, conversationId, userId };
 };
@@ -573,7 +530,7 @@ export const markMessagesDelivered = async (conversationId, userId) => {
  * getTotalUnreadCount
  */
 export const getTotalUnreadCount = async (userId) => {
-  const key    = UNREAD_KEY(userId.toString());
+  const key = UNREAD_KEY(userId.toString());
   const cached = await redisClient.get(key).catch(() => null);
   if (cached !== null) return parseInt(cached, 10);
 
@@ -584,6 +541,8 @@ export const getTotalUnreadCount = async (userId) => {
 
 /**
  * editMessage
+ * FIX: added 15-min edit window — adjust EDIT_WINDOW_MS or remove the check
+ * if your product doesn't want a time limit.
  */
 export const editMessage = async (messageId, userId, newText) => {
   const msg = await Message.findById(messageId);
@@ -593,6 +552,9 @@ export const editMessage = async (messageId, userId, newText) => {
   }
   if (msg.type !== 'text') throw Object.assign(new Error('Only text messages can be edited'), { statusCode: 400 });
   if (msg.isDeleted || msg.deletedForAll) throw Object.assign(new Error('Cannot edit deleted message'), { statusCode: 400 });
+  if (Date.now() - msg.createdAt.getTime() > EDIT_WINDOW_MS) {
+    throw Object.assign(new Error('Edit window expired'), { statusCode: 400 });
+  }
 
   msg.editHistory.push({ text: msg.text, editedAt: new Date() });
   msg.text     = newText.trim();
@@ -604,6 +566,8 @@ export const editMessage = async (messageId, userId, newText) => {
 
 /**
  * deleteMessage — soft delete
+ * FIX: msg.media = null instead of undefined, so it actually clears on save
+ * (Mongoose can skip writing `undefined` for already-defined subdoc paths).
  */
 export const deleteMessage = async (messageId, userId, scope = 'for_me') => {
   const msg = await Message.findById(messageId);
@@ -617,7 +581,7 @@ export const deleteMessage = async (messageId, userId, scope = 'for_me') => {
     msg.deletedAt     = new Date();
     msg.isDeleted     = true;
     msg.text          = null;
-    msg.media         = undefined;
+    msg.media         = null;
   } else {
     if (!msg.deletedFor.map(String).includes(userId.toString())) {
       msg.deletedFor.push(userId);
@@ -635,14 +599,12 @@ export const reactToMessage = async (messageId, userId, emoji) => {
   const msg = await Message.findById(messageId);
   if (!msg) throw Object.assign(new Error('Message not found'), { statusCode: 404 });
 
-  const existingIdx = msg.reactions.findIndex(
-    (r) => r.user.toString() === userId.toString() && r.emoji === emoji
-  );
+  const existingIdx = msg.reactions.findIndex((r) => r.user.toString() === userId.toString() && r.emoji === emoji);
   if (existingIdx !== -1) {
-    msg.reactions.splice(existingIdx, 1); // toggle off same emoji
+    msg.reactions.splice(existingIdx, 1);
   } else {
     const userIdx = msg.reactions.findIndex((r) => r.user.toString() === userId.toString());
-    if (userIdx !== -1) msg.reactions.splice(userIdx, 1); // remove old reaction
+    if (userIdx !== -1) msg.reactions.splice(userIdx, 1);
     msg.reactions.push({ user: userId, emoji, at: new Date() });
   }
 
@@ -654,28 +616,27 @@ export const reactToMessage = async (messageId, userId, emoji) => {
  * pinMessage
  */
 export const pinMessage = async (messageId, userId, pin = true) => {
-  const msg = await Message.findById(messageId).populate({
-    path:   'conversation',
-    select: 'participants',
-  });
+  const msg = await Message.findById(messageId).populate({ path: 'conversation', select: 'participants' });
   if (!msg) throw Object.assign(new Error('Message not found'), { statusCode: 404 });
 
-  const isMember = msg.conversation.participants.some(
-    (p) => (p.user._id || p.user).toString() === userId.toString() && !p.isDeleted
-  );
+  const isMember = msg.conversation.participants.some((p) => resolveUserId(p) === userId.toString() && !p.isDeleted);
   if (!isMember) throw Object.assign(new Error('Not a member'), { statusCode: 403 });
 
   msg.isPinned = pin;
+  msg.pinnedBy = pin ? userId : null;
+  msg.pinnedAt = pin ? new Date() : null;
   await msg.save();
   return msg;
 };
 
 /**
- * forwardMessage — copy to target conversation
+ * forwardMessage — copy to target conversation.
+ * Membership check happens inside sendMessage() for the target conversation.
  */
 export const forwardMessage = async (messageId, senderId, targetConversationId) => {
   const original = await Message.findById(messageId);
   if (!original) throw Object.assign(new Error('Message not found'), { statusCode: 404 });
+  if (original.deletedForAll) throw Object.assign(new Error('Cannot forward a deleted message'), { statusCode: 400 });
 
   return sendMessage({
     conversationId: targetConversationId,
@@ -711,12 +672,7 @@ export const searchMessages = async (conversationId, userId, query, { limit = 30
  */
 export const getPinnedMessages = async (conversationId, userId) => {
   await getConversationById(conversationId, userId);
-  return Message.find({
-    conversation:  conversationId,
-    isPinned:      true,
-    deletedForAll: false,
-    deletedFor:    { $ne: userId },
-  })
+  return Message.find({ conversation: conversationId, isPinned: true, deletedForAll: false, deletedFor: { $ne: userId } })
     .populate('sender', 'name avatar')
     .lean();
 };
@@ -726,6 +682,9 @@ export const getPinnedMessages = async (conversationId, userId) => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 export const blockUser = async (blockerId, targetUserId) => {
+  if (blockerId.toString() === targetUserId.toString()) {
+    throw Object.assign(new Error('Cannot block yourself'), { statusCode: 400 });
+  }
   const exists = await UserBlock.findOne({ blocker: blockerId, blocked: targetUserId });
   if (exists) return exists;
   return UserBlock.create({ blocker: blockerId, blocked: targetUserId });
@@ -737,21 +696,15 @@ export const unblockUser = async (blockerId, targetUserId) => {
 };
 
 export const getBlockedUsers = async (userId) => {
-  return UserBlock.find({ blocker: userId })
-    .populate('blocked', 'name avatar role')
-    .lean();
+  return UserBlock.find({ blocker: userId }).populate('blocked', 'name avatar role').lean();
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ONLINE PRESENCE
 // ═════════════════════════════════════════════════════════════════════════════
 
-export const setUserOnline  = (userId, socketId) =>
-  redisClient.setEx(ONLINE_KEY(userId), 120, socketId).catch(() => {});
-
-export const setUserOffline = (userId) =>
-  redisClient.del(ONLINE_KEY(userId)).catch(() => {});
-
+export const setUserOnline  = (userId, socketId) => redisClient.setEx(ONLINE_KEY(userId), 120, socketId).catch(() => {});
+export const setUserOffline = (userId) => redisClient.del(ONLINE_KEY(userId)).catch(() => {});
 export const isUserOnline   = async (userId) => {
   const v = await redisClient.get(ONLINE_KEY(userId)).catch(() => null);
   return v !== null;
@@ -777,15 +730,11 @@ export const getTypingUsers = async (conversationId, participantIds) => {
 // LINKED CONVERSATION (internal)
 // ═════════════════════════════════════════════════════════════════════════════
 
-export const createLinkedConversation = async ({
-  type = 'order', refModel, refId, participantIds = [], name,
-}) => {
+export const createLinkedConversation = async ({ type = 'order', refModel, refId, participantIds = [], name }) => {
   const users = await User.find({ _id: { $in: participantIds } }).select('role');
   return Conversation.create({
     type, refModel, refId, name,
-    participants: users.map((u) => ({
-      user: u._id, role: u.role, joinedAt: new Date(),
-    })),
+    participants: users.map((u) => ({ user: u._id, role: u.role, joinedAt: new Date() })),
   });
 };
 

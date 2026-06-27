@@ -4,10 +4,10 @@
  * DeductStockPage.jsx — Pharmacy Inventory Deduction
  *
  * Design Direction: "Precision Reduction"
- *   Two-panel layout mirroring AddStockPage.
- *   Red/error accent palette signals destructive intent.
- *   Live animated stock bar, per-batch selector, reason chip grid.
- *   No prop drilling — all state local, all API via slice thunks.
+ * Two-panel layout mirroring AddStockPage.
+ * Red/error accent palette signals destructive intent.
+ * Live animated stock bar, per-batch selector, reason chip grid.
+ * Updated to consume MedicineInventory schema (where medicine is populated).
  */
 
 import {
@@ -41,6 +41,7 @@ import {
   Check,
   Info,
   ShieldAlert,
+  HelpCircle,
 } from 'lucide-react';
 import {
   deductStock,
@@ -163,11 +164,11 @@ const StepIndicator = memo(function StepIndicator({ step }) {
 
 // ─── Medicine Card (Step 1) ───────────────────────────────────────────────────
 
-const MedicineCard = memo(function MedicineCard({ med, onSelect, index }) {
-  const storeQty = useMemo(
-    () => (med.storeInventory || []).reduce((s, inv) => s + (inv.stockQuantity || 0), 0),
-    [med.storeInventory]
-  );
+const MedicineCard = memo(function MedicineCard({ invRecord, onSelect, index }) {
+  // Extract medicine data from populated field
+  const med = invRecord.medicineId || {};
+  const storeQty = invRecord.stockQuantity || 0;
+  
   const isOut  = storeQty === 0;
   const isLow  = storeQty > 0 && storeQty <= LOW_STOCK_THRESHOLD;
   const catCls = CATEGORY_COLORS[med.category] ?? CATEGORY_COLORS.default;
@@ -180,10 +181,10 @@ const MedicineCard = memo(function MedicineCard({ med, onSelect, index }) {
       animate="visible"
       custom={index * 0.3}
       layout
-      onClick={() => !isOut && onSelect(med)}
+      onClick={() => !isOut && onSelect(invRecord)}
       role="button"
       tabIndex={isOut ? -1 : 0}
-      onKeyDown={(e) => !isOut && e.key === 'Enter' && onSelect(med)}
+      onKeyDown={(e) => !isOut && e.key === 'Enter' && onSelect(invRecord)}
       aria-label={`Select ${med.brandName} for deduction${isOut ? ' (out of stock)' : ''}`}
       aria-disabled={isOut}
       className={[
@@ -236,11 +237,11 @@ const MedicineCard = memo(function MedicineCard({ med, onSelect, index }) {
         </p>
         <div className="flex flex-wrap items-center gap-3">
           <span className={`text-[11px] font-semibold ${isOut ? 'text-error' : isLow ? 'text-warning' : 'text-success'}`}>
-            <Layers size={11} className="inline mr-1" />{storeQty} units
+            <Layers size={11} className="inline mr-1" />{storeQty} units in store
           </span>
-          {med.mrp != null && (
+          {invRecord.mrp != null && (
             <span className="text-[11px] text-base-content/40 flex items-center gap-0.5">
-              <IndianRupee size={10} />MRP {med.mrp}
+              <IndianRupee size={10} />MRP {invRecord.mrp}
             </span>
           )}
           {med.isPrescriptionRequired && (
@@ -269,7 +270,7 @@ const EmptySearch = memo(function EmptySearch({ query }) {
       <div className="w-14 h-14 rounded-2xl bg-base-200 flex items-center justify-center mb-4">
         <Package size={24} className="text-base-content/30" />
       </div>
-      <p className="text-sm font-semibold text-base-content/50">No medicines found</p>
+      <p className="text-sm font-semibold text-base-content/50">No medicines found in inventory</p>
       {query && (
         <p className="text-xs text-base-content/35 mt-1">
           No results for "<span className="font-medium text-base-content/50">{query}</span>"
@@ -281,12 +282,10 @@ const EmptySearch = memo(function EmptySearch({ query }) {
 
 // ─── Selected Medicine Banner (Step 2) ────────────────────────────────────────
 
-const SelectedMedicineBanner = memo(function SelectedMedicineBanner({ medicine, onBack }) {
-  const storeQty = useMemo(
-    () => (medicine.storeInventory || []).reduce((s, inv) => s + (inv.stockQuantity || 0), 0),
-    [medicine.storeInventory]
-  );
-  const primaryImg = medicine.images?.find((img) => img.isPrimary)?.url;
+const SelectedMedicineBanner = memo(function SelectedMedicineBanner({ invRecord, onBack }) {
+  const med = invRecord?.medicineId || {};
+  const storeQty = invRecord?.stockQuantity || 0;
+  const primaryImg = med.images?.find((img) => img.isPrimary)?.url;
 
   return (
     <div className="glass-card p-4 flex items-center gap-4">
@@ -305,12 +304,12 @@ const SelectedMedicineBanner = memo(function SelectedMedicineBanner({ medicine, 
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-black text-base-content text-sm leading-tight">{medicine.brandName}</span>
-          <span className={`badge text-[10px] px-2 py-0.5 border rounded-full font-semibold ${CATEGORY_COLORS[medicine.category] ?? CATEGORY_COLORS.default}`}>
-            {medicine.category}
+          <span className="font-black text-base-content text-sm leading-tight">{med.brandName}</span>
+          <span className={`badge text-[10px] px-2 py-0.5 border rounded-full font-semibold ${CATEGORY_COLORS[med.category] ?? CATEGORY_COLORS.default}`}>
+            {med.category}
           </span>
         </div>
-        <p className="text-xs text-base-content/45 truncate mt-0.5">{medicine.genericName} · {medicine.dosage}</p>
+        <p className="text-xs text-base-content/45 truncate mt-0.5">{med.genericName} · {med.dosage}</p>
       </div>
       <div className="text-right shrink-0">
         <div className={`text-lg font-black tabular-nums ${storeQty <= LOW_STOCK_THRESHOLD ? (storeQty === 0 ? 'text-error' : 'text-warning') : 'text-success'}`}>
@@ -324,41 +323,36 @@ const SelectedMedicineBanner = memo(function SelectedMedicineBanner({ medicine, 
 
 // ─── Stock Bar Preview ────────────────────────────────────────────────────────
 
-const StockPreview = memo(function StockPreview({ medicine, qty, batchNumber }) {
-  const totalQty = useMemo(
-    () => (medicine?.storeInventory || []).reduce((s, inv) => s + (inv.stockQuantity || 0), 0),
-    [medicine?.storeInventory]
-  );
+const StockPreview = memo(function StockPreview({ invRecord, qty, batchNumber }) {
+  const totalQty = invRecord?.stockQuantity || 0;
 
-  // If a batch is selected, show that batch's available qty
-  const batchQty = useMemo(() => {
-    if (!batchNumber) return totalQty;
-    const match = (medicine?.storeInventory || []).find((inv) => inv.batchNumber === batchNumber);
-    return match ? match.stockQuantity : totalQty;
-  }, [medicine, batchNumber, totalQty]);
-
+  // We preview against total store quantity unless they specified a batch,
+  // in which case we still use totalQty for bounds checking visually, 
+  // relying on the backend to fail if that specific batch lacks stock.
   const deducting = Number(qty) || 0;
-  const remaining = batchQty - deducting;
-  const isOver    = deducting > batchQty;
+  const remaining = totalQty - deducting;
+  const isOver    = deducting > totalQty;
   const isLow     = remaining >= 0 && remaining <= LOW_STOCK_THRESHOLD;
-  const pct       = batchQty > 0 ? Math.max(0, (remaining / batchQty) * 100) : 0;
+  const pct       = totalQty > 0 ? Math.max(0, (remaining / totalQty) * 100) : 0;
 
-  if (!medicine) return null;
+  if (!invRecord) return null;
 
   return (
     <div className="rounded-xl border border-base-300 bg-base-200/50 overflow-hidden">
       <div className="px-4 py-3 border-b border-base-300 flex items-center gap-2">
         <BarChart3 size={13} className="text-error" />
         <span className="text-xs font-bold text-base-content/60 uppercase tracking-wider">
-          {batchNumber ? `Batch Preview` : 'Stock Preview'}
+          Stock Preview
         </span>
         {batchNumber && (
-          <span className="text-[10px] font-mono text-base-content/40 ml-auto">{batchNumber}</span>
+          <span className="text-[10px] font-mono text-base-content/40 ml-auto bg-base-300 px-2 py-0.5 rounded">
+            Batch: {batchNumber}
+          </span>
         )}
       </div>
       <div className="p-4 grid grid-cols-3 gap-3 mb-2">
         {[
-          { label: 'Available', value: batchQty, color: 'text-base-content' },
+          { label: 'Available', value: totalQty, color: 'text-base-content' },
           { label: 'Deducting', value: deducting > 0 ? `-${deducting}` : '—', color: isOver ? 'text-error' : 'text-error/70' },
           { label: 'Remaining', value: deducting > 0 ? (isOver ? 'Over!' : remaining) : '—',
             color: isOver ? 'text-error font-black' : isLow && deducting > 0 ? 'text-warning' : deducting > 0 ? 'text-success' : 'text-base-content' },
@@ -389,7 +383,7 @@ const StockPreview = memo(function StockPreview({ medicine, qty, batchNumber }) 
         <div className="mx-3 mb-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-error/10 border border-error/25">
           <AlertCircle size={13} className="text-error mt-0.5 shrink-0" />
           <p className="text-[11px] text-error font-medium leading-snug">
-            Exceeds available stock of {batchQty} units.
+            Exceeds total available stock of {totalQty} units.
           </p>
         </div>
       )}
@@ -433,94 +427,28 @@ const ReasonGrid = memo(function ReasonGrid({ value, onChange }) {
   );
 });
 
-// ─── Batch Selector ───────────────────────────────────────────────────────────
+// ─── Batch Selector Fallback ──────────────────────────────────────────────────
+// Returns a text input since detailed batch lists aren't attached to the basic /medicines inventory response.
 
-const BatchSelector = memo(function BatchSelector({ batches, value, onChange }) {
-  if (batches.length === 0) {
-    return (
-      <div className="relative">
-        <Hash size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/35 pointer-events-none" />
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="e.g. BATCH-001 (leave blank for any)"
-          className="input-field w-full pl-9"
-          aria-label="Batch number"
-        />
-      </div>
-    );
-  }
-
+const BatchSelector = memo(function BatchSelector({ value, onChange }) {
   return (
-    <div className="space-y-2">
-      {/* "Any batch" option */}
-      <label
-        className={[
-          'flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-150',
-          !value ? 'border-error/40 bg-error/5' : 'border-base-300 bg-base-200/50 hover:border-base-content/20',
-        ].join(' ')}
-      >
-        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${!value ? 'border-error bg-error' : 'border-base-content/25'}`}>
-          {!value && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-        </div>
-        <div className="flex-1 min-w-0">
-          <span className="text-xs font-semibold text-base-content">Any batch</span>
-          <span className="text-[10px] text-base-content/40 ml-2">system selects automatically</span>
-        </div>
-        <input type="radio" className="sr-only" checked={!value} onChange={() => onChange('')} />
-      </label>
-
-      {batches.map((inv, i) => {
-        const selected = value === inv.batchNumber;
-        const expDate  = inv.expiryDate ? new Date(inv.expiryDate) : null;
-        const daysLeft = expDate ? Math.ceil((expDate.getTime() - Date.now()) / 86400000) : null;
-        const isExpired = daysLeft !== null && daysLeft <= 0;
-
-        return (
-          <label
-            key={i}
-            className={[
-              'flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-150',
-              selected ? 'border-error/40 bg-error/5' : 'border-base-300 bg-base-200/50 hover:border-base-content/20',
-              isExpired ? 'opacity-60' : '',
-            ].join(' ')}
-          >
-            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${selected ? 'border-error bg-error' : 'border-base-content/25'}`}>
-              {selected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <span className="text-xs font-semibold text-base-content font-mono">{inv.batchNumber || '—'}</span>
-              {isExpired && <span className="ml-2 text-[10px] text-error font-bold">EXPIRED</span>}
-            </div>
-            <div className="flex items-center gap-3 text-[11px] shrink-0">
-              <span className={`font-bold tabular-nums ${inv.stockQuantity <= LOW_STOCK_THRESHOLD ? 'text-warning' : 'text-success'}`}>
-                {inv.stockQuantity} u
-              </span>
-              {daysLeft !== null && (
-                <span className={`flex items-center gap-1 ${daysLeft <= 30 ? 'text-error' : 'text-base-content/35'}`}>
-                  <Clock size={10} />
-                  {isExpired ? 'Expired' : `${daysLeft}d`}
-                </span>
-              )}
-            </div>
-            <input
-              type="radio"
-              className="sr-only"
-              checked={selected}
-              onChange={() => onChange(inv.batchNumber)}
-              aria-label={`Batch ${inv.batchNumber}`}
-            />
-          </label>
-        );
-      })}
+    <div className="relative">
+      <Hash size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/35 pointer-events-none" />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="e.g. BATCH-001"
+        className="input-field w-full pl-9"
+        aria-label="Batch number"
+      />
     </div>
   );
 });
 
 // ─── Success Overlay ──────────────────────────────────────────────────────────
 
-const SuccessOverlay = memo(function SuccessOverlay({ medicine, qty }) {
+const SuccessOverlay = memo(function SuccessOverlay({ invRecord, qty }) {
   return (
     <motion.div
       variants={SCALE_IN}
@@ -543,7 +471,7 @@ const SuccessOverlay = memo(function SuccessOverlay({ medicine, qty }) {
         <h3 className="text-2xl font-black text-base-content tracking-tight mb-1">Stock Deducted!</h3>
         <p className="text-sm text-base-content/55">
           <span className="font-semibold text-base-content">{qty} units</span> removed from{' '}
-          <span className="font-semibold text-error">{medicine?.brandName}</span>
+          <span className="font-semibold text-error">{invRecord?.medicineId?.brandName}</span>
         </p>
       </motion.div>
       <motion.div
@@ -566,7 +494,7 @@ export default function DeductStockPage() {
 
   // ── Local state ───────────────────────────────────────────────────────────
   const [search, setSearch]         = useState('');
-  const [selected, setSelected]     = useState(null);
+  const [selected, setSelected]     = useState(null); // stores the MedicineInventory doc
   const [step, setStep]             = useState(1);
   const [submitted, setSubmitted]   = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
@@ -606,8 +534,8 @@ export default function DeductStockPage() {
   }, [success.deductStock, dispatch]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
-  const handleSelect = useCallback((med) => {
-    setSelected(med);
+  const handleSelect = useCallback((invRecord) => {
+    setSelected(invRecord);
     setForm({ quantity: '', batchNumber: '', reason: '' });
     setFieldErrors({});
     dispatch(clearError('deductStock'));
@@ -633,19 +561,8 @@ export default function DeductStockPage() {
   }, []);
 
   // ── Derived values ────────────────────────────────────────────────────────
-
-  const totalStock = useMemo(
-    () => (selected?.storeInventory || []).reduce((s, inv) => s + (inv.stockQuantity || 0), 0),
-    [selected?.storeInventory]
-  );
-
-  const batchStock = useMemo(() => {
-    if (!form.batchNumber || !selected) return totalStock;
-    const match = (selected.storeInventory || []).find((inv) => inv.batchNumber === form.batchNumber);
-    return match ? match.stockQuantity : totalStock;
-  }, [selected, form.batchNumber, totalStock]);
-
-  const isOverDeducting = Number(form.quantity) > batchStock;
+  const totalStock = selected?.stockQuantity || 0;
+  const isOverDeducting = Number(form.quantity) > totalStock;
 
   // ── Validation ────────────────────────────────────────────────────────────
   const validate = useCallback(() => {
@@ -653,23 +570,26 @@ export default function DeductStockPage() {
     if (!form.quantity || Number(form.quantity) <= 0)
       errs.quantity = 'Enter a quantity greater than 0';
     else if (isOverDeducting)
-      errs.quantity = `Cannot exceed available stock (${batchStock} units)`;
+      errs.quantity = `Cannot exceed total stock of ${totalStock} units.`;
+      
     setFieldErrors(errs);
     return Object.keys(errs).length === 0;
-  }, [form.quantity, isOverDeducting, batchStock]);
+  }, [form.quantity, isOverDeducting, totalStock]);
 
   const handleSubmit = useCallback((e) => {
     e.preventDefault();
     if (!selected || !validate()) return;
+    
     dispatch(deductStock({
-      medicineId:  selected._id,
+      medicineId:  selected.medicineId._id, // Must pass actual Medicine _id
       quantity:    Number(form.quantity),
       batchNumber: form.batchNumber || undefined,
       reason:      form.reason || undefined,
+      movementType: 'Adjustment_Sub' // Can be inferred/selected based on reason if needed in future
     }));
   }, [selected, form, validate, dispatch]);
 
-  const batches = useMemo(() => selected?.storeInventory || [], [selected?.storeInventory]);
+  const medData = selected?.medicineId;
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
@@ -700,7 +620,7 @@ export default function DeductStockPage() {
               <p className="text-sm text-base-content/50 ml-10">
                 {step === 1
                   ? 'Select a medicine to reduce inventory'
-                  : `Deducting from · ${selected?.brandName}`}
+                  : `Deducting from · ${medData?.brandName}`}
               </p>
             </div>
             <StepIndicator step={step} />
@@ -721,7 +641,7 @@ export default function DeductStockPage() {
                     ref={searchRef}
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search by brand name, generic name, or manufacturer…"
+                    placeholder="Search inventory by brand name, generic name, or manufacturer…"
                     aria-label="Search medicines"
                     className="flex-1 bg-transparent text-sm text-base-content placeholder:text-base-content/35 outline-none"
                   />
@@ -747,8 +667,8 @@ export default function DeductStockPage() {
               ) : (
                 <div className="space-y-2.5" role="list" aria-label="Medicine search results">
                   <AnimatePresence>
-                    {medicines.map((med, i) => (
-                      <MedicineCard key={med._id} med={med} onSelect={handleSelect} index={i} />
+                    {medicines.map((invRecord, i) => (
+                      <MedicineCard key={invRecord._id} invRecord={invRecord} onSelect={handleSelect} index={i} />
                     ))}
                   </AnimatePresence>
                 </div>
@@ -761,13 +681,13 @@ export default function DeductStockPage() {
             <motion.div key="step2" variants={SLIDE_LEFT} initial="hidden" animate="visible" exit="exit">
               {/* Banner */}
               <motion.div variants={FADE_UP} initial="hidden" animate="visible" custom={0} className="mb-5">
-                <SelectedMedicineBanner medicine={selected} onBack={handleBack} />
+                <SelectedMedicineBanner invRecord={selected} onBack={handleBack} />
               </motion.div>
 
               <AnimatePresence mode="wait">
                 {submitted ? (
                   <motion.div key="success" variants={FADE_UP} initial="hidden" animate="visible" exit="exit">
-                    <SuccessOverlay medicine={selected} qty={form.quantity} />
+                    <SuccessOverlay invRecord={selected} qty={form.quantity} />
                   </motion.div>
                 ) : (
                   <motion.div
@@ -782,7 +702,7 @@ export default function DeductStockPage() {
                     <form
                       onSubmit={handleSubmit}
                       noValidate
-                      className="lg:col-span-3 card p-6 space-y-5"
+                      className="lg:col-span-3 card p-6 space-y-6"
                       aria-label="Deduct stock form"
                     >
                       {/* Section header */}
@@ -795,9 +715,11 @@ export default function DeductStockPage() {
 
                       {/* Quantity */}
                       <div>
-                        <label htmlFor="deductQty" className="block text-[11px] font-bold text-base-content/60 uppercase tracking-wider mb-1.5">
+                        <label htmlFor="deductQty" className="block text-[11px] font-bold text-base-content/60 uppercase tracking-wider mb-1">
                           Quantity to Deduct <span className="text-error" aria-hidden="true">*</span>
                         </label>
+                        <p className="text-[10px] text-base-content/40 mb-2">Enter the exact physical number of units you are removing from the shelf.</p>
+                        
                         <div className="relative">
                           <Hash size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/35 pointer-events-none" />
                           <input
@@ -805,11 +727,11 @@ export default function DeductStockPage() {
                             id="deductQty"
                             type="number"
                             min="1"
-                            max={batchStock}
+                            max={totalStock}
                             inputMode="numeric"
                             value={form.quantity}
                             onChange={(e) => handleFieldChange('quantity', e.target.value)}
-                            placeholder={`Max: ${batchStock}`}
+                            placeholder={`Max: ${totalStock}`}
                             aria-required="true"
                             aria-invalid={!!fieldErrors.quantity}
                             className={`input-field w-full pl-9 ${fieldErrors.quantity ? 'border-error focus:border-error focus:ring-error/30' : ''}`}
@@ -822,16 +744,18 @@ export default function DeductStockPage() {
                         )}
                       </div>
 
-                      {/* Batch */}
+                      {/* Batch Number */}
                       <div>
-                        <label className="block text-[11px] font-bold text-base-content/60 uppercase tracking-wider mb-1.5">
+                        <label className="block text-[11px] font-bold text-base-content/60 uppercase tracking-wider mb-1">
                           Batch Number
                           <span className="ml-2 text-base-content/35 font-normal normal-case text-[10px]">
-                            optional — deducts from any batch if blank
+                            (optional)
                           </span>
                         </label>
+                        <p className="text-[10px] text-base-content/40 mb-2">
+                          Specify if you are removing stock from a particular batch. If left blank, the system automatically pulls from the oldest batch (FEFO).
+                        </p>
                         <BatchSelector
-                          batches={batches}
                           value={form.batchNumber}
                           onChange={(v) => handleFieldChange('batchNumber', v)}
                         />
@@ -839,10 +763,13 @@ export default function DeductStockPage() {
 
                       {/* Reason */}
                       <div>
-                        <label className="block text-[11px] font-bold text-base-content/60 uppercase tracking-wider mb-2">
-                          Reason
-                          <span className="ml-2 text-base-content/35 font-normal normal-case text-[10px]">optional</span>
+                        <label className="block text-[11px] font-bold text-base-content/60 uppercase tracking-wider mb-1">
+                          Deduction Reason
+                          <span className="ml-2 text-base-content/35 font-normal normal-case text-[10px]">(optional, but recommended)</span>
                         </label>
+                        <p className="text-[10px] text-base-content/40 mb-2">
+                          Categorize why this stock is being removed for accurate financial reporting and auditing.
+                        </p>
                         <ReasonGrid
                           value={form.reason}
                           onChange={(v) => handleFieldChange('reason', v)}
@@ -850,7 +777,7 @@ export default function DeductStockPage() {
                         {form.reason === 'Other' && (
                           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="mt-2 overflow-hidden">
                             <textarea
-                              placeholder="Describe the reason…"
+                              placeholder="Describe the reason for the deduction in detail…"
                               rows={2}
                               className="input-field w-full resize-none text-xs"
                               aria-label="Custom reason"
@@ -893,28 +820,54 @@ export default function DeductStockPage() {
                     <aside className="lg:col-span-2 space-y-4" aria-label="Deduction details sidebar">
                       {/* Live preview */}
                       <motion.div variants={FADE_UP} initial="hidden" animate="visible" custom={2}>
-                        <StockPreview medicine={selected} qty={form.quantity} batchNumber={form.batchNumber} />
+                        <StockPreview invRecord={selected} qty={form.quantity} batchNumber={form.batchNumber} />
                       </motion.div>
 
-                      {/* Medicine meta */}
-                      <motion.div variants={FADE_UP} initial="hidden" animate="visible" custom={3} className="card p-4 space-y-3">
-                        <div className="flex items-center gap-2 pb-2 border-b border-base-300">
-                          <Info size={13} className="text-error" />
-                          <span className="text-[11px] font-bold text-base-content/50 uppercase tracking-widest">Medicine Details</span>
-                        </div>
-                        {[
-                          { label: 'Generic',      value: selected?.genericName },
-                          { label: 'Manufacturer', value: selected?.manufacturer },
-                          { label: 'Packaging',    value: selected?.packaging },
-                          { label: 'MRP',          value: selected?.mrp != null ? `₹${selected.mrp}` : null },
-                          { label: 'Schedule',     value: selected?.schedule !== 'None' ? `Schedule ${selected?.schedule}` : 'OTC' },
-                          { label: 'GST',          value: selected?.gstPercentage != null ? `${selected.gstPercentage}%` : null },
-                        ].filter((r) => r.value).map(({ label, value }) => (
-                          <div key={label} className="flex justify-between items-baseline gap-2">
-                            <span className="text-xs text-base-content/40 shrink-0">{label}</span>
-                            <span className="text-xs font-semibold text-base-content text-right truncate">{value}</span>
+                      {/* Info & Help Guides */}
+                      <motion.div variants={FADE_UP} initial="hidden" animate="visible" custom={3} className="space-y-4">
+                        
+                        {/* Medicine Meta Data */}
+                        <div className="card p-4 space-y-3">
+                          <div className="flex items-center gap-2 pb-2 border-b border-base-300">
+                            <Info size={13} className="text-error" />
+                            <span className="text-[11px] font-bold text-base-content/50 uppercase tracking-widest">Medicine Details</span>
                           </div>
-                        ))}
+                          {[
+                            { label: 'Generic',      value: medData?.genericName },
+                            { label: 'Manufacturer', value: medData?.manufacturer },
+                            { label: 'Packaging',    value: medData?.packaging },
+                            { label: 'Store MRP',    value: selected?.mrp != null ? `₹${selected.mrp}` : null },
+                            { label: 'Schedule',     value: medData?.schedule && medData.schedule !== 'None' ? `Schedule ${medData.schedule}` : 'OTC' },
+                            { label: 'Location',     value: selected?.rackLocation || 'Not Assigned' },
+                          ].filter((r) => r.value).map(({ label, value }) => (
+                            <div key={label} className="flex justify-between items-baseline gap-2">
+                              <span className="text-xs text-base-content/40 shrink-0">{label}</span>
+                              <span className="text-xs font-semibold text-base-content text-right truncate">{value}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Deductions Help Guide */}
+                        <div className="card p-4 bg-error/5 border-error/20">
+                          <h4 className="text-error text-[11px] font-bold uppercase tracking-widest mb-3 flex items-center gap-2">
+                            <HelpCircle size={14}/> How Deductions Work
+                          </h4>
+                          <ul className="text-[11px] text-base-content/60 space-y-2.5 list-none">
+                            <li className="flex gap-2">
+                              <span className="text-error mt-0.5">•</span>
+                              <span><strong>FEFO Auto-Deduction:</strong> If you leave the <em>Batch Number</em> empty, the system smartly applies First-Expire-First-Out logic and deducts from the batch that is closest to expiry.</span>
+                            </li>
+                            <li className="flex gap-2">
+                              <span className="text-error mt-0.5">•</span>
+                              <span><strong>Audit Trails:</strong> Every stock reduction is recorded permanently in the store's <code className="bg-base-200 px-1 py-0.5 rounded text-[10px]">InventoryMovement</code> ledger tied to your staff account.</span>
+                            </li>
+                            <li className="flex gap-2">
+                              <span className="text-error mt-0.5">•</span>
+                              <span><strong>Alerts:</strong> Deducting units below the store's set minimum threshold (<strong className="text-base-content">{LOW_STOCK_THRESHOLD} units</strong>) will automatically fire a low-stock alert to the admin portal.</span>
+                            </li>
+                          </ul>
+                        </div>
+
                       </motion.div>
                     </aside>
                   </motion.div>

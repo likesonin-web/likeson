@@ -332,7 +332,7 @@ const TransportPartnerDashboard = ({ children }) => {
             className="p-2 rounded-lg bg-base-300/40 hover:bg-warning/10 hover:text-warning transition-all"
             aria-label="Toggle Sidebar"
           >
-            {isSidebarOpen ? <PanelLeftClose size={17} /> : <Menu size={17} />}
+            {isSidebarOpen ? <PanelLeftClose size={17} /> : <Menu size={17}  className="hidden md:block" />}
           </button>
         </div>
 
@@ -386,7 +386,7 @@ const TransportPartnerDashboard = ({ children }) => {
                 onClick={() => setIsSidebarOpen(true)}
                 className="p-2 hover:bg-base-200 rounded-lg transition-colors"
               >
-                <Menu size={19} />
+                <Menu size={19} className="md:hidden block" />
               </button>
             )}
 
@@ -508,7 +508,7 @@ const TransportPartnerDashboard = ({ children }) => {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
-            className="relative rounded-[1rem] border border-base-300 bg-base-200/35 min-h-[75vh] p-5 shadow-inner overflow-hidden backdrop-blur-sm"
+            className="relative rounded-[1rem] border border-base-300 bg-base-200/35 min-h-[100vh] p-5 shadow-inner overflow-hidden backdrop-blur-sm"
           >
             {/* Subtle warm glow top-right */}
             <div className="pointer-events-none absolute top-0 right-0 w-[500px] h-[500px] bg-warning/4 blur-[120px] rounded-full" />

@@ -447,6 +447,20 @@ export const removeServiceZone = createAsyncThunk(
   }
 );
 
+export const updateServiceZone = createAsyncThunk(
+  'soloDriver/updateServiceZone',
+  async ({ zoneId, ...payload }, thunkAPI) => {
+    try {
+      const { data } = await API.patch(`${BASE}/service-zones/${zoneId}`, payload);
+      toast.success(data.message || 'Service zone updated');
+      return data.data; // Returns the single updated zone object
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Failed to update service zone');
+      return rejectWith(thunkAPI, err, 'Failed to update service zone');
+    }
+  }
+);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // §G  PRICING THUNKS
 // Routes: GET /pricing, PUT /pricing
@@ -948,10 +962,11 @@ const initialState = {
     dispatch:              false,
     updateDispatchStatus:  false,
     updateDispatchShift:   false,
-    // Service Zones
+ // Service Zones
     serviceZones:          false,
     addZone:               false,
     removeZone:            false,
+    updateZone:            false,
     // Pricing
     pricing:               false,
     updatePricing:         false,
@@ -1246,6 +1261,18 @@ const soloDriverSlice = createSlice({
         state.serviceZones        = state.serviceZones.filter(
           (z) => String(z._id) !== String(action.payload)
         );
+      })
+
+      .addCase(updateServiceZone.pending,   setLoading('updateZone'))
+      .addCase(updateServiceZone.rejected,  setError('updateZone'))
+      .addCase(updateServiceZone.fulfilled, (state, action) => {
+        state.loading.updateZone = false;
+        const updatedZone = action.payload;
+        if (state.serviceZones && updatedZone) {
+          state.serviceZones = state.serviceZones.map((z) =>
+            String(z._id) === String(updatedZone._id) ? updatedZone : z
+          );
+        }
       })
 
     // ── §G  Pricing ────────────────────────────────────────────────────────

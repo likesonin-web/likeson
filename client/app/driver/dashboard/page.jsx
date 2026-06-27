@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useDispatch, useSelector } from 'react-redux';
@@ -8,10 +8,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 // ── Lucide ────────────────────────────────────────────────────────────────────
 import {
-  Menu, X, ChevronRight, ChevronDown,
+  Menu, X, ChevronRight,
   MapPin, AlertCircle, TrendingUp, Star,
   Activity, Navigation, Zap, Clock,
-  Shield, Wifi, LogOut,
+  Shield, Wifi, LogOut, Bell, Settings,
+  Award, BarChart2, Car, FileText,
+  User, CreditCard, CheckCircle2,
+  ChevronDown, Radio,
 } from 'lucide-react';
 
 // ── Recharts ──────────────────────────────────────────────────────────────────
@@ -19,13 +22,6 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip,
   ResponsiveContainer, RadialBarChart, RadialBar,
 } from 'recharts';
-
-// ── Driver nav links ──────────────────────────────────────────────────────────
-import {
-  DRIVER_DASHBOARD_LINKS,
-  DRIVER_TOP_RIGHT_LINKS,
-  DRIVER_PROFILE_LINKS,
-} from '@/constants/driverlinks';
 
 // ── Redux slice thunks ────────────────────────────────────────────────────────
 import {
@@ -36,6 +32,13 @@ import {
   resetTPState,
 } from '@/store/slices/transportPartnerSlice';
 
+// ── Navigation Constants ──────────────────────────────────────────────────────
+// Update this path to match exactly where you saved the constants file
+import { 
+  DRIVER_DASHBOARD_LINKS, 
+  DRIVER_TOP_RIGHT_LINKS 
+} from '../../../constants/driverlinks'; 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,10 +46,34 @@ import {
 const STATUS_OPTIONS = ['Available', 'On-Break', 'Offline'];
 
 const STATUS_META = {
-  Available: { colorClass: 'text-success bg-success', label: 'Available', shadow: 'shadow-success' },
-  'On-Trip': { colorClass: 'text-warning bg-warning', label: 'On Trip', shadow: 'shadow-warning' },
-  'On-Break':{ colorClass: 'text-info bg-info',       label: 'On Break',  shadow: 'shadow-info' },
-  Offline:   { colorClass: 'text-error bg-error',     label: 'Offline',   shadow: 'shadow-error' },
+  Available: {
+    label: 'Available',
+    color: 'var(--success)',
+    bg: 'color-mix(in srgb, var(--success), transparent 88%)',
+    border: 'color-mix(in srgb, var(--success), transparent 55%)',
+    textClass: 'text-success',
+  },
+  'On-Trip': {
+    label: 'On Trip',
+    color: 'var(--warning)',
+    bg: 'color-mix(in srgb, var(--warning), transparent 88%)',
+    border: 'color-mix(in srgb, var(--warning), transparent 55%)',
+    textClass: 'text-warning',
+  },
+  'On-Break': {
+    label: 'On Break',
+    color: 'var(--info)',
+    bg: 'color-mix(in srgb, var(--info), transparent 88%)',
+    border: 'color-mix(in srgb, var(--info), transparent 55%)',
+    textClass: 'text-info',
+  },
+  Offline: {
+    label: 'Offline',
+    color: 'var(--error)',
+    bg: 'color-mix(in srgb, var(--error), transparent 88%)',
+    border: 'color-mix(in srgb, var(--error), transparent 55%)',
+    textClass: 'text-error',
+  },
 };
 
 const MOCK_WEEKLY = [
@@ -69,12 +96,12 @@ const SIDEBAR_V = {
 };
 
 const OVERLAY_V = {
-  closed: { opacity: 0, pointerEvents: 'none' },
-  open:   { opacity: 1, pointerEvents: 'auto'  },
+  hidden: { opacity: 0 },
+  visible:{ opacity: 1 },
 };
 
 const CARD_V = {
-  hidden:  { opacity: 0, y: 24, scale: 0.95 },
+  hidden:  { opacity: 0, y: 20, scale: 0.97 },
   visible: (i) => ({
     opacity: 1, y: 0, scale: 1,
     transition: { delay: i * 0.07, type: 'spring', stiffness: 280, damping: 24 },
@@ -82,126 +109,145 @@ const CARD_V = {
 };
 
 const ITEM_V = {
-  hidden:  { opacity: 0, x: -18 },
+  hidden:  { opacity: 0, x: -16 },
   visible: (i) => ({
     opacity: 1, x: 0,
-    transition: { delay: i * 0.055, type: 'spring', stiffness: 320, damping: 28 },
+    transition: { delay: i * 0.05, type: 'spring', stiffness: 320, damping: 28 },
   }),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPERS / MICRO-COMPONENTS
+// SUB-COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const StatusDot = ({ status, className = "w-2.5 h-2.5" }) => {
+const StatusDot = ({ status, size = 'md' }) => {
   const m = STATUS_META[status] || STATUS_META.Offline;
-  // Extract just the background color class from the colorClass string
-  const bgClass = m.colorClass.split(' ').find(c => c.startsWith('bg-'));
-  
+  const sizeMap = { sm: 'w-2 h-2', md: 'w-2.5 h-2.5', lg: 'w-3.5 h-3.5' };
   return (
-    <span className={`inline-block rounded-full shrink-0 ${bgClass} ${m.shadow} ${className}`} />
+    <span className="relative flex shrink-0" style={{ width: sizeMap[size]?.split(' ')[0]?.replace('w-','')+'*0.25rem' }}>
+      <span
+        className={`${sizeMap[size]} rounded-full animate-ping absolute opacity-60`}
+        style={{ backgroundColor: m.color }}
+      />
+      <span
+        className={`${sizeMap[size]} rounded-full`}
+        style={{ backgroundColor: m.color }}
+      />
+    </span>
+  );
+};
+
+/** Real toggle status pill — optimized for mobile size */
+const StatusToggle = ({ currentStatus, onSelect, disabled }) => {
+  const options = STATUS_OPTIONS;
+  const currentIdx = options.indexOf(currentStatus);
+  const activeIdx = currentIdx === -1 ? 2 : currentIdx;
+
+  return (
+    <div
+      className="flex items-center rounded-full p-0.5 gap-0.5"
+      style={{
+        background: 'var(--base-200)',
+        border: '1px solid var(--base-300)',
+      }}
+    >
+      {options.map((s, i) => {
+        const m = STATUS_META[s];
+        const isActive = i === activeIdx;
+        return (
+          <button
+            key={s}
+            onClick={() => !disabled && onSelect(s)}
+            disabled={disabled}
+            style={{
+              background: isActive ? m.bg : 'transparent',
+              border: isActive ? `1px solid ${m.border}` : '1px solid transparent',
+              color: isActive ? m.color : 'color-mix(in oklch, var(--base-content) 50%, transparent)',
+            }}
+            // Made padding and text smaller on mobile to fit the right icons
+            className="flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-3 py-1 sm:py-1.5 rounded-full text-[8px] sm:text-[10px] font-bold tracking-wide uppercase transition-all duration-200 cursor-pointer outline-none disabled:cursor-not-allowed"
+          >
+            <span
+              className="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full shrink-0"
+              style={{ background: isActive ? m.color : 'currentColor', opacity: isActive ? 1 : 0.4 }}
+            />
+            {/* Show full label on sm+ screens */}
+            <span className="hidden sm:inline">{m.label}</span>
+            {/* Show truncated label (first 3 letters) on mobile */}
+            <span className="sm:hidden">{m.label.substring(0, 3)}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 };
 
 const EarningsTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-base-100 border border-base-300 rounded-lg px-3 py-2 text-[11px] text-base-content shadow-depth">
-      <p className="font-bold mb-0.5">{label}</p>
-      <p className="text-primary font-semibold m-0">₹ {payload[0]?.value?.toLocaleString('en-IN')}</p>
+    <div
+      className="px-3 py-2 rounded-xl text-[11px] shadow-xl"
+      style={{
+        background: 'var(--base-100)',
+        border: '1px solid var(--base-300)',
+        color: 'var(--base-content)',
+      }}
+    >
+      <p className="font-bold mb-0.5 m-0">{label}</p>
+      <p className="m-0" style={{ color: 'var(--primary)', fontWeight: 700 }}>
+        ₹ {payload[0]?.value?.toLocaleString('en-IN')}
+      </p>
     </div>
   );
 };
 
-/** Expandable nav group inside sidebar */
 const NavGroup = ({ group, index, onLinkClick }) => {
   const [open, setOpen] = useState(false);
 
-  // ─── Professional Animation Variants ───────────────────────────────
-  const dropdownVariants = {
-    hidden: { 
-      height: 0, 
-      opacity: 0,
-      transition: { 
-        height: { duration: 0.25, ease: "easeInOut" },
-        opacity: { duration: 0.2 },
-        // Reverse stagger when closing
-        staggerChildren: 0.03, 
-        staggerDirection: -1 
-      }
-    },
-    visible: { 
-      height: 'auto', 
-      opacity: 1,
-      transition: { 
-        height: { duration: 0.35, ease: [0.04, 0.62, 0.23, 0.98] }, // Smooth bezier curve
-        opacity: { duration: 0.4 },
-        // Cascade children in after the container starts opening
-        staggerChildren: 0.06, 
-        delayChildren: 0.05 
-      }
-    }
-  };
-
-  const linkVariants = {
-    hidden: { opacity: 0, x: -12 },
-    visible: { opacity: 1, x: 0, transition: { type: 'spring', stiffness: 350, damping: 25 } }
-  };
-
-  // ───────────────────────────────────────────────────────────────────
   return (
-    <motion.div custom={index} variants={ITEM_V} initial="hidden" animate="visible" className="mb-1">
+    <motion.div custom={index} variants={ITEM_V} initial="hidden" animate="visible" className="mb-0.5">
       <button
         onClick={() => setOpen(p => !p)}
-        aria-expanded={open}
-        className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-field border-none cursor-pointer font-poppins text-[11px] uppercase tracking-tighter font-bold tracking-wide transition-all duration-200 group outline-none focus-visible:ring-2 focus-visible:ring-primary/50
-          ${open 
-            ? 'bg-primary/10 text-primary shadow-sm' 
-            : 'bg-transparent text-base-content hover:bg-base-300/40'
-          }`}
+        className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border-none cursor-pointer text-[10px] uppercase tracking-wider font-bold transition-all duration-200 group outline-none"
+        style={{
+          background: open ? 'color-mix(in srgb, var(--primary), transparent 88%)' : 'transparent',
+          color: open ? 'var(--primary)' : 'var(--base-content)',
+        }}
       >
-        <span className="flex items-center gap-3">
-          <span className={`flex shrink-0  transition-colors duration-200 ${open ? 'opacity-100 text-primary' : 'opacity-60 group-hover:opacity-100 group-hover:text-primary'}`}>
-            {group.icon}
-          </span>
+        <span className="flex items-center gap-2.5">
+          <span style={{ opacity: open ? 1 : 0.55 }}>{group.icon}</span>
           {group.title}
         </span>
-        <motion.span 
-          animate={{ rotate: open ? 90 : 0 }} 
-          transition={{ type: "spring", stiffness: 260, damping: 20 }}
-          className={`flex shrink-0 ${open ? 'opacity-100' : 'opacity-50'}`}
-        >
-          <ChevronRight size={14} strokeWidth={2.5} />
+        <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ type: 'spring', stiffness: 260, damping: 20 }} style={{ opacity: 0.5 }}>
+          <ChevronRight size={13} strokeWidth={2.5} />
         </motion.span>
       </button>
 
       <AnimatePresence initial={false}>
         {open && (
           <motion.div
-            variants={dropdownVariants}
-            initial="hidden"
-            animate="visible"
-            exit="hidden"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1, transition: { height: { duration: 0.28, ease: [0.04, 0.62, 0.23, 0.98] }, opacity: { duration: 0.3 }, staggerChildren: 0.05, delayChildren: 0.04 } }}
+            exit={{ height: 0, opacity: 0, transition: { duration: 0.2 } }}
             className="overflow-hidden"
           >
-            {/* Visual guide line for sub-items */}
-            <div className="relative ml-[22px] pl-4 py-1.5 mt-1 border-l border-base-300 flex flex-col gap-1">
+            <div
+              className="ml-5 pl-4 py-1.5 mt-1 mb-1 flex flex-col gap-0.5"
+              style={{ borderLeft: '1px solid var(--base-300)' }}
+            >
               {group.links.map(link => (
-                <motion.div key={link.href} variants={linkVariants}>
-                  <Link
-                    href={link.href} 
-                    onClick={onLinkClick}
-                    className="group relative flex items-center gap-3 px-3 py-2 rounded-md text-base-content/80 text-[10px] uppercase font-medium font-poppins no-underline transition-all duration-200 hover:bg-primary/5 hover:text-primary"
-                  >
-                    {/* Tiny connecting dot that appears on hover */}
-                    <span className="absolute -left-[19px] top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-base-300 scale-0 group-hover:scale-100 group-hover:bg-primary transition-all duration-300" />
-                    
-                    <span className="flex shrink-0 opacity-50 group-hover:opacity-100 group-hover:scale-110 transition-all duration-200">
-                      {link.icon}
-                    </span>
-                    {link.name}
-                  </Link>
-                </motion.div>
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  onClick={onLinkClick}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-[10px] uppercase font-semibold no-underline transition-all duration-200"
+                  style={{ color: 'color-mix(in oklch, var(--base-content) 70%, transparent)' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'color-mix(in srgb, var(--primary), transparent 92%)'; e.currentTarget.style.color = 'var(--primary)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'color-mix(in oklch, var(--base-content) 70%, transparent)'; }}
+                >
+                  <span style={{ opacity: 0.6 }}>{link.icon}</span>
+                  {link.name}
+                </Link>
               ))}
             </div>
           </motion.div>
@@ -211,42 +257,40 @@ const NavGroup = ({ group, index, onLinkClick }) => {
   );
 };
 
-/** Stat metric card */
-const MetricCard = ({ icon: Icon, label, value, sub, colorTheme = 'primary', index }) => {
-  // Map standard tailwind colors based on the passed prop
-  const colors = {
-    primary: { border: 'border-l-primary', text: 'text-primary', bg: 'bg-primary/10', iconColor: 'var(--color-primary)' },
-    accent: { border: 'border-l-accent', text: 'text-accent', bg: 'bg-accent/10', iconColor: 'var(--color-accent)' },
-    success: { border: 'border-l-success', text: 'text-success', bg: 'bg-success/10', iconColor: 'var(--color-success)' },
-    warning: { border: 'border-l-warning', text: 'text-warning', bg: 'bg-warning/10', iconColor: 'var(--color-warning)' },
-  };
-  
-  const theme = colors[colorTheme] || colors.primary;
-
-  return (
-    <motion.div
-      custom={index} variants={CARD_V} initial="hidden" animate="visible"
-      className={`bg-base-200 border border-base-300 border-l-[3px] ${theme.border} rounded-field p-3.5 flex items-start justify-between shadow-sm hover:-translate-y-0.5 hover:shadow-depth transition-all duration-200`}
+const MetricCard = ({ icon: Icon, label, value, sub, colorVar = 'var(--primary)', index }) => (
+  <motion.div
+    custom={index} variants={CARD_V} initial="hidden" animate="visible"
+    className="rounded-2xl p-4 flex flex-col gap-2"
+    style={{
+      background: 'var(--base-200)',
+      border: `1px solid var(--base-300)`,
+      borderTop: `2.5px solid ${colorVar}`,
+    }}
+  >
+    <div
+      className="w-8 h-8 rounded-xl flex items-center justify-center"
+      style={{ background: `color-mix(in srgb, ${colorVar}, transparent 86%)` }}
     >
-      <div className="flex-1">
-        <p className="font-poppins text-[0.62rem] font-bold tracking-wider uppercase text-base-content/50 m-0">
-          {label}
+      <Icon size={16} color={colorVar} strokeWidth={2.2} />
+    </div>
+    <div>
+      <p
+        className="font-montserrat font-extrabold text-xl leading-none m-0"
+        style={{ color: colorVar }}
+      >
+        {value}
+      </p>
+      <p className="text-[0.62rem] font-bold uppercase tracking-wider m-0 mt-1" style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}>
+        {label}
+      </p>
+      {sub && (
+        <p className="text-[0.6rem] m-0 mt-0.5" style={{ color: 'color-mix(in oklch, var(--base-content) 38%, transparent)' }}>
+          {sub}
         </p>
-        <p className={`font-montserrat font-extrabold text-2xl m-0 mt-1 leading-none ${theme.text}`}>
-          {value}
-        </p>
-        {sub && (
-          <p className="text-[0.65rem] text-base-content/50 mt-1 m-0">
-            {sub}
-          </p>
-        )}
-      </div>
-      <div className={`w-10 h-10 rounded-xl shrink-0 flex items-center justify-center ${theme.bg}`}>
-        <Icon size={20} color={theme.iconColor} strokeWidth={2.2} />
-      </div>
-    </motion.div>
-  );
-};
+      )}
+    </div>
+  </motion.div>
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
@@ -259,10 +303,10 @@ export default function DriverDashboard() {
   const { driverMe, driverRewards, loading } = useSelector(s => s.transportPartner);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [statusMenu,  setStatusMenu]  = useState(false);
   const [toast,       setToast]       = useState(null);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const toastTimer = useRef(null);
 
-  // Fetch data on mount
   useEffect(() => {
     dispatch(fetchDriverMe());
     dispatch(fetchDriverRewards());
@@ -271,27 +315,31 @@ export default function DriverDashboard() {
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
-  const showToast = (msg, type = 'success') => {
+  const showToast = useCallback((msg, type = 'success') => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 2800);
-  };
+    toastTimer.current = setTimeout(() => setToast(null), 2600);
+  }, []);
 
-  const handleStatus = async (status) => {
-    setStatusMenu(false);
+  const handleStatus = useCallback(async (status) => {
+    if (statusLoading) return;
+    setStatusLoading(true);
     try {
       await dispatch(updateDriverStatus({ status })).unwrap();
       showToast(`Status → ${status}`);
     } catch (e) {
       showToast(e || 'Update failed', 'error');
+    } finally {
+      setStatusLoading(false);
     }
-  };
+  }, [dispatch, statusLoading, showToast]);
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     dispatch(resetTPState());
     router.push('/login');
-  };
+  }, [dispatch, router]);
 
-  // Derived values from Driver model shape
+  // Derived values
   const driver  = driverMe;
   const rewards = driverRewards || driver?.rewards;
   const status  = driver?.status || 'Offline';
@@ -300,22 +348,30 @@ export default function DriverDashboard() {
   const kycOk   = driver?.kyc?.verificationStatus === 'Verified';
   const onTrip  = status === 'On-Trip';
 
-  const radialData = [{ name: 'Rating', value: Math.round(((perf.rating || 0) / 5) * 100), fill: 'var(--color-primary)' }];
-  const weekTotal  = MOCK_WEEKLY.reduce((a, b) => a + b.amt, 0);
+  const radialData = [{
+    name: 'Rating',
+    value: Math.round(((perf.rating || 0) / 5) * 100),
+    fill: 'var(--primary)',
+  }];
+  const weekTotal = MOCK_WEEKLY.reduce((a, b) => a + b.amt, 0);
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div data-theme="driver" className="min-h-dvh my-4 bg-base-100 overflow-x-hidden font-poppins relative">
+    <div
+      data-theme="driver"
+      className="min-h-dvh bg-base-100 font-poppins relative overflow-x-hidden"
+    >
 
-      {/* ─── Sidebar overlay backdrop ────────────────────────────────────── */}
+      {/* ─── Sidebar Overlay ─────────────────────────────────────────────── */}
       <AnimatePresence>
         {sidebarOpen && (
           <motion.div
             key="overlay"
-            variants={OVERLAY_V} initial="closed" animate="open" exit="closed"
+            variants={OVERLAY_V} initial="hidden" animate="visible" exit="hidden"
             transition={{ duration: 0.18 }}
             onClick={closeSidebar}
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
+            className="fixed inset-0 z-40"
+            style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' }}
           />
         )}
       </AnimatePresence>
@@ -326,71 +382,129 @@ export default function DriverDashboard() {
           <motion.aside
             key="sidebar"
             variants={SIDEBAR_V} initial="closed" animate="open" exit="closed"
-            className="fixed top-0 left-0 bottom-0 w-[78vw] max-w-[280px] z-[100] flex flex-col bg-base-200 border-r border-base-300 overflow-y-auto"
+            className="fixed top-0 left-0 bottom-0 z-50 flex flex-col overflow-y-auto"
+            style={{
+              width: 'min(82vw, 288px)',
+              background: 'var(--base-200)',
+              borderRight: '1px solid var(--base-300)',
+            }}
           >
-            {/* Sidebar top: driver identity */}
-            <div className="p-4 pt-[calc(env(safe-area-inset-top)+1.5rem)] bg-gradient-to-br from-primary to-secondary border-b border-white/10 flex items-center justify-between shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-full shrink-0 bg-white/20 border-2 border-white/40 flex items-center justify-center overflow-hidden">
+            {/* Sidebar header */}
+            <div
+              className="p-4 flex items-center justify-between gap-3 border-b"
+              style={{
+                background: 'linear-gradient(135deg, var(--primary) 0%, color-mix(in oklch, var(--primary) 70%, var(--secondary)) 100%)',
+                borderBottom: '1px solid rgba(255,255,255,0.12)',
+                paddingTop: 'max(1rem, calc(env(safe-area-inset-top) + 0.75rem))',
+              }}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div
+                  className="w-11 h-11 rounded-2xl shrink-0 flex items-center justify-center overflow-hidden font-extrabold text-lg"
+                  style={{ background: 'rgba(255,255,255,0.2)', border: '2px solid rgba(255,255,255,0.35)', color: 'white' }}
+                >
                   {driver?.user?.avatar
-                    ? <img src={driver.user.avatar} alt="Profile" className="w-full h-full object-cover" />
-                    : <span className="font-extrabold text-lg text-white">
-                        {(driver?.legalName || 'D')[0].toUpperCase()}
-                      </span>
+                    ? <img src={driver.user.avatar} alt="" className="w-full h-full object-cover" />
+                    : (driver?.legalName || 'D')[0].toUpperCase()
                   }
                 </div>
-                <div>
-                  <p className="font-extrabold text-xs text-white m-0 leading-tight">
+                <div className="min-w-0">
+                  <p className="font-extrabold text-xs text-white m-0 leading-tight truncate">
                     {driver?.legalName || 'Driver'}
                   </p>
-                  <p className="text-[0.68rem] text-white/70 m-0 mt-0.5">
+                  <p className="text-[0.67rem] m-0 mt-0.5 truncate" style={{ color: 'rgba(255,255,255,0.65)' }}>
                     {driver?.driverCode || 'ID pending'}
                   </p>
                   <div className="flex items-center gap-1.5 mt-1">
-                    <StatusDot status={status} className="w-2 h-2" />
-                    <span className="text-[0.66rem] text-white/80 font-semibold">{sm.label}</span>
+                    <span className="w-2 h-2 rounded-full shrink-0 animate-pulse" style={{ background: sm.color }} />
+                    <span className="text-[0.65rem] font-semibold" style={{ color: 'rgba(255,255,255,0.8)' }}>
+                      {sm.label}
+                    </span>
                   </div>
                 </div>
               </div>
               <button
                 onClick={closeSidebar}
-                className="bg-white/10 hover:bg-white/20 border-none rounded-lg w-8 h-8 cursor-pointer text-white flex items-center justify-center shrink-0 transition-colors"
-                aria-label="Close sidebar"
+                className="shrink-0 w-8 h-8 rounded-xl flex items-center justify-center border-none cursor-pointer text-white transition-colors"
+                style={{ background: 'rgba(255,255,255,0.12)' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.22)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.12)'}
               >
-                <X size={17} />
+                <X size={16} />
               </button>
             </div>
 
-            {/* KYC warning */}
+            {/* KYC warning banner */}
             {!kycOk && (
               <motion.div
-                initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
-                className="mx-3 mt-3 px-3 py-2.5 rounded-field bg-warning/15 border border-warning/50 flex items-center gap-2"
+                initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
+                className="mx-3 mt-3 px-3 py-2.5 rounded-xl flex items-center gap-2"
+                style={{ background: 'color-mix(in srgb, var(--warning), transparent 86%)', border: '1px solid color-mix(in srgb, var(--warning), transparent 55%)' }}
               >
-                <AlertCircle size={16} className="text-warning shrink-0" />
+                <AlertCircle size={15} style={{ color: 'var(--warning)', flexShrink: 0 }} />
                 <Link
                   href="/driver/kyc/submit" onClick={closeSidebar}
-                  className="text-[11px] font-bold text-warning no-underline hover:underline"
+                  className="text-[11px] font-bold no-underline"
+                  style={{ color: 'color-mix(in oklch, var(--warning) 80%, oklch(20% 0.04 72))' }}
                 >
-                  KYC pending — tap to verify &rarr;
+                  KYC pending — complete now →
                 </Link>
               </motion.div>
             )}
 
-            {/* Nav groups */}
-            <nav className="flex-1 p-3 flex flex-col gap-0.5">
+            {/* Status toggle in sidebar */}
+            <div className="px-3 pt-4 pb-2">
+              <p className="text-[0.58rem] font-bold uppercase tracking-widest mb-2" style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}>
+                My Status
+              </p>
+              <div
+                className="flex rounded-xl p-1 gap-1"
+                style={{ background: 'var(--base-300)' }}
+              >
+                {STATUS_OPTIONS.map(s => {
+                  const m = STATUS_META[s];
+                  const isActive = s === status;
+                  return (
+                    <button
+                      key={s}
+                      onClick={() => !onTrip && handleStatus(s)}
+                      disabled={onTrip || statusLoading}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border-none text-[10px] font-bold uppercase tracking-wide transition-all duration-200 cursor-pointer outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      style={{
+                        background: isActive ? m.bg : 'transparent',
+                        color: isActive ? m.color : 'color-mix(in oklch, var(--base-content) 50%, transparent)',
+                        border: isActive ? `1px solid ${m.border}` : '1px solid transparent',
+                      }}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: isActive ? m.color : 'currentColor', opacity: isActive ? 1 : 0.4 }} />
+                      {m.label.split(' ')[0]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Nav groups mapped via imported constant */}
+            <nav className="flex-1 px-3 py-2 flex flex-col gap-0">
               {DRIVER_DASHBOARD_LINKS.map((group, i) => (
                 <NavGroup key={group.title} group={group} index={i} onLinkClick={closeSidebar} />
               ))}
             </nav>
 
-            {/* Logout */}
-            <div className="p-3 pb-6 border-t border-base-300">
+            {/* Bottom: logout */}
+            <div className="p-3 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]" style={{ borderTop: '1px solid var(--base-300)' }}>
               <button
                 onClick={handleLogout}
-                className="w-full flex items-center justify-center gap-2.5 p-3 rounded-field bg-error/10 border border-error/30 text-error text-xs font-bold font-poppins cursor-pointer tracking-wide hover:bg-error hover:text-error-content transition-colors"
+                className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl text-xs font-bold font-poppins cursor-pointer transition-all duration-200 border-none"
+                style={{
+                  background: 'color-mix(in srgb, var(--error), transparent 90%)',
+                  color: 'var(--error)',
+                  border: '1px solid color-mix(in srgb, var(--error), transparent 65%)',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'var(--error)'; e.currentTarget.style.color = 'var(--error-content)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'color-mix(in srgb, var(--error), transparent 90%)'; e.currentTarget.style.color = 'var(--error)'; }}
               >
-                <LogOut size={16} /> Sign Out
+                <LogOut size={15} /> Sign Out
               </button>
             </div>
           </motion.aside>
@@ -398,114 +512,160 @@ export default function DriverDashboard() {
       </AnimatePresence>
 
       {/* ─── Sticky Top Bar ──────────────────────────────────────────────── */}
-      <div className="sticky top-0 z-30 flex items-center justify-between p-3 border-b border-base-300 bg-base-100/90 backdrop-blur-md safe-top">
-        {/* Hamburger — opens sidebar */}
+      <header
+        // Updated paddings & gaps to be smaller on mobile (px-2, gap-1)
+        className="sticky top-0 z-30 flex items-center justify-between px-2 sm:px-4 py-2 sm:py-3 gap-1 sm:gap-3"
+        style={{
+          background: 'color-mix(in srgb, var(--base-100) 90%, transparent)',
+          backdropFilter: 'blur(16px) saturate(160%)',
+          borderBottom: '1px solid var(--base-300)',
+          paddingTop: 'max(0.75rem, calc(env(safe-area-inset-top) + 0.5rem))',
+        }}
+      >
+        {/* Hamburger - Shrunk on mobile */}
         <button
           onClick={() => setSidebarOpen(true)}
-          className="bg-base-200 hover:bg-base-300 border border-base-300 rounded-lg w-10 h-10 cursor-pointer flex items-center justify-center text-base-content transition-colors"
+          className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl flex items-center justify-center border-none cursor-pointer transition-colors shrink-0"
+          style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)', color: 'var(--base-content)' }}
+          onMouseEnter={e => e.currentTarget.style.background = 'var(--base-300)'}
+          onMouseLeave={e => e.currentTarget.style.background = 'var(--base-200)'}
           aria-label="Open menu"
         >
-          <Menu size={20} />
+          <Menu size={16} className="sm:w-5 sm:h-5" />
         </button>
 
-        {/* Status pill */}
-        <div className="relative">
-          <button
-            onClick={() => !onTrip && setStatusMenu(p => !p)}
-            disabled={onTrip}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-selector border-[1.5px] font-poppins text-[11px] font-bold tracking-wide transition-all
-              ${onTrip ? 'cursor-not-allowed opacity-80' : 'cursor-pointer hover:brightness-95'}
-              ${status === 'Available' ? 'bg-success/15 border-success/50 text-success' : ''}
-              ${status === 'On-Trip' ? 'bg-warning/15 border-warning/50 text-warning' : ''}
-              ${status === 'On-Break' ? 'bg-info/15 border-info/50 text-info' : ''}
-              ${status === 'Offline' ? 'bg-error/15 border-error/50 text-error' : ''}
-            `}
-          >
-            <StatusDot status={status} />
-            {sm.label}
-            {!onTrip && <ChevronDown size={14} className="ml-1 opacity-70" />}
-          </button>
-
-          <AnimatePresence>
-            {statusMenu && (
-              <motion.div
-                initial={{ opacity: 0, y: -8, scale: 0.94 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -8, scale: 0.94 }}
-                transition={{ duration: 0.14 }}
-                className="absolute top-[115%] left-1/2 -translate-x-1/2 bg-base-200 border border-base-300 rounded-box shadow-depth overflow-hidden z-50 min-w-[160px]"
-              >
-                {STATUS_OPTIONS.map(s => {
-                   const isActive = s === status;
-                   const optMeta = STATUS_META[s] || STATUS_META.Offline;
-                   const optTextClass = optMeta.colorClass.split(' ').find(c => c.startsWith('text-'));
-
-                   return (
-                    <button
-                      key={s} onClick={() => handleStatus(s)}
-                      className={`w-full flex items-center gap-2.5 px-4 py-3 border-none cursor-pointer text-xs font-poppins text-left transition-colors
-                        ${isActive ? 'bg-primary/10 font-bold ' + optTextClass : 'bg-transparent font-medium text-base-content hover:bg-base-300'}`}
-                    >
-                      <StatusDot status={s} /> {s}
-                    </button>
-                  );
-                })}
-              </motion.div>
-            )}
-          </AnimatePresence>
+        {/* Center — Status Toggle */}
+        <div className="flex-1 flex justify-center min-w-0 overflow-x-auto no-scrollbar">
+          {onTrip ? (
+            <div
+              className="flex items-center gap-1.5 sm:gap-2 px-2 py-1 sm:px-4 sm:py-2 rounded-full text-[9px] sm:text-[11px] font-bold truncate"
+              style={{
+                background: STATUS_META['On-Trip'].bg,
+                border: `1px solid ${STATUS_META['On-Trip'].border}`,
+                color: STATUS_META['On-Trip'].color,
+              }}
+            >
+              <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-ping shrink-0" style={{ background: 'var(--warning)' }} />
+              On Trip
+            </div>
+          ) : (
+            <StatusToggle
+              currentStatus={status}
+              onSelect={handleStatus}
+              disabled={statusLoading}
+            />
+          )}
         </div>
 
-        {/* Quick-access icons */}
-        <div className="flex gap-2">
+        {/* Right — icon links (Using imported constant) */}
+        <div className="flex gap-1 sm:gap-2 shrink-0">
           {DRIVER_TOP_RIGHT_LINKS.map(l => (
-            <Link key={l.href} href={l.href} title={l.name} className="bg-base-200 hover:bg-base-300 border border-base-300 rounded-lg w-10 h-10 text-base-content flex items-center justify-center no-underline transition-colors">
+            <Link
+              key={l.href}
+              href={l.href}
+              title={l.name}
+              className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl flex items-center justify-center no-underline transition-colors"
+              style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)', color: 'var(--base-content)' }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--base-300)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'var(--base-200)'; }}
+            >
               {l.icon}
             </Link>
           ))}
         </div>
-      </div>
+      </header>
 
       {/* ─── Page Content ─────────────────────────────────────────────────── */}
-      <main className="max-w-screen-md mx-auto pb-24 safe-bottom">
-
-        {/* Hero card - Refactored away from bright orange to theme gradient */}
+      <main
+        className="mx-auto pb-10"
+        style={{
+          maxWidth: '768px',
+          paddingBottom: 'max(2.5rem, calc(env(safe-area-inset-bottom) + 2rem))',
+        }}
+      >
+        {/* ── Hero Card ──────────────────────────────────────────────────── */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.08, type: 'spring', stiffness: 260, damping: 26 }}
-          className="mx-4 mt-4 rounded-box overflow-hidden p-5 relative bg-gradient-to-br from-primary to-secondary text-primary-content shadow-primary"
+          initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.06, type: 'spring', stiffness: 260, damping: 28 }}
+          className="mx-4 mt-4 rounded-2xl overflow-hidden relative"
+          style={{
+            background: 'linear-gradient(135deg, var(--primary) 0%, color-mix(in oklch, var(--primary) 60%, var(--secondary)) 100%)',
+            boxShadow: '0 10px 36px color-mix(in srgb, var(--primary), transparent 62%)',
+          }}
         >
-          <div className="relative z-10">
-            <p className="text-white/70 text-[0.68rem] font-bold tracking-widest uppercase m-0">
-              WELCOME BACK
-            </p>
-            <h2 className="font-montserrat font-extrabold text-2xl text-white mt-1 mb-4">
-              {driver?.legalName || 'Driver'} 👋
-            </h2>
+          {/* Decorative circles */}
+          <div
+            className="absolute -top-8 -right-8 w-36 h-36 rounded-full opacity-10 pointer-events-none"
+            style={{ background: 'white' }}
+          />
+          <div
+            className="absolute -bottom-6 -left-4 w-24 h-24 rounded-full opacity-[0.07] pointer-events-none"
+            style={{ background: 'white' }}
+          />
 
-            <div className="grid grid-cols-3 gap-2.5">
+          <div className="relative z-10 p-5">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <p className="m-0 text-[0.62rem] font-bold uppercase tracking-widest" style={{ color: 'rgba(255,255,255,0.6)' }}>
+                  Welcome Back
+                </p>
+                <h2 className="font-montserrat font-extrabold text-xl text-white m-0 mt-0.5">
+                  {driver?.legalName || 'Driver'} 👋
+                </h2>
+              </div>
+              {/* KYC chip */}
+              <div
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full shrink-0"
+                style={{
+                  background: kycOk ? 'rgba(255,255,255,0.15)' : 'rgba(255,180,0,0.25)',
+                  border: kycOk ? '1px solid rgba(255,255,255,0.2)' : '1px solid rgba(255,180,0,0.45)',
+                }}
+              >
+                {kycOk
+                  ? <CheckCircle2 size={13} className="text-white" />
+                  : <AlertCircle size={13} style={{ color: 'var(--warning)' }} />
+                }
+                <span className="text-[10px] font-bold text-white">
+                  {kycOk ? 'KYC Verified' : 'KYC Pending'}
+                </span>
+              </div>
+            </div>
+
+            {/* 3 quick stats */}
+            <div className="grid grid-cols-3 gap-2">
               {[
-                { label: 'STATUS', content: (
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <StatusDot status={status} />
-                    <span className="text-white font-extrabold text-xs">{sm.label}</span>
-                  </div>
-                )},
-                { label: 'TODAY', content: (
-                  <p className="text-white font-extrabold text-xs m-0 mt-1">
-                    ₹ {(perf.totalEarnings ? Math.round(perf.totalEarnings / 30) : 0).toLocaleString('en-IN')}
-                  </p>
-                )},
-                { label: 'KYC', content: (
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <Shield size={14} className={kycOk ? 'text-green-400' : 'text-amber-400'} />
-                    <span className="text-white font-extrabold text-[11px]">
-                      {kycOk ? 'Verified' : 'Pending'}
-                    </span>
-                  </div>
-                )},
+                {
+                  label: 'STATUS',
+                  content: (
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: sm.color }} />
+                      <span className="text-white font-extrabold text-xs">{sm.label}</span>
+                    </div>
+                  ),
+                },
+                {
+                  label: 'TODAY EST.',
+                  content: (
+                    <p className="text-white font-extrabold text-xs m-0 mt-0.5">
+                      ₹ {(perf.totalEarnings ? Math.round(perf.totalEarnings / 30) : 0).toLocaleString('en-IN')}
+                    </p>
+                  ),
+                },
+                {
+                  label: 'RIDES',
+                  content: (
+                    <p className="text-white font-extrabold text-xs m-0 mt-0.5">
+                      {(perf.monthlyRides || 0)} this mo.
+                    </p>
+                  ),
+                },
               ].map(({ label, content }) => (
-                <div key={label} className="bg-white/10 backdrop-blur-md border border-white/20 rounded-xl p-2.5 shadow-sm">
-                  <p className="text-white/60 text-[0.6rem] font-bold tracking-wider uppercase m-0">
+                <div
+                  key={label}
+                  className="rounded-xl p-2.5"
+                  style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.18)' }}
+                >
+                  <p className="m-0 text-[0.58rem] font-bold uppercase tracking-wider" style={{ color: 'rgba(255,255,255,0.55)' }}>
                     {label}
                   </p>
                   {content}
@@ -515,158 +675,276 @@ export default function DriverDashboard() {
           </div>
         </motion.div>
 
-        {/* Metrics grid */}
+        {/* ── Metrics 2×2 grid ───────────────────────────────────────────── */}
         <div className="px-4 mt-4 grid grid-cols-2 gap-3">
-          <MetricCard index={0} icon={Activity}    label="Total Rides"  value={(perf.totalRidesCompleted || 0).toLocaleString('en-IN')} sub="All time"         colorTheme="primary" />
-          <MetricCard index={1} icon={Star}        label="Rating"       value={perf.rating ? perf.rating.toFixed(1) : '—'}                sub={`${perf.ratingCount || 0} reviews`} colorTheme="accent" />
-          <MetricCard index={2} icon={TrendingUp}   label="Earned"       value={`₹${((perf.totalEarnings || 0) / 1000).toFixed(1)}k`}      sub="Lifetime"         colorTheme="success" />
-          <MetricCard index={3} icon={Zap}          label="Coins"        value={(rewards?.coinBalance || 0).toLocaleString('en-IN')}       sub={rewards?.tier || 'Bronze'} colorTheme="warning" />
+          <MetricCard
+            index={0} icon={Activity} label="Total Rides"
+            value={(perf.totalRidesCompleted || 0).toLocaleString('en-IN')}
+            sub="All time"
+            colorVar="var(--primary)"
+          />
+          <MetricCard
+            index={1} icon={Star} label="Rating"
+            value={perf.rating ? perf.rating.toFixed(1) : '—'}
+            sub={`${perf.ratingCount || 0} reviews`}
+            colorVar="var(--accent)"
+          />
+          <MetricCard
+            index={2} icon={TrendingUp} label="Earned"
+            value={`₹${((perf.totalEarnings || 0) / 1000).toFixed(1)}k`}
+            sub="Lifetime"
+            colorVar="var(--success)"
+          />
+          <MetricCard
+            index={3} icon={Zap} label="Coins"
+            value={(rewards?.coinBalance || 0).toLocaleString('en-IN')}
+            sub={rewards?.tier || 'Bronze'}
+            colorVar="var(--warning)"
+          />
         </div>
 
-        {/* Rating ring + profile completion */}
+        {/* ── Rating ring + profile % ────────────────────────────────────── */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.34, type: 'spring', stiffness: 240, damping: 26 }}
-          className="mx-4 mt-4 p-4 rounded-box bg-base-200 border border-base-300 flex items-center gap-4 shadow-sm"
+          initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.32, type: 'spring', stiffness: 240, damping: 26 }}
+          className="mx-4 mt-4 p-4 rounded-2xl flex items-center gap-4"
+          style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)' }}
         >
-          <div className="w-20 h-20 shrink-0 relative">
+          <div className="w-[76px] h-[76px] shrink-0">
             <ResponsiveContainer width="100%" height="100%">
-              <RadialBarChart cx="50%" cy="50%" innerRadius="65%" outerRadius="100%"
-                startAngle={90} endAngle={-270} data={radialData}>
-                <RadialBar dataKey="value" cornerRadius={6} background={{ fill: 'var(--color-base-300)' }} />
+              <RadialBarChart
+                cx="50%" cy="50%"
+                innerRadius="68%" outerRadius="100%"
+                startAngle={90} endAngle={-270}
+                data={radialData}
+              >
+                <RadialBar
+                  dataKey="value"
+                  cornerRadius={6}
+                  background={{ fill: 'var(--base-300)' }}
+                />
               </RadialBarChart>
             </ResponsiveContainer>
           </div>
-          <div className="flex-1">
-            <p className="font-montserrat font-extrabold text-2xl text-primary m-0 flex items-baseline gap-1">
+          <div className="flex-1 min-w-0">
+            <p className="font-montserrat font-extrabold text-2xl m-0 flex items-baseline gap-1" style={{ color: 'var(--primary)' }}>
               {perf.rating ? perf.rating.toFixed(1) : '—'}
-              <span className="text-[11px] opacity-50 font-medium text-base-content">/5</span>
+              <span className="text-[11px] font-medium" style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}>/5</span>
             </p>
-            <p className="text-[11px] text-base-content/60 mt-0.5 mb-2.5 m-0">
-              Tier: <strong className="text-accent opacity-100">{perf.performanceTier || 'Bronze'}</strong>
+            <p className="text-[11px] m-0 mt-0.5 mb-3" style={{ color: 'color-mix(in oklch, var(--base-content) 55%, transparent)' }}>
+              Tier: <strong style={{ color: 'var(--accent)' }}>{perf.performanceTier || 'Bronze'}</strong>
             </p>
-            {/* Profile % bar */}
+            {/* Profile completion bar */}
             <div className="flex items-center gap-2">
-              <div className="progress-bar flex-1 h-1.5">
-                <div className="progress-bar-fill" style={{ width: `${driver?.profileCompletionPercent || 0}%` }} />
+              <div
+                className="flex-1 h-1.5 rounded-full overflow-hidden"
+                style={{ background: 'var(--base-300)' }}
+              >
+                <div
+                  className="h-full rounded-full transition-all duration-700"
+                  style={{
+                    width: `${driver?.profileCompletionPercent || 0}%`,
+                    background: 'linear-gradient(90deg, var(--primary), color-mix(in oklch, var(--primary) 70%, var(--secondary)))',
+                  }}
+                />
               </div>
-              <span className="text-[0.68rem] font-bold text-primary whitespace-nowrap">
+              <span className="text-[0.67rem] font-bold shrink-0" style={{ color: 'var(--primary)' }}>
                 {driver?.profileCompletionPercent || 0}%
               </span>
             </div>
-            <p className="text-[0.6rem] text-base-content/40 mt-1 m-0">Profile complete</p>
+            <p className="text-[0.58rem] m-0 mt-0.5" style={{ color: 'color-mix(in oklch, var(--base-content) 35%, transparent)' }}>
+              Profile complete
+            </p>
           </div>
         </motion.div>
 
-        {/* Weekly earnings chart */}
+        {/* ── Weekly earnings chart ──────────────────────────────────────── */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.41, type: 'spring', stiffness: 240, damping: 26 }}
-          className="mx-4 mt-4 p-4 rounded-box bg-base-200 border border-base-300 shadow-sm"
+          initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4, type: 'spring', stiffness: 240, damping: 26 }}
+          className="mx-4 mt-4 p-4 rounded-2xl"
+          style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)' }}
         >
-          <div className="flex items-start justify-between mb-4">
+          <div className="flex items-start justify-between mb-3">
             <div>
-              <h3 className="font-montserrat font-extrabold text-xs m-0 text-base-content">
+              <h3 className="font-montserrat font-extrabold text-sm m-0" style={{ color: 'var(--base-content)' }}>
                 Weekly Earnings
               </h3>
-              <p className="text-[11px] text-base-content/50 mt-1 m-0">This week's breakdown</p>
+              <p className="text-[11px] m-0 mt-0.5" style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}>
+                This week breakdown
+              </p>
             </div>
-            <span className="badge badge-primary text-[0.64rem]">
+            <span
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold"
+              style={{
+                background: 'color-mix(in srgb, var(--primary), transparent 88%)',
+                border: '1px solid color-mix(in srgb, var(--primary), transparent 65%)',
+                color: 'var(--primary)',
+              }}
+            >
               ₹ {weekTotal.toLocaleString('en-IN')}
             </span>
           </div>
 
-          <div className="w-full h-[120px]">
+          <div className="h-[110px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={MOCK_WEEKLY} margin={{ top: 4, right: 2, left: -26, bottom: 0 }}>
+              <AreaChart data={MOCK_WEEKLY} margin={{ top: 4, right: 2, left: -28, bottom: 0 }}>
                 <defs>
-                  <linearGradient id="drvEarnGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="var(--color-primary)" stopOpacity={0.38} />
-                    <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0.02} />
+                  <linearGradient id="drvGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor="var(--primary)" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="var(--primary)" stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
-                <XAxis dataKey="day" tick={{ fontSize: 10, fill: 'var(--color-base-content)', opacity: 0.5 }} axisLine={false} tickLine={false} />
+                <XAxis
+                  dataKey="day"
+                  tick={{ fontSize: 9, fill: 'var(--base-content)', opacity: 0.45 }}
+                  axisLine={false} tickLine={false}
+                />
                 <YAxis hide />
-                <Tooltip content={<EarningsTooltip />} cursor={{ stroke: 'var(--color-primary)', strokeWidth: 1, strokeDasharray: '4 3' }} />
-                <Area type="monotone" dataKey="amt" stroke="var(--color-primary)" strokeWidth={2}
-                  fill="url(#drvEarnGrad)"
-                  dot={{ fill: 'var(--color-primary)', r: 3, strokeWidth: 0 }}
-                  activeDot={{ r: 5, fill: 'var(--color-primary)', strokeWidth: 2, stroke: 'var(--color-base-100)' }}
+                <Tooltip
+                  content={<EarningsTooltip />}
+                  cursor={{ stroke: 'var(--primary)', strokeWidth: 1, strokeDasharray: '4 3' }}
+                />
+                <Area
+                  type="monotone" dataKey="amt"
+                  stroke="var(--primary)" strokeWidth={2}
+                  fill="url(#drvGrad)"
+                  dot={{ fill: 'var(--primary)', r: 3, strokeWidth: 0 }}
+                  activeDot={{ r: 5, fill: 'var(--primary)', strokeWidth: 2, stroke: 'var(--base-100)' }}
                 />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </motion.div>
 
-        {/* Live stats row */}
+        {/* ── Live stats row (3-col) ─────────────────────────────────────── */}
         <motion.div
-          initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.48, type: 'spring', stiffness: 240, damping: 26 }}
-          className="mx-4 mt-4 grid grid-cols-3 gap-2.5"
+          initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.47, type: 'spring', stiffness: 240, damping: 26 }}
+          className="px-4 mt-4 grid grid-cols-3 gap-2.5"
         >
           {[
-            { label: 'Avg Pickup', value: `${perf.avgPickupTimeMinutes || 0}m`,      icon: Clock,      theme: 'text-info border-t-info' },
-            { label: 'KM Driven',  value: (perf.totalDistanceKm || 0).toLocaleString('en-IN'), icon: Navigation, theme: 'text-success border-t-success' },
-            { label: 'Cancel %',   value: `${Math.round(perf.cancellationRate || 0)}%`,      icon: AlertCircle,theme: 'text-error border-t-error' },
-          ].map(({ label, value, icon: Icon, theme }) => (
-            <div key={label} className={`bg-base-200 border border-base-300 border-t-2 ${theme} rounded-field p-3 text-center shadow-sm`}>
-              <Icon size={18} className="mx-auto mb-1.5 opacity-80" />
-              <p className="font-montserrat font-extrabold text-base m-0">
+            {
+              label: 'Avg Pickup',
+              value: `${perf.avgPickupTimeMinutes || 0}m`,
+              icon: Clock,
+              color: 'var(--info)',
+            },
+            {
+              label: 'KM Driven',
+              value: (perf.totalDistanceKm || 0).toLocaleString('en-IN'),
+              icon: Navigation,
+              color: 'var(--success)',
+            },
+            {
+              label: 'Cancel %',
+              value: `${Math.round(perf.cancellationRate || 0)}%`,
+              icon: AlertCircle,
+              color: 'var(--error)',
+            },
+          ].map(({ label, value, icon: Icon, color }) => (
+            <div
+              key={label}
+              className="rounded-2xl p-3 text-center"
+              style={{
+                background: 'var(--base-200)',
+                border: '1px solid var(--base-300)',
+                borderTop: `2.5px solid ${color}`,
+              }}
+            >
+              <Icon size={17} className="mx-auto mb-1.5" style={{ color, opacity: 0.85 }} />
+              <p className="font-montserrat font-extrabold text-base m-0" style={{ color }}>
                 {value}
               </p>
-              <p className="text-[0.6rem] text-base-content/50 mt-1 m-0 uppercase tracking-wide">
+              <p className="text-[0.58rem] uppercase tracking-wide m-0 mt-0.5" style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}>
                 {label}
               </p>
             </div>
           ))}
         </motion.div>
 
-        {/* Quick nav chips */}
+        {/* ── Quick access chips (Now re-using Top Right Links mapping) ───── */}
         <motion.div
           initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.55, type: 'spring', stiffness: 240, damping: 26 }}
+          transition={{ delay: 0.54, type: 'spring', stiffness: 240, damping: 26 }}
           className="px-4 mt-5"
         >
-          <p className="text-[0.62rem] font-bold tracking-wider uppercase text-base-content/40 mb-3 m-0">
+          <p
+            className="text-[0.6rem] font-bold tracking-widest uppercase m-0 mb-3"
+            style={{ color: 'color-mix(in oklch, var(--base-content) 38%, transparent)' }}
+          >
             Quick Access
           </p>
           <div className="flex flex-wrap gap-2">
-            {DRIVER_PROFILE_LINKS.map(link => (
-              <Link 
-                key={link.href} 
-                href={link.href} 
-                className="flex items-center gap-2 px-3.5 py-2 rounded-selector bg-base-200 border border-base-300 text-base-content text-[11px] font-semibold font-poppins no-underline whitespace-nowrap hover:bg-primary/10 hover:border-primary/50 hover:text-primary transition-colors"
+            {DRIVER_TOP_RIGHT_LINKS.map(link => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[11px] font-semibold no-underline transition-all duration-200"
+                style={{
+                  background: 'var(--base-200)',
+                  border: '1px solid var(--base-300)',
+                  color: 'var(--base-content)',
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.background = 'color-mix(in srgb, var(--primary), transparent 90%)';
+                  e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--primary), transparent 55%)';
+                  e.currentTarget.style.color = 'var(--primary)';
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = 'var(--base-200)';
+                  e.currentTarget.style.borderColor = 'var(--base-300)';
+                  e.currentTarget.style.color = 'var(--base-content)';
+                }}
               >
-                <span className="flex opacity-60">{link.icon}</span>
+                <span style={{ opacity: 0.65 }}>{link.icon}</span>
                 {link.name}
               </Link>
             ))}
           </div>
         </motion.div>
 
-        {/* Connectivity strip */}
+        {/* ── Connectivity strip ─────────────────────────────────────────── */}
         <motion.div
           initial={{ opacity: 0 }} animate={{ opacity: 1 }}
           transition={{ delay: 0.62 }}
-          className="mx-4 mt-5 p-3 rounded-field bg-base-200 border border-base-300 flex items-center gap-3 shadow-sm"
+          className="mx-4 mt-5 p-3.5 rounded-2xl flex items-center gap-3"
+          style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)' }}
         >
-          <Wifi size={18} className="text-success shrink-0" />
-          <div className="flex-1">
-            <p className="text-[11px] font-bold text-base-content m-0">Live Tracking Active</p>
-            <p className="text-[0.65rem] text-base-content/50 mt-0.5 m-0">Location syncing every 15s</p>
+          <Wifi size={17} style={{ color: 'var(--success)', flexShrink: 0 }} />
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] font-bold m-0" style={{ color: 'var(--base-content)' }}>
+              Live Tracking Active
+            </p>
+            <p className="text-[0.63rem] m-0 mt-0.5" style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}>
+              Location syncing every 15s
+            </p>
           </div>
-          <div className="flex items-center gap-1.5 text-[0.68rem] font-bold text-success bg-success/10 px-2.5 py-1 rounded-full">
-            <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[10px] font-bold shrink-0"
+            style={{
+              background: 'color-mix(in srgb, var(--success), transparent 88%)',
+              border: '1px solid color-mix(in srgb, var(--success), transparent 60%)',
+              color: 'var(--success)',
+            }}
+          >
+            <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'var(--success)' }} />
             Online
           </div>
         </motion.div>
 
+        {/* Loading skeleton */}
         {loading && (
-          <div className="p-5 flex justify-center">
-            <div className="loading loading-spinner loading-md text-primary" />
+          <div className="flex justify-center py-6">
+            <div
+              className="w-7 h-7 rounded-full border-[3px] animate-spin"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--primary), transparent 70%)',
+                borderTopColor: 'var(--primary)',
+              }}
+            />
           </div>
         )}
-
       </main>
 
       {/* ─── Toast ───────────────────────────────────────────────────────── */}
@@ -674,11 +952,20 @@ export default function DriverDashboard() {
         {toast && (
           <motion.div
             key="toast"
-            initial={{ opacity: 0, y: 36, scale: 0.88 }}
+            initial={{ opacity: 0, y: 32, scale: 0.9 }}
             animate={{ opacity: 1, y: 0,  scale: 1 }}
-            exit={{   opacity: 0, y: 20,  scale: 0.9 }}
-            transition={{ type: 'spring', stiffness: 380, damping: 28 }}
-            className={`fixed bottom-[82px] left-1/2 -translate-x-1/2 text-white px-5 py-2.5 rounded-selector text-xs font-bold font-poppins shadow-lg z-[999] whitespace-nowrap ${toast.type === 'error' ? 'bg-error' : 'bg-success'}`}
+            exit={{   opacity: 0, y: 18,  scale: 0.92 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+            className="fixed z-[999] text-xs font-bold px-5 py-3 rounded-2xl shadow-xl"
+            style={{
+              bottom: 'max(5.5rem, calc(env(safe-area-inset-bottom) + 5rem))',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: toast.type === 'error' ? 'var(--error)' : 'var(--success)',
+              color: toast.type === 'error' ? 'var(--error-content)' : 'var(--success-content)',
+              whiteSpace: 'nowrap',
+              pointerEvents: 'none',
+            }}
           >
             {toast.msg}
           </motion.div>

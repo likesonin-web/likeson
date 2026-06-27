@@ -8,11 +8,17 @@ import xlsx             from 'xlsx';
 import * as pdfParse from 'pdf-parse';
 
 import { protect, authorize, attachPharmacyStore } from '../../middleware/authMiddleware.js';
-import PharmacyOrder    from '../../models/PharmacyOrder.js';
-import PharmacyProfile  from '../../models/PharmacyProfile.js';
-import PharmacyStore    from '../../models/PharmacyStore.js';
-import HsnCode          from '../../models/HsnCode.js';
-import Medicine         from '../../models/Medicine.js';
+import PharmacyOrder       from '../../models/PharmacyOrder.js';
+import PharmacyProfile     from '../../models/PharmacyProfile.js';
+import PharmacyStore       from '../../models/PharmacyStore.js';
+import HsnCode             from '../../models/HsnCode.js';
+import Medicine            from '../../models/Medicine.js';
+import MedicineInventory   from '../../models/MedicineInventory.js';
+import MedicineBatch       from '../../models/MedicineBatch.js';
+import InventoryMovement   from '../../models/InventoryMovement.js';
+import PurchaseOrder       from '../../models/PurchaseOrder.js';
+import Supplier            from '../../models/Supplier.js';
+import PlatformPricingConfig from '../../models/PlatformPricingConfig.js';
 import User             from '../../models/User.js';
 import Notification     from '../../models/Notification.js';
 import Wallet           from '../../models/Wallet.js';
@@ -100,10 +106,6 @@ const logError = (action, err, ctx = {}) =>
 
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 
-/**
- * Resolves an order by MongoDB _id or human-readable orderId string.
- * Returns a Mongoose document (NOT lean) so callers can call .save().
- */
 const findOrderByIdOrString = async (orderId, storeId) => {
   if (!orderId) return null;
   const base    = { store: new mongoose.Types.ObjectId(storeId), isArchived: false };
@@ -118,10 +120,6 @@ const findOrderByIdOrString = async (orderId, storeId) => {
   }
 };
 
-/**
- * Like findOrderByIdOrString but with full population for read-only responses.
- * Returns a fully-populated Mongoose document with virtuals enabled.
- */
 const findOrderPopulated = async (orderId, storeId) => {
   if (!orderId) return null;
   const base    = { store: new mongoose.Types.ObjectId(storeId), isArchived: false };
@@ -129,19 +127,16 @@ const findOrderPopulated = async (orderId, storeId) => {
 
   const buildQuery = (filter) =>
     PharmacyOrder.findOne(filter)
-      .populate('customer',                   'name email phone avatar')
-      .populate('delivery.internalPartner',   'name phone avatar')
-      .populate('delivery.pickupPartner',     'name phone avatar')
-      .populate('prescription.verifiedBy',    'name role')
-      // FIX: populate items.medicine (schema field is 'medicine', NOT 'medicineId')
-      .populate('items.medicine',             'name brandName genericName images hsnCode gstPercentage category')
-      .populate('cancellation.cancelledBy',   'name role')
+      .populate('customer',                      'name email phone avatar')
+      .populate('delivery.internalPartner',      'name phone avatar')
+      .populate('delivery.pickupPartner',        'name phone avatar')
+      .populate('prescription.verifiedBy',       'name role')
+      .populate('items.medicine',                'name brandName genericName images hsnCode gstPercentage category')
+      .populate('cancellation.cancelledBy',      'name role')
       .populate('cancellation.returnDecisionBy', 'name role')
       .populate('cancellation.pickupVerifiedBy', 'name role')
-      .populate('adminNotes.addedBy',         'name role')
-      .populate('store',                       'storeName contact address legal status') 
-      .populate('customer',                    'name email phone avatar')
-      .populate('delivery.internalPartner',    'name phone avatar')
+      .populate('adminNotes.addedBy',            'name role')
+      .populate('store',                         'storeName contact address legal status storeType bankDetails');
 
   try {
     let order = null;
@@ -183,6 +178,132 @@ const getPagination = (query) => {
   const page  = Math.max(1, parseInt(query.page, 10)  || 1);
   const limit = Math.min(Math.max(1, parseInt(query.limit, 10) || ITEMS_PER_PAGE), MAX_ITEMS_PER_PAGE);
   return { page, limit, skip: (page - 1) * limit };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// § PRICING CALCULATOR (platform + store margin per order)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * computeOrderPricingBreakdown
+ * Returns full financial breakdown for one order:
+ *   - What customer paid (billing fields)
+ *   - Platform fee (from PlatformPricingConfig)
+ *   - Store margin / net payout
+ *   - COD: how much store must remit to platform
+ *
+ * Owned stores: use ownStoreMarginPercent (100% revenue stays, platform takes fee)
+ * Partnered stores: use commissionPercent from store's bankDetails
+ */
+const computeOrderPricingBreakdown = async (order, store) => {
+  const config = await PlatformPricingConfig.getGlobal();
+  const pharmacyCfg = config?.pharmacy || {};
+
+  const platformFee      = pharmacyCfg.platformFee || { type: 'percentage', value: 10 };
+  const ownStoreMarginPc = pharmacyCfg.ownStoreMarginPercent || 30; // platform keeps 30% on own stores
+  const partnerCommPc    = store?.bankDetails?.commissionPercent || 0;
+
+  const total      = order.billing?.totalPayable   || 0;
+  const subTotal   = order.billing?.subTotal        || 0;
+  const gst        = order.billing?.gstAmount       || 0;
+  const delivery   = order.billing?.deliveryCharges || 0;
+  const discount   = order.billing?.discountAmount  || 0;
+  const walletUsed = order.billing?.walletAmountUsed|| 0;
+  const platformFeeAmt   = order.billing?.platformFee || 0; // snapshot from order creation
+
+  // Platform cut on this order
+  let platformCut = 0;
+  if (platformFee.type === 'percentage') {
+    platformCut = parseFloat(((subTotal * platformFee.value) / 100).toFixed(2));
+  } else {
+    platformCut = platformFee.value;
+  }
+
+  // Store type determines margin logic
+  const isOwnedStore = store?.storeType === 'Owned';
+  let storePayout   = 0;
+  let storeMarginPc = 0;
+  let platformRevenue = 0;
+
+  if (isOwnedStore) {
+    // Owned: platform keeps ownStoreMarginPercent of subTotal, store gets rest
+    platformRevenue = parseFloat(((subTotal * ownStoreMarginPc) / 100).toFixed(2));
+    storePayout     = parseFloat((subTotal - platformRevenue).toFixed(2));
+    storeMarginPc   = 100 - ownStoreMarginPc;
+  } else {
+    // Partnered: store pays commissionPercent to platform
+    platformRevenue = parseFloat(((subTotal * partnerCommPc) / 100).toFixed(2));
+    storePayout     = parseFloat((subTotal - platformRevenue).toFixed(2));
+    storeMarginPc   = 100 - partnerCommPc;
+  }
+
+  // Delivery agent payout (from config)
+  const deliveryAgentPayout = delivery > 0
+    ? Math.min(delivery, pharmacyCfg.deliveryAgentPayout || 30)
+    : 0;
+
+  // COD: store physically collects cash from customer
+  // Store must remit: platformRevenue + GST (platform handles GST accounting)
+  const isCOD      = order.payment?.method === 'COD';
+  const codRemitTo  = isCOD ? parseFloat((platformRevenue + gst).toFixed(2)) : 0;
+  const codStoreNet = isCOD ? parseFloat((storePayout - deliveryAgentPayout).toFixed(2)) : 0;
+
+  // Online: platform collects, pays out to store
+  const onlineStoreNet = !isCOD
+    ? parseFloat((storePayout - deliveryAgentPayout).toFixed(2))
+    : 0;
+
+  return {
+    order: {
+      orderId:            order.orderId,
+      paymentMethod:      order.payment?.method,
+      paymentStatus:      order.payment?.status,
+      deliveryStatus:     order.delivery?.status,
+    },
+    customerPaid: {
+      subTotal,
+      gst,
+      deliveryCharges:    delivery,
+      discountDeducted:   discount,
+      walletDeducted:     walletUsed,
+      totalPayable:       total,
+    },
+    platformConfig: {
+      feeType:            platformFee.type,
+      feeValue:           platformFee.value,
+      storeType:          store?.storeType,
+      commissionPercent:  isOwnedStore ? ownStoreMarginPc : partnerCommPc,
+      ownStoreMarginPc:   isOwnedStore ? ownStoreMarginPc : null,
+    },
+    breakdown: {
+      platformRevenue,
+      platformFeeAmt,      // as stored on order at creation time
+      storePayout,
+      storeMarginPercent:  storeMarginPc,
+      deliveryAgentPayout,
+      gstOnOrder:         gst,
+    },
+    cod: isCOD ? {
+      storeCollectedCash: total,
+      mustRemitToPlatform: codRemitTo,
+      storeNetAfterRemit:  codStoreNet,
+      remitBreakdown: {
+        platformRevenue,
+        gstPayable: gst,
+      },
+    } : null,
+    online: !isCOD ? {
+      platformCollected: total,
+      storeNetPayout:    onlineStoreNet,
+      estimatedPayoutAfterCycle: onlineStoreNet,
+    } : null,
+    pricingConfigSnapshot: {
+      configName:          config?.configName,
+      pharmacyPlatformFee: pharmacyCfg.platformFee,
+      freeDeliveryAbove:   pharmacyCfg.freeDeliveryMinOrderValue,
+      expressDeliveryCharge: pharmacyCfg.expressDeliveryCharge,
+    },
+  };
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -629,10 +750,9 @@ router.get('/orders', protect, authorize('pharmacy'), attachPharmacyStore,
     const sortField   = allowedSort.includes(sortBy) ? sortBy : 'createdAt';
     const [orders, totalCount] = await Promise.all([
       PharmacyOrder.find(filter)
-      .populate('store', 'storeName contact address status')
+        .populate('store',    'storeName contact address status storeType')
         .populate('customer', 'name email phone')
- 
- .populate('items.medicine', 'name brandName genericName images category')
+        .populate('items.medicine', 'name brandName genericName images category')
         .sort({ [sortField]: sortOrder === 'asc' ? 1 : -1 })
         .skip(skip)
         .limit(limit)
@@ -651,16 +771,28 @@ router.get('/orders', protect, authorize('pharmacy'), attachPharmacyStore,
 
 /**
  * [02] GET /orders/:orderId
- * FIX: Uses findOrderPopulated() which populates items.medicine and all refs,
- *      then serialises with toObject({ virtuals: true }) so all 4 virtuals
- *      (isReturnPending, isRefundPending, canBeRefunded, canRequestReturn) are present.
  */
 router.get('/orders/:orderId', protect, authorize('pharmacy'), attachPharmacyStore,
   asyncHandler(async (req, res) => {
     const order = await findOrderPopulated(req.params.orderId, req.pharmacy.store._id);
     if (!order) return res.status(404).json({ success: false, message: `Order ${req.params.orderId} not found.` });
-    // toObject({ virtuals: true }) ensures virtual fields are included in the JSON
     res.status(200).json({ success: true, data: { order: order.toObject({ virtuals: true }) } });
+  })
+);
+
+/**
+ * [02b] GET /orders/:orderId/pricing-breakdown
+ * NEW — full financial breakdown per order: store margin, platform fee, COD remit
+ */
+router.get('/orders/:orderId/pricing-breakdown', protect, authorize('pharmacy'), attachPharmacyStore,
+  asyncHandler(async (req, res) => {
+    const order = await findOrderPopulated(req.params.orderId, req.pharmacy.store._id);
+    if (!order) return res.status(404).json({ success: false, message: 'Order not found.' });
+
+    const store = await PharmacyStore.findById(req.pharmacy.store._id).lean();
+    const breakdown = await computeOrderPricingBreakdown(order.toObject({ virtuals: true }), store);
+
+    res.status(200).json({ success: true, data: breakdown });
   })
 );
 
@@ -722,9 +854,6 @@ router.post('/orders/:orderId/confirm', protect, authorize('pharmacy'), attachPh
 
 /**
  * [05] PATCH /orders/:orderId/status
- * FIX: Removed `order.delivery.notes = note` — 'notes' does not exist in the
- *      delivery sub-schema. Notes are now pushed into statusHistory instead,
- *      which is the correct field for per-transition audit notes.
  */
 router.patch('/orders/:orderId/status', protect, authorize('pharmacy'), attachPharmacyStore,
   asyncHandler(async (req, res) => {
@@ -751,9 +880,6 @@ router.patch('/orders/:orderId/status', protect, authorize('pharmacy'), attachPh
 
     order.delivery.status = status;
 
-    // FIX: 'delivery.notes' does not exist in schema — attach note inside statusHistory entry.
-    // The pre-save hook appends to statusHistory on status change; we store the note there
-    // by setting $locals so the hook can read it, or we push manually here before save.
     if (!Array.isArray(order.delivery.statusHistory)) order.delivery.statusHistory = [];
     order.delivery.statusHistory.push({
       status,
@@ -885,8 +1011,6 @@ router.post('/orders/:orderId/assign-delivery-partner', protect, authorize('phar
 
 /**
  * [10] GET /orders/:orderId/export
- * FIX: Uses findOrderPopulated + toObject({ virtuals: true }) so all fields
- *      including virtual flags are present in the export payload.
  */
 router.get('/orders/:orderId/export', protect, authorize('pharmacy'), attachPharmacyStore,
   asyncHandler(async (req, res) => {
@@ -898,8 +1022,6 @@ router.get('/orders/:orderId/export', protect, authorize('pharmacy'), attachPhar
 
 /**
  * [11] POST /orders/:orderId/pickup-verify
- * FIX: selectedRefundMethod 'Online' is not in refundMethod enum.
- *      Map 'Online' → 'Original_Source' when writing to refundMethod.
  */
 router.post('/orders/:orderId/pickup-verify', protect, authorize('pharmacy'), attachPharmacyStore,
   asyncHandler(async (req, res) => {
@@ -931,15 +1053,12 @@ router.post('/orders/:orderId/pickup-verify', protect, authorize('pharmacy'), at
         order.cancellation.refundAmount = order.billing.totalPayable;
 
         const selectedMethod = order.cancellation.selectedRefundMethod || 'Original_Source';
-
-        // FIX: selectedRefundMethod enum includes 'Online' but refundMethod enum does NOT.
-        // Map 'Online' → 'Original_Source' (Razorpay reversal) to keep enum valid.
         const refundMethodMap = {
-          Wallet:       'Wallet',
-          Online:       'Original_Source',   // ← FIX
+          Wallet:          'Wallet',
+          Online:          'Original_Source',
           Original_Source: 'Original_Source',
           Bank_Transfer:   'Bank_Transfer',
-          Custom_Bank:     'Bank_Transfer',   // custom bank details provided separately
+          Custom_Bank:     'Bank_Transfer',
         };
         order.cancellation.refundMethod = refundMethodMap[selectedMethod] || 'Original_Source';
 
@@ -995,54 +1114,38 @@ router.post('/orders/:orderId/pickup-verify', protect, authorize('pharmacy'), at
 /**
  * [12] GET /orders/:orderId/invoice
  */
-router.get(
-  '/orders/:orderId/invoice',
-  protect,
-  authorize('pharmacy'),
-  attachPharmacyStore,
+router.get('/orders/:orderId/invoice', protect, authorize('pharmacy'), attachPharmacyStore,
   asyncHandler(async (req, res) => {
     const order = await findOrderByIdOrString(req.params.orderId, req.pharmacy.store._id);
     if (!order) return res.status(404).json({ success: false, message: 'Order not found.' });
- 
+
     await order.populate('store', 'storeName address');
- 
+
     const customer     = await User.findById(order.customer).select('name email phone').lean();
     const storeDoc     = order.store;
     const storeAddress = storeDoc?.address
       ? `${storeDoc.address.line1 || ''}, ${storeDoc.address.city || 'Vijayawada'}, ${storeDoc.address.state || 'Andhra Pradesh'}`
       : 'Vijayawada, Andhra Pradesh';
- 
+
     const html = buildInvoiceHtml({
       order:        order.toObject({ virtuals: true }),
       user:         customer,
       storeName:    storeDoc?.storeName || 'Likeson Pharmacy',
       storeAddress,
     });
- 
+
     res.status(200).send(html);
-  }),
+  })
 );
- 
+
 /**
  * [13] GET /orders/:orderId/label
- *
- * Populate path: items.medicine → hsnCode (HsnCode collection)
- * This gives each item an hsnCode object with { hsnCode: string, gstPercentage: number }.
- * The generateDeliveryLabel util handles both string and object forms gracefully.
- *
- * Response: Content-Disposition: attachment triggers immediate browser download.
  */
-router.get(
-  '/orders/:orderId/label',
-  protect,
-  authorize('pharmacy'),
-  attachPharmacyStore,
+router.get('/orders/:orderId/label', protect, authorize('pharmacy'), attachPharmacyStore,
   asyncHandler(async (req, res) => {
     const order = await findOrderByIdOrString(req.params.orderId, req.pharmacy.store._id);
     if (!order) return res.status(404).json({ success: false, message: 'Order not found.' });
- 
-    // Populate each item's medicine, then the medicine's hsnCode reference
-    // so item.hsnCode becomes a full HsnCode document { hsnCode, gstPercentage, ... }
+
     await order.populate({
       path:     'items.medicine',
       populate: {
@@ -1051,302 +1154,575 @@ router.get(
         select: 'hsnCode description gstPercentage cgstPercentage sgstPercentage',
       },
     });
- 
-    // Merge populated hsnCode into each order item so the label util sees it
-    // Order items already carry hsnCode as a plain string from the snapshot.
-    // Override with the populated object when available for richer data.
+
     const orderObj = order.toObject({ virtuals: true });
     orderObj.items = orderObj.items.map((item) => ({
       ...item,
-      // Prefer the populated HsnCode doc; fall back to the stored string snapshot
-      hsnCode: item.medicine?.hsnCode ?? item.hsnCode,
-      // Prefer populated GST percentage
-      gstPercentage: item.medicine?.hsnCode?.gstPercentage ?? item.gstPercentage,
+      hsnCode:      item.medicine?.hsnCode ?? item.hsnCode,
+      gstPercentage:item.medicine?.hsnCode?.gstPercentage ?? item.gstPercentage,
     }));
- 
+
     const [storeDoc, customer] = await Promise.all([
       PharmacyStore.findById(req.pharmacy.store._id).lean(),
       User.findById(order.customer).select('name email phone').lean(),
     ]);
- 
-    const { html, labelId } = await generateDeliveryLabel({
-      order:    orderObj,
-      store:    storeDoc,
-      customer,
-    });
- 
+
+    const { html, labelId } = await generateDeliveryLabel({ order: orderObj, store: storeDoc, customer });
+
     logAudit('LABEL_GENERATED', { orderId: order.orderId, labelId, staffId: req.user._id });
- 
-    await sysLog(req, {
-      level:    'info',
-      category: 'system',
-      message:  `Delivery label ${labelId} generated for order ${order.orderId}`,
-      relatedEntity: {
-        model:    'PharmacyOrder',
-        entityId: order._id,
-        label:    order.orderId,
-      },
-      metadata: { labelId },
-    });
- 
-    // ── Auto-download response ──────────────────────────────────────────────
-    // Content-Disposition: attachment tells the browser to download the file
-    // rather than render it. filename is shown in the save-as dialog.
+    await sysLog(req, { level: 'info', category: 'system', message: `Delivery label ${labelId} generated for order ${order.orderId}`, relatedEntity: { model: 'PharmacyOrder', entityId: order._id, label: order.orderId }, metadata: { labelId } });
+
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="label-${order.orderId}.html"`,
-    );
+    res.setHeader('Content-Disposition', `attachment; filename="label-${order.orderId}.html"`);
     res.status(200).send(html);
-  }),
+  })
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ▶▶ SECTION B — INVENTORY MANAGEMENT
+// ▶▶ SECTION B — INVENTORY MANAGEMENT (MedicineInventory + MedicineBatch)
 // ═══════════════════════════════════════════════════════════════════════════════
+//
+// FIX (critical): Previous code embedded inventory[] inside Medicine model.
+// Medicine.js has NO inventory array. All inventory lives in MedicineInventory
+// collection (one doc per store+medicine) and MedicineBatch (one doc per batch).
+// All routes below are rewritten to use the correct models.
 
 /**
  * [14] GET /medicines
- * FIX: lowStock filter was applied against 'storeInventory.stockQuantity' directly,
- *      but storeInventory is an ARRAY after $addFields — you must use $elemMatch.
- *      Same fix applied to expiringSoon filter.
+ * List all medicines with their inventory status for this store.
+ * Uses MedicineInventory collection — the correct model.
  */
 router.get('/medicines', protect, authorize('pharmacy'), attachPharmacyStore,
   cache(60, (req) => `pharmacy:${req.pharmacy?.store?._id}:medicines:${JSON.stringify(req.query)}`),
   asyncHandler(async (req, res) => {
-    const { search, category, lowStock, expiringSoon } = req.query;
+    const { search, category, lowStock, expiringSoon, outOfStock } = req.query;
     const { page, limit, skip } = getPagination(req.query);
     const storeId = req.pharmacy.store._id;
 
-    const filter = { 'inventory.storeId': storeId };
+    // Build medicine filter
+    const medFilter = { isApproved: true, isDiscontinued: false, isDeleted: false };
     if (search) {
-      filter.$or = [
+      medFilter.$or = [
         { name:        { $regex: search, $options: 'i' } },
         { brandName:   { $regex: search, $options: 'i' } },
         { genericName: { $regex: search, $options: 'i' } },
       ];
     }
-    if (category) filter.category = category;
+    if (category) medFilter.category = category;
 
-    const pipeline = [
-      { $match: filter },
-      {
-        $addFields: {
-          storeInventory: {
-            $filter: { input: '$inventory', as: 'inv', cond: { $eq: ['$$inv.storeId', storeId] } },
-          },
-        },
-      },
-      { $match: { 'storeInventory.0': { $exists: true } } },
-    ];
+    // Build inventory filter
+    const invFilter = { storeId, isActive: true, isDeleted: false };
+    if (lowStock   === 'true') invFilter.isLowStock    = true;
+    if (outOfStock === 'true') invFilter.isOutOfStock  = true;
 
-    // FIX: storeInventory is an array — use $elemMatch-style $filter inside $match
-    if (lowStock === 'true') {
-      pipeline.push({
-        $match: {
-          storeInventory: {
-            $elemMatch: { stockQuantity: { $lte: LOW_STOCK_THRESHOLD, $gt: 0 } },
-          },
-        },
-      });
-    }
+    // Expiry filter: check batches near expiry
+    let nearExpiryMedicineIds = null;
     if (expiringSoon === 'true') {
       const cutoff = new Date();
       cutoff.setDate(cutoff.getDate() + EXPIRY_ALERT_DAYS);
-      pipeline.push({
-        $match: {
-          storeInventory: {
-            $elemMatch: { expiryDate: { $lte: cutoff, $gte: new Date() } },
-          },
-        },
-      });
+      const expiringBatches = await MedicineBatch.find({
+        storeId,
+        expiryDate: { $lte: cutoff, $gte: new Date() },
+        status: 'Active',
+        isDeleted: false,
+        remainingQuantity: { $gt: 0 },
+      }).distinct('medicineId');
+      nearExpiryMedicineIds = expiringBatches;
     }
 
-    const countPipeline  = [...pipeline, { $count: 'total' }];
-    const resultPipeline = [
-      ...pipeline,
-      { $skip: skip },
-      { $limit: limit },
-      { $project: { inventory: 0 } },
-    ];
+    // Get inventories matching inv filter
+    const inventories = await MedicineInventory.find(invFilter)
+      .populate({
+        path:   'medicineId',
+        match:  nearExpiryMedicineIds
+          ? { ...medFilter, _id: { $in: nearExpiryMedicineIds } }
+          : medFilter,
+        select: 'name brandName genericName category dosage manufacturer hsnCode gstPercentage images slug isPrescriptionRequired schedule',
+        populate: { path: 'hsnCode', select: 'hsnCode description gstPercentage cgstPercentage sgstPercentage igstPercentage' },
+      })
+      .populate('batchId', 'batchNumber expiryDate remainingQuantity isNearExpiry fifoPriority')
+      .populate('supplierId', 'name code contact.phone')
+      .sort({ updatedAt: -1 })
+      .lean();
 
-    const [medicines, countResult] = await Promise.all([
-      Medicine.aggregate(resultPipeline),
-      Medicine.aggregate(countPipeline),
-    ]);
-
-    await Medicine.populate(medicines, {
-      path:   'hsnCode',
-      select: 'hsnCode description gstPercentage cgstPercentage sgstPercentage igstPercentage',
-    });
+    // Filter out docs where medicine didn't match (populate returns null if match fails)
+    const valid = inventories.filter((inv) => inv.medicineId != null);
+    const total = valid.length;
+    const paginated = valid.slice(skip, skip + limit);
 
     res.status(200).json({
       success: true,
       data: {
-        medicines,
+        medicines: paginated,
         pagination: {
           currentPage: page,
-          totalPages:  Math.ceil((countResult[0]?.total || 0) / limit),
-          totalItems:  countResult[0]?.total || 0,
+          totalPages:  Math.ceil(total / limit),
+          totalItems:  total,
         },
       },
     });
+  })
+);
+
+/**
+ * [14b] GET /medicines/:medicineId/inventory
+ * Full inventory record for a specific medicine at this store.
+ */
+router.get('/medicines/:medicineId/inventory', protect, authorize('pharmacy'), attachPharmacyStore,
+  asyncHandler(async (req, res) => {
+    const storeId = req.pharmacy.store._id;
+    const inv = await MedicineInventory.findOne({
+      medicineId: req.params.medicineId,
+      storeId,
+      isDeleted: false,
+    })
+      .populate('medicineId', 'name brandName genericName category dosage manufacturer hsnCode gstPercentage referenceMrp images')
+      .populate('batchId', 'batchNumber expiryDate remainingQuantity isNearExpiry daysUntilExpiry')
+      .populate('supplierId', 'name code contact.phone')
+      .lean({ virtuals: true });
+
+    if (!inv) return res.status(404).json({ success: false, message: 'Inventory record not found for this medicine at your store.' });
+
+    // Also pull all batches for this medicine at this store
+    const batches = await MedicineBatch.find({
+      medicineId: req.params.medicineId,
+      storeId,
+      isDeleted: false,
+    }).sort({ fifoPriority: 1 }).lean({ virtuals: true });
+
+    res.status(200).json({ success: true, data: { inventory: inv, batches } });
   })
 );
 
 /**
  * [15] POST /medicines/:medicineId/add-stock
+ * FIX: Was mutating Medicine.inventory[] which doesn't exist.
+ * Now correctly creates/updates MedicineInventory + creates MedicineBatch.
+ * Also logs to InventoryMovement.
  */
 router.post('/medicines/:medicineId/add-stock', protect, authorize('pharmacy'), attachPharmacyStore,
   asyncHandler(async (req, res) => {
-    const { stockQuantity, batchNumber, expiryDate, pricePerUnit } = req.body;
+    const {
+      stockQuantity, batchNumber, expiryDate, manufacturingDate,
+      mrp, sellingPrice, discountPercent = 0,
+      purchasePrice, purchaseInvoiceNo, purchaseInvoiceDate,
+      supplierId, rackLocation,
+    } = req.body;
+
     if (!stockQuantity || stockQuantity <= 0) return res.status(400).json({ success: false, message: 'stockQuantity must be > 0.' });
     if (!batchNumber)  return res.status(400).json({ success: false, message: 'batchNumber is required.' });
     if (!expiryDate)   return res.status(400).json({ success: false, message: 'expiryDate is required.' });
+    if (!mrp || mrp <= 0)          return res.status(400).json({ success: false, message: 'mrp is required and must be > 0.' });
+    if (!sellingPrice || sellingPrice <= 0) return res.status(400).json({ success: false, message: 'sellingPrice is required and must be > 0.' });
 
-    const medicine = await Medicine.findById(req.params.medicineId);
-    if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
+    const medicine = await Medicine.findById(req.params.medicineId).lean();
+    if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found in catalogue.' });
 
-    const storeId     = req.pharmacy.store._id;
-    const existingIdx = medicine.inventory.findIndex(
-      (inv) => inv.storeId.equals(storeId) && inv.batchNumber === batchNumber
-    );
+    const storeId  = req.pharmacy.store._id;
+    const session  = await mongoose.startSession();
+    session.startTransaction();
 
-    if (existingIdx >= 0) {
-      medicine.inventory[existingIdx].stockQuantity += Number(stockQuantity);
-      medicine.inventory[existingIdx].expiryDate    = new Date(expiryDate);
-      medicine.inventory[existingIdx].pricePerUnit  = pricePerUnit ?? medicine.inventory[existingIdx].pricePerUnit;
-      medicine.inventory[existingIdx].isLowStock    = medicine.inventory[existingIdx].stockQuantity <= LOW_STOCK_THRESHOLD;
-    } else {
-      medicine.inventory.push({
+    try {
+      // 1. Upsert MedicineInventory (one per store+medicine)
+      let inv = await MedicineInventory.findOne({ medicineId: medicine._id, storeId }).session(session);
+      const isNewInv = !inv;
+
+      if (!inv) {
+        inv = new MedicineInventory({
+          medicineId:      medicine._id,
+          storeId,
+          mrp,
+          sellingPrice,
+          discountPercent,
+          createdBy:       req.user._id,
+        });
+      }
+
+      // Update pricing fields from this stock-in
+      inv.mrp           = mrp;
+      inv.sellingPrice  = sellingPrice;
+      inv.discountPercent = discountPercent;
+      if (supplierId)    inv.supplierId   = supplierId;
+      if (rackLocation)  inv.rackLocation = rackLocation;
+      inv.updatedBy      = req.user._id;
+
+      // Increment total stock
+      inv.stockQuantity   = (inv.stockQuantity || 0) + Number(stockQuantity);
+      inv.availableStock  = Math.max(0, inv.stockQuantity - (inv.reservedStock || 0));
+      inv.isOutOfStock    = inv.availableStock <= 0;
+      inv.isLowStock      = !inv.isOutOfStock && inv.availableStock <= (inv.reorderLevel || LOW_STOCK_THRESHOLD);
+      inv.isActive        = true;
+      inv.isDeleted       = false;
+
+      await inv.save({ session });
+
+      // 2. Create or update MedicineBatch
+      let batch = await MedicineBatch.findOne({ medicineId: medicine._id, storeId, batchNumber }).session(session);
+      if (batch) {
+        // Top-up existing batch
+        batch.remainingQuantity  = (batch.remainingQuantity || 0) + Number(stockQuantity);
+        batch.quantityPurchased += Number(stockQuantity);
+        batch.expiryDate         = new Date(expiryDate);
+        if (purchasePrice)        batch.purchasePrice        = purchasePrice;
+        if (purchaseInvoiceNo)    batch.purchaseInvoiceNo    = purchaseInvoiceNo;
+        if (purchaseInvoiceDate)  batch.purchaseInvoiceDate  = new Date(purchaseInvoiceDate);
+        batch.updatedBy = req.user._id;
+        await batch.save({ session });
+      } else {
+        batch = await MedicineBatch.create([{
+          medicineId:         medicine._id,
+          storeId,
+          supplierId:         supplierId || null,
+          batchNumber,
+          manufacturingDate:  manufacturingDate ? new Date(manufacturingDate) : undefined,
+          expiryDate:         new Date(expiryDate),
+          purchasePrice,
+          purchaseInvoiceNo,
+          purchaseInvoiceDate: purchaseInvoiceDate ? new Date(purchaseInvoiceDate) : undefined,
+          quantityPurchased:  Number(stockQuantity),
+          remainingQuantity:  Number(stockQuantity),
+          status:             'Active',
+          createdBy:          req.user._id,
+        }], { session });
+        batch = batch[0];
+      }
+
+      // 3. Set active batch pointer to earliest-expiry batch (FEFO)
+      const activeBatches = await MedicineBatch.find({
+        medicineId: medicine._id, storeId, status: 'Active', isDeleted: false,
+        remainingQuantity: { $gt: 0 },
+      }).sort({ fifoPriority: 1 }).session(session).lean();
+
+      if (activeBatches.length > 0) {
+        inv.batchId = activeBatches[0]._id;
+        await inv.save({ session });
+      }
+
+      // 4. Log to InventoryMovement
+      await InventoryMovement.create([{
         storeId,
-        addedBy:       req.user._id,
-        stockQuantity: Number(stockQuantity),
-        batchNumber,
-        expiryDate:    new Date(expiryDate),
-        pricePerUnit:  pricePerUnit ?? medicine.mrp,
-        isLowStock:    Number(stockQuantity) <= LOW_STOCK_THRESHOLD,
+        medicineId:      medicine._id,
+        batchId:         batch._id,
+        movementType:    'Purchase',
+        quantityChanged: Number(stockQuantity),
+        previousStock:   isNewInv ? 0 : inv.stockQuantity - Number(stockQuantity),
+        newStock:        inv.stockQuantity,
+        referenceModel:  'Manual',
+        reason:          `Stock added via pharmacy portal — batch ${batchNumber}`,
+        performedBy:     req.user._id,
+      }], { session });
+
+      await session.commitTransaction();
+
+      // Reload with populate for response
+      const updatedInv = await MedicineInventory.findById(inv._id)
+        .populate('medicineId', 'name brandName genericName category hsnCode gstPercentage referenceMrp images')
+        .populate('batchId', 'batchNumber expiryDate remainingQuantity isNearExpiry')
+        .populate('supplierId', 'name code')
+        .lean({ virtuals: true });
+
+      await invalidateStoreCache(storeId);
+      logAudit('STOCK_ADDED', { medicineId: medicine._id, storeId, batchNumber, quantity: stockQuantity, staffId: req.user._id });
+      await sysLog(req, {
+        level: 'success', category: 'system',
+        message: `Stock added: ${medicine.brandName || medicine.name} — ${stockQuantity} units (batch: ${batchNumber})`,
+        relatedEntity: { model: 'PharmacyStore', entityId: storeId },
+        metadata: { medicineId: medicine._id, batchNumber, stockQuantity },
       });
+
+      if (inv.isLowStock) {
+        dispatchLowStockAlert(medicine, storeId, inv.availableStock, req.user._id);
+      }
+
+      res.status(200).json({ success: true, message: 'Stock added successfully.', data: { inventory: updatedInv, batch } });
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      session.endSession();
     }
-
-    await medicine.save();
-    await invalidateStoreCache(storeId);
-
-    const populatedMedicine = await Medicine.findById(medicine._id)
-      .populate('hsnCode', 'hsnCode description gstPercentage cgstPercentage sgstPercentage igstPercentage')
-      .lean();
-
-    logAudit('STOCK_ADDED', { medicineId: medicine._id, storeId, batchNumber, quantity: stockQuantity, staffId: req.user._id });
-    await sysLog(req, {
-      level: 'success', category: 'system',
-      message: `Stock added: ${medicine.brandName || medicine.name} — ${stockQuantity} units (batch: ${batchNumber})`,
-      relatedEntity: { model: 'PharmacyStore', entityId: storeId },
-      metadata: { medicineId: medicine._id, batchNumber, stockQuantity },
-    });
-
-    const updatedEntry = medicine.inventory.find((inv) => inv.storeId.equals(storeId) && inv.batchNumber === batchNumber);
-    if (updatedEntry && updatedEntry.stockQuantity <= LOW_STOCK_THRESHOLD) {
-      dispatchLowStockAlert(medicine, storeId, updatedEntry.stockQuantity, req.user._id);
-    }
-
-    res.status(200).json({ success: true, message: 'Stock updated successfully.', data: { medicine: populatedMedicine } });
   })
 );
 
 /**
  * [16] PATCH /medicines/:medicineId/deduct-stock
+ * FIX: Was mutating Medicine.inventory[]. Now uses MedicineInventory + MedicineBatch
+ * with proper FEFO deduction and InventoryMovement logging.
  */
 router.patch('/medicines/:medicineId/deduct-stock', protect, authorize('pharmacy'), attachPharmacyStore,
   asyncHandler(async (req, res) => {
-    const { quantity, batchNumber, reason = '' } = req.body;
+    const { quantity, batchNumber, reason = '', movementType = 'Adjustment_Sub' } = req.body;
     if (!quantity || quantity <= 0) return res.status(400).json({ success: false, message: 'quantity must be > 0.' });
-    const medicine = await Medicine.findById(req.params.medicineId);
-    if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
-    const storeId = req.pharmacy.store._id;
-    const filter  = batchNumber
-      ? (inv) => inv.storeId.equals(storeId) && inv.batchNumber === batchNumber
-      : (inv) => inv.storeId.equals(storeId);
-    const idx = medicine.inventory.findIndex(filter);
-    if (idx < 0) return res.status(404).json({ success: false, message: 'Inventory entry not found.' });
-    if (medicine.inventory[idx].stockQuantity < quantity) return res.status(400).json({ success: false, message: 'Insufficient stock.' });
 
-    medicine.inventory[idx].stockQuantity -= quantity;
-    medicine.inventory[idx].isLowStock    = medicine.inventory[idx].stockQuantity <= LOW_STOCK_THRESHOLD;
-
-    await medicine.save();
-    await invalidateStoreCache(storeId);
-
-    const populatedMedicine = await Medicine.findById(medicine._id)
-      .populate('hsnCode', 'hsnCode description gstPercentage cgstPercentage sgstPercentage igstPercentage')
-      .lean();
-
-    logAudit('STOCK_DEDUCTED', { medicineId: medicine._id, batchNumber, quantity, reason });
-    await sysLog(req, {
-      level: 'info', category: 'system',
-      message: `Stock deducted: ${medicine.brandName || medicine.name} — ${quantity} units`,
-      relatedEntity: { model: 'PharmacyStore', entityId: storeId },
-      metadata: { medicineId: medicine._id, batchNumber, quantity, reason, remaining: medicine.inventory[idx].stockQuantity },
-    });
-
-    if (medicine.inventory[idx].stockQuantity <= LOW_STOCK_THRESHOLD) {
-      dispatchLowStockAlert(medicine, storeId, medicine.inventory[idx].stockQuantity, req.user._id);
+    const validMovements = ['Adjustment_Sub', 'Damage', 'Expiry', 'Transfer_Out'];
+    if (!validMovements.includes(movementType)) {
+      return res.status(400).json({ success: false, message: `movementType must be one of: ${validMovements.join(', ')}` });
     }
 
-    res.status(200).json({ success: true, message: 'Stock deducted.', data: { medicine: populatedMedicine } });
+    const storeId = req.pharmacy.store._id;
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const inv = await MedicineInventory.findOne({
+        medicineId: req.params.medicineId, storeId, isActive: true, isDeleted: false,
+      }).session(session);
+      if (!inv) { await session.abortTransaction(); return res.status(404).json({ success: false, message: 'Inventory record not found.' }); }
+      if (inv.availableStock < quantity) { await session.abortTransaction(); return res.status(400).json({ success: false, message: `Insufficient available stock. Available: ${inv.availableStock}` }); }
+
+      // Deduct from specific batch or FEFO-first
+      let targetBatch;
+      if (batchNumber) {
+        targetBatch = await MedicineBatch.findOne({
+          medicineId: req.params.medicineId, storeId, batchNumber, status: 'Active', isDeleted: false,
+        }).session(session);
+        if (!targetBatch) { await session.abortTransaction(); return res.status(404).json({ success: false, message: `Batch ${batchNumber} not found or not active.` }); }
+        if (targetBatch.remainingQuantity < quantity) { await session.abortTransaction(); return res.status(400).json({ success: false, message: `Batch ${batchNumber} has only ${targetBatch.remainingQuantity} units.` }); }
+      } else {
+        // FEFO: pick earliest expiry active batch with enough stock
+        targetBatch = await MedicineBatch.findOne({
+          medicineId: req.params.medicineId, storeId, status: 'Active', isDeleted: false,
+          remainingQuantity: { $gte: quantity },
+        }).sort({ fifoPriority: 1 }).session(session);
+        if (!targetBatch) { await session.abortTransaction(); return res.status(400).json({ success: false, message: 'No single batch with sufficient stock found. Specify batchNumber.' }); }
+      }
+
+      const prevStock = inv.stockQuantity;
+      targetBatch.remainingQuantity -= quantity;
+      if (movementType === 'Damage') {
+        targetBatch.damagedQuantity = (targetBatch.damagedQuantity || 0) + quantity;
+        inv.damagedStock = (inv.damagedStock || 0) + quantity;
+      }
+      if (targetBatch.remainingQuantity === 0) targetBatch.status = 'Exhausted';
+      await targetBatch.save({ session });
+
+      inv.stockQuantity  -= quantity;
+      inv.availableStock  = Math.max(0, inv.stockQuantity - (inv.reservedStock || 0));
+      inv.isOutOfStock    = inv.availableStock <= 0;
+      inv.isLowStock      = !inv.isOutOfStock && inv.availableStock <= (inv.reorderLevel || LOW_STOCK_THRESHOLD);
+      inv.updatedBy       = req.user._id;
+      await inv.save({ session });
+
+      // Re-point batchId to new FEFO front
+      const nextActiveBatch = await MedicineBatch.findOne({
+        medicineId: req.params.medicineId, storeId, status: 'Active', isDeleted: false,
+        remainingQuantity: { $gt: 0 },
+      }).sort({ fifoPriority: 1 }).session(session);
+      if (nextActiveBatch) {
+        inv.batchId = nextActiveBatch._id;
+        await inv.save({ session });
+      }
+
+      await InventoryMovement.create([{
+        storeId,
+        medicineId:      req.params.medicineId,
+        batchId:         targetBatch._id,
+        movementType,
+        quantityChanged: quantity,
+        previousStock:   prevStock,
+        newStock:        inv.stockQuantity,
+        referenceModel:  'Manual',
+        reason,
+        performedBy:     req.user._id,
+      }], { session });
+
+      await session.commitTransaction();
+      await invalidateStoreCache(storeId);
+
+      const medicine = await Medicine.findById(req.params.medicineId).lean();
+      logAudit('STOCK_DEDUCTED', { medicineId: req.params.medicineId, batchNumber: targetBatch.batchNumber, quantity, reason });
+      await sysLog(req, {
+        level: 'info', category: 'system',
+        message: `Stock deducted: ${medicine?.brandName || medicine?.name} — ${quantity} units (${movementType})`,
+        relatedEntity: { model: 'PharmacyStore', entityId: storeId },
+        metadata: { medicineId: req.params.medicineId, batchNumber: targetBatch.batchNumber, quantity, reason, remaining: inv.stockQuantity },
+      });
+
+      if (inv.isLowStock || inv.isOutOfStock) {
+        dispatchLowStockAlert(medicine, storeId, inv.availableStock, req.user._id);
+      }
+
+      const updatedInv = await MedicineInventory.findById(inv._id)
+        .populate('medicineId', 'name brandName genericName category')
+        .populate('batchId', 'batchNumber expiryDate remainingQuantity')
+        .lean({ virtuals: true });
+
+      res.status(200).json({ success: true, message: 'Stock deducted.', data: { inventory: updatedInv } });
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      session.endSession();
+    }
   })
 );
 
 /**
  * [17] GET /medicines/:medicineId/stock
+ * FIX: Was reading Medicine.inventory[]. Now reads MedicineInventory + all batches.
  */
 router.get('/medicines/:medicineId/stock', protect, authorize('pharmacy'), attachPharmacyStore,
   cache(30, (req) => `pharmacy:${req.pharmacy?.store?._id}:med-stock:${req.params.medicineId}`),
   asyncHandler(async (req, res) => {
-    const storeId  = req.pharmacy.store._id;
-    const medicine = await Medicine.findById(req.params.medicineId)
-      .populate('hsnCode', 'hsnCode description gstPercentage cgstPercentage sgstPercentage igstPercentage')
-      .lean();
+    const storeId = req.pharmacy.store._id;
+
+    const [medicine, inv, batches] = await Promise.all([
+      Medicine.findById(req.params.medicineId)
+        .populate('hsnCode', 'hsnCode description gstPercentage cgstPercentage sgstPercentage igstPercentage')
+        .lean(),
+      MedicineInventory.findOne({ medicineId: req.params.medicineId, storeId, isDeleted: false })
+        .populate('batchId', 'batchNumber expiryDate remainingQuantity isNearExpiry daysUntilExpiry')
+        .populate('supplierId', 'name code')
+        .lean({ virtuals: true }),
+      MedicineBatch.find({ medicineId: req.params.medicineId, storeId, isDeleted: false })
+        .sort({ fifoPriority: 1 })
+        .lean({ virtuals: true }),
+    ]);
+
     if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
-    const storeInventory = (medicine.inventory || []).filter((inv) => inv.storeId.equals(storeId));
-    const totalStock     = storeInventory.reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0);
+
     res.status(200).json({
       success: true,
-      data: { medicineId: medicine._id, name: medicine.name, brandName: medicine.brandName, mrp: medicine.mrp, storeInventory, totalStock, isLowStock: totalStock <= LOW_STOCK_THRESHOLD },
+      data: {
+        medicine,
+        inventory:   inv || null,
+        batches,
+        summary: {
+          totalStock:     inv?.stockQuantity    || 0,
+          reservedStock:  inv?.reservedStock    || 0,
+          availableStock: inv?.availableStock   || 0,
+          damagedStock:   inv?.damagedStock     || 0,
+          returnedStock:  inv?.returnedStock    || 0,
+          isLowStock:     inv?.isLowStock       || false,
+          isOutOfStock:   inv?.isOutOfStock     || true,
+          mrp:            inv?.mrp              || medicine.referenceMrp || 0,
+          sellingPrice:   inv?.sellingPrice     || 0,
+          finalPrice:     inv?.finalPrice       || 0,
+          discountPercent:inv?.discountPercent  || 0,
+          activeBatches:  batches.filter(b => b.status === 'Active').length,
+          nearExpiryBatches: batches.filter(b => b.isNearExpiry && b.status === 'Active').length,
+        },
+      },
     });
+  })
+);
+
+/**
+ * [17b] PATCH /medicines/:medicineId/inventory
+ * Update pricing / rack location / reorder level on MedicineInventory.
+ */
+router.patch('/medicines/:medicineId/inventory', protect, authorize('pharmacy'), attachPharmacyStore,
+  asyncHandler(async (req, res) => {
+    const { mrp, sellingPrice, discountPercent, reorderLevel, minimumStock, maximumStock, rackLocation, isActive } = req.body;
+    const storeId = req.pharmacy.store._id;
+
+    const inv = await MedicineInventory.findOne({ medicineId: req.params.medicineId, storeId, isDeleted: false });
+    if (!inv) return res.status(404).json({ success: false, message: 'Inventory record not found.' });
+
+    if (mrp            != null) inv.mrp            = mrp;
+    if (sellingPrice   != null) inv.sellingPrice    = sellingPrice;
+    if (discountPercent!= null) inv.discountPercent = discountPercent;
+    if (reorderLevel   != null) inv.reorderLevel    = reorderLevel;
+    if (minimumStock   != null) inv.minimumStock    = minimumStock;
+    if (maximumStock   != null) inv.maximumStock    = maximumStock;
+    if (rackLocation   != null) inv.rackLocation    = rackLocation;
+    if (isActive       != null) inv.isActive        = isActive;
+    inv.updatedBy = req.user._id;
+
+    await inv.save(); // triggers pre-save: finalPrice, availableStock, isLowStock, isOutOfStock
+
+    await invalidateStoreCache(storeId);
+    res.status(200).json({ success: true, message: 'Inventory updated.', data: { inventory: inv.toObject({ virtuals: true }) } });
   })
 );
 
 /**
  * [18] GET /inventory/batches
+ * FIX: Was aggregating from embedded Medicine.inventory[].
+ * Now queries MedicineBatch collection directly.
  */
 router.get('/inventory/batches', protect, authorize('pharmacy'), attachPharmacyStore,
   cache(60, (req) => `pharmacy:${req.pharmacy?.store?._id}:batches:${JSON.stringify(req.query)}`),
   asyncHandler(async (req, res) => {
     const storeId = req.pharmacy.store._id;
+    const { status, search, nearExpiry } = req.query;
     const { page, limit, skip } = getPagination(req.query);
-    const pipeline = [
-      { $match: { 'inventory.storeId': storeId } },
-      { $unwind: '$inventory' },
-      { $match: { 'inventory.storeId': storeId } },
-      { $project: { medicineId: '$_id', name: 1, brandName: 1, category: 1, hsnCode: 1, batchNumber: '$inventory.batchNumber', stockQuantity: '$inventory.stockQuantity', expiryDate: '$inventory.expiryDate', pricePerUnit: '$inventory.pricePerUnit', isLowStock: '$inventory.isLowStock', _id: 0 } },
-      { $sort: { expiryDate: 1 } },
-    ];
-    const [batches, countResult] = await Promise.all([
-      Medicine.aggregate([...pipeline, { $skip: skip }, { $limit: limit }]),
-      Medicine.aggregate([...pipeline, { $count: 'total' }]),
-    ]);
 
-    await Medicine.populate(batches, {
-      path:   'hsnCode',
-      select: 'hsnCode description gstPercentage cgstPercentage sgstPercentage igstPercentage',
+    const batchFilter = { storeId, isDeleted: false };
+    if (status) batchFilter.status = status;
+    if (nearExpiry === 'true') batchFilter.isNearExpiry = true;
+
+    const batches = await MedicineBatch.find(batchFilter)
+      .populate({
+        path:   'medicineId',
+        match:  search
+          ? {
+              $or: [
+                { name:      { $regex: search, $options: 'i' } },
+                { brandName: { $regex: search, $options: 'i' } },
+              ],
+            }
+          : {},
+        select: 'name brandName genericName category hsnCode gstPercentage',
+        populate: { path: 'hsnCode', select: 'hsnCode description gstPercentage' },
+      })
+      .populate('supplierId', 'name code contact.phone')
+      .sort({ fifoPriority: 1, expiryDate: 1 })
+      .lean({ virtuals: true });
+
+    const valid     = batches.filter((b) => b.medicineId != null);
+    const total     = valid.length;
+    const paginated = valid.slice(skip, skip + limit);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        batches: paginated,
+        pagination: { currentPage: page, totalPages: Math.ceil(total / limit), totalItems: total },
+      },
     });
+  })
+);
 
-    res.status(200).json({ success: true, data: { batches, pagination: { currentPage: page, totalPages: Math.ceil((countResult[0]?.total || 0) / limit), totalItems: countResult[0]?.total || 0 } } });
+/**
+ * [18b] PATCH /inventory/batches/:batchId
+ * Update batch details: expiry, status, damaged/returned qty, notes.
+ */
+router.patch('/inventory/batches/:batchId', protect, authorize('pharmacy'), attachPharmacyStore,
+  asyncHandler(async (req, res) => {
+    const { expiryDate, status, damagedQuantity, returnedQuantity, notes } = req.body;
+    const storeId = req.pharmacy.store._id;
+
+    const batch = await MedicineBatch.findOne({ _id: req.params.batchId, storeId, isDeleted: false });
+    if (!batch) return res.status(404).json({ success: false, message: 'Batch not found.' });
+
+    if (expiryDate)     batch.expiryDate      = new Date(expiryDate);
+    if (status)         batch.status          = status;
+    if (damagedQuantity != null) {
+      const addDamaged = damagedQuantity - (batch.damagedQuantity || 0);
+      if (addDamaged > 0) {
+        batch.damagedQuantity   = damagedQuantity;
+        batch.remainingQuantity = Math.max(0, batch.remainingQuantity - addDamaged);
+        // Reflect in inventory
+        await MedicineInventory.findOneAndUpdate(
+          { medicineId: batch.medicineId, storeId },
+          { $inc: { stockQuantity: -addDamaged, availableStock: -addDamaged, damagedStock: addDamaged } }
+        );
+      }
+    }
+    if (returnedQuantity != null) batch.returnedQuantity = returnedQuantity;
+    batch.updatedBy = req.user._id;
+
+    await batch.save();
+    await invalidateStoreCache(storeId);
+    res.status(200).json({ success: true, message: 'Batch updated.', data: { batch: batch.toObject({ virtuals: true }) } });
   })
 );
 
 /**
  * [19] GET /inventory/expiry-alerts
+ * FIX: Was aggregating embedded Medicine.inventory[].
+ * Now queries MedicineBatch directly — correct and faster.
  */
 router.get('/inventory/expiry-alerts', protect, authorize('pharmacy'), attachPharmacyStore,
   cache(120, (req) => `pharmacy:${req.pharmacy?.store?._id}:expiry-alerts`),
@@ -1355,47 +1731,94 @@ router.get('/inventory/expiry-alerts', protect, authorize('pharmacy'), attachPha
     const days    = parseInt(req.query.days, 10) || EXPIRY_ALERT_DAYS;
     const cutoff  = new Date();
     cutoff.setDate(cutoff.getDate() + days);
-    const expiring = await Medicine.aggregate([
-      { $match: { 'inventory.storeId': storeId } },
-      { $unwind: '$inventory' },
-      { $match: { 'inventory.storeId': storeId, 'inventory.expiryDate': { $lte: cutoff, $gte: new Date() }, 'inventory.stockQuantity': { $gt: 0 } } },
-      { $project: { medicineId: '$_id', name: 1, brandName: 1, category: 1, batchNumber: '$inventory.batchNumber', stockQuantity: '$inventory.stockQuantity', expiryDate: '$inventory.expiryDate', daysLeft: { $ceil: { $divide: [{ $subtract: ['$inventory.expiryDate', new Date()] }, 86400000] } }, _id: 0 } },
-      { $sort: { expiryDate: 1 } },
-    ]);
-    if (req.query.sendEmail === 'true' && expiring.length > 0) {
+
+    const expiring = await MedicineBatch.find({
+      storeId,
+      expiryDate: { $lte: cutoff, $gte: new Date() },
+      status: 'Active',
+      isDeleted: false,
+      remainingQuantity: { $gt: 0 },
+    })
+      .populate('medicineId', 'name brandName genericName category hsnCode gstPercentage')
+      .populate('supplierId', 'name code')
+      .sort({ expiryDate: 1 })
+      .lean({ virtuals: true });
+
+    const formatted = expiring.map((b) => ({
+      batchId:       b._id,
+      batchNumber:   b.batchNumber,
+      medicineId:    b.medicineId?._id,
+      name:          b.medicineId?.name,
+      brandName:     b.medicineId?.brandName,
+      category:      b.medicineId?.category,
+      stockQuantity: b.remainingQuantity,
+      expiryDate:    b.expiryDate,
+      daysLeft:      b.daysUntilExpiry,
+      isNearExpiry:  b.isNearExpiry,
+      supplier:      b.supplierId?.name,
+    }));
+
+    if (req.query.sendEmail === 'true' && formatted.length > 0) {
       const pharmacyUser = await User.findById(req.user._id).select('email name').lean();
       if (pharmacyUser?.email) {
-        const html = buildBatchExpiryAlertEmail({ userName: pharmacyUser.name, storeName: req.pharmacy.store.storeName, items: expiring, days });
-        sendEmail({ email: pharmacyUser.email, subject: `[Likeson Healthcare] ⚠️ ${expiring.length} medicine(s) expiring within ${days} days`, html }).catch((err) => logError('EXPIRY_ALERT_EMAIL', err));
+        const html = buildBatchExpiryAlertEmail({ userName: pharmacyUser.name, storeName: req.pharmacy.store.storeName, items: formatted, days });
+        sendEmail({ email: pharmacyUser.email, subject: `[Likeson Healthcare] ⚠️ ${formatted.length} medicine(s) expiring within ${days} days`, html })
+          .catch((err) => logError('EXPIRY_ALERT_EMAIL', err));
       }
     }
-    res.status(200).json({ success: true, data: { expiringMedicines: expiring, count: expiring.length, alertDays: days } });
+
+    res.status(200).json({ success: true, data: { expiringMedicines: formatted, count: formatted.length, alertDays: days } });
   })
 );
 
 /**
  * [20] GET /inventory/low-stock
+ * FIX: Was aggregating embedded Medicine.inventory[].
+ * Now queries MedicineInventory directly.
  */
 router.get('/inventory/low-stock', protect, authorize('pharmacy'), attachPharmacyStore,
   cache(60, (req) => `pharmacy:${req.pharmacy?.store?._id}:low-stock`),
   asyncHandler(async (req, res) => {
     const storeId   = req.pharmacy.store._id;
     const threshold = parseInt(req.query.threshold, 10) || LOW_STOCK_THRESHOLD;
-    const lowStockItems = await Medicine.aggregate([
-      { $match: { 'inventory.storeId': storeId } },
-      { $unwind: '$inventory' },
-      { $match: { 'inventory.storeId': storeId, 'inventory.stockQuantity': { $lte: threshold } } },
-      { $project: { medicineId: '$_id', name: 1, brandName: 1, category: 1, batchNumber: '$inventory.batchNumber', stockQuantity: '$inventory.stockQuantity', expiryDate: '$inventory.expiryDate', pricePerUnit: '$inventory.pricePerUnit', _id: 0 } },
-      { $sort: { stockQuantity: 1 } },
-    ]);
-    if (req.query.sendEmail === 'true' && lowStockItems.length > 0) {
+
+    const lowStockItems = await MedicineInventory.find({
+      storeId,
+      isActive:  true,
+      isDeleted: false,
+      availableStock: { $lte: threshold },
+    })
+      .populate('medicineId', 'name brandName genericName category manufacturer hsnCode gstPercentage')
+      .populate('batchId', 'batchNumber expiryDate remainingQuantity')
+      .sort({ availableStock: 1 })
+      .lean({ virtuals: true });
+
+    const formatted = lowStockItems.map((inv) => ({
+      inventoryId:    inv._id,
+      medicineId:     inv.medicineId?._id,
+      name:           inv.medicineId?.name,
+      brandName:      inv.medicineId?.brandName,
+      category:       inv.medicineId?.category,
+      availableStock: inv.availableStock,
+      stockQuantity:  inv.stockQuantity,
+      reservedStock:  inv.reservedStock,
+      reorderLevel:   inv.reorderLevel,
+      mrp:            inv.mrp,
+      sellingPrice:   inv.sellingPrice,
+      isOutOfStock:   inv.isOutOfStock,
+      activeBatch:    inv.batchId,
+    }));
+
+    if (req.query.sendEmail === 'true' && formatted.length > 0) {
       const pharmacyUser = await User.findById(req.user._id).select('email name').lean();
       if (pharmacyUser?.email) {
-        const html = buildLowStockAlertEmail({ userName: pharmacyUser.name, storeName: req.pharmacy.store.storeName, items: lowStockItems, threshold });
-        sendEmail({ email: pharmacyUser.email, subject: `[Likeson Healthcare] 🔴 ${lowStockItems.length} medicine(s) running low`, html }).catch((err) => logError('LOW_STOCK_EMAIL', err));
+        const html = buildLowStockAlertEmail({ userName: pharmacyUser.name, storeName: req.pharmacy.store.storeName, items: formatted, threshold });
+        sendEmail({ email: pharmacyUser.email, subject: `[Likeson Healthcare] 🔴 ${formatted.length} medicine(s) running low`, html })
+          .catch((err) => logError('LOW_STOCK_EMAIL', err));
       }
     }
-    res.status(200).json({ success: true, data: { lowStockItems, count: lowStockItems.length, threshold } });
+
+    res.status(200).json({ success: true, data: { lowStockItems: formatted, count: formatted.length, threshold } });
   })
 );
 
@@ -1404,14 +1827,402 @@ router.get('/inventory/low-stock', protect, authorize('pharmacy'), attachPharmac
  */
 router.post('/medicines/:medicineId/request-stock', protect, authorize('pharmacy'), attachPharmacyStore,
   asyncHandler(async (req, res) => {
-    const { requiredQuantity, urgency = 'Medium' } = req.body;
+    const { requiredQuantity, urgency = 'Medium', supplierId, notes } = req.body;
     if (!requiredQuantity || requiredQuantity <= 0) return res.status(400).json({ success: false, message: 'requiredQuantity must be > 0.' });
     if (!['Low', 'Medium', 'High', 'Critical'].includes(urgency)) return res.status(400).json({ success: false, message: 'Invalid urgency.' });
-    const medicine = await Medicine.findById(req.params.medicineId);
+
+    const medicine = await Medicine.findById(req.params.medicineId).lean();
     if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
+
     logAudit('STOCK_REQUESTED', { medicineId: medicine._id, storeId: req.pharmacy.store._id, requiredQuantity, urgency, staffId: req.user._id });
-    await sysLog(req, { level: 'info', category: 'system', message: `Restock request: ${medicine.brandName || medicine.name} — ${requiredQuantity} units (${urgency})`, relatedEntity: { model: 'PharmacyStore', entityId: req.pharmacy.store._id }, metadata: { medicineId: medicine._id, requiredQuantity, urgency } });
-    res.status(200).json({ success: true, message: 'Stock replenishment request submitted.', data: { medicineId: req.params.medicineId, medicineName: medicine.brandName || medicine.name, requiredQuantity, urgency } });
+    await sysLog(req, { level: 'info', category: 'system', message: `Restock request: ${medicine.brandName || medicine.name} — ${requiredQuantity} units (${urgency})`, relatedEntity: { model: 'PharmacyStore', entityId: req.pharmacy.store._id }, metadata: { medicineId: medicine._id, requiredQuantity, urgency, notes } });
+
+    res.status(200).json({ success: true, message: 'Stock replenishment request submitted.', data: { medicineId: req.params.medicineId, medicineName: medicine.brandName || medicine.name, requiredQuantity, urgency, notes } });
+  })
+);
+
+/**
+ * [21b] GET /inventory/movements
+ * NEW — paginated inventory movement ledger for this store.
+ */
+router.get('/inventory/movements', protect, authorize('pharmacy'), attachPharmacyStore,
+  asyncHandler(async (req, res) => {
+    const { medicineId, movementType, dateFilter = 'last30days', startDate, endDate } = req.query;
+    const { page, limit, skip } = getPagination(req.query);
+    const storeId = req.pharmacy.store._id;
+
+    const filter = { storeId };
+    if (medicineId)    filter.medicineId    = medicineId;
+    if (movementType)  filter.movementType  = movementType;
+    filter.createdAt = parseDateFilter(dateFilter, startDate, endDate);
+
+    const [movements, total] = await Promise.all([
+      InventoryMovement.find(filter)
+        .populate('medicineId', 'name brandName genericName category')
+        .populate('batchId',    'batchNumber expiryDate')
+        .populate('performedBy','name role')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      InventoryMovement.countDocuments(filter),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        movements,
+        pagination: { currentPage: page, totalPages: Math.ceil(total / limit), totalItems: total },
+      },
+    });
+  })
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ▶▶ SECTION B2 — SUPPLIER MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /suppliers — list suppliers (pharmacy sees all; admin sees all)
+ */
+router.get('/suppliers', protect, authorize('pharmacy', 'admin', 'superadmin'),
+  asyncHandler(async (req, res) => {
+    const { search, isActive = 'true', page = 1, limit = 20 } = req.query;
+    const { skip } = getPagination({ page, limit });
+    const filter = {};
+    if (isActive !== 'all') filter.isActive = isActive !== 'false';
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { code: { $regex: search, $options: 'i' } },
+        { 'contact.email': { $regex: search, $options: 'i' } },
+      ];
+    }
+    const [suppliers, total] = await Promise.all([
+      Supplier.find(filter).select('-bankDetails.accountNumber').sort({ name: 1 }).skip(skip).limit(parseInt(limit)).lean(),
+      Supplier.countDocuments(filter),
+    ]);
+    res.status(200).json({ success: true, data: { suppliers, pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) } } });
+  })
+);
+
+/**
+ * POST /suppliers — create supplier
+ */
+router.post('/suppliers', protect, authorize('admin', 'superadmin'),
+  asyncHandler(async (req, res) => {
+    const { name, contact, address, legal, paymentTerms, bankDetails } = req.body;
+    if (!name || !contact?.email || !contact?.phone) return res.status(400).json({ success: false, message: 'name, contact.email, contact.phone required.' });
+    if (!legal?.gstNumber || !legal?.dlNumber) return res.status(400).json({ success: false, message: 'legal.gstNumber and legal.dlNumber required.' });
+
+    const code = name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) + '-' + String(Date.now()).slice(-4);
+    const supplier = await Supplier.create({ name, code, contact, address, legal, paymentTerms, bankDetails });
+
+    await sysLog(req, { level: 'success', category: 'system', message: `Supplier created: ${name}`, metadata: { supplierId: supplier._id } });
+    res.status(201).json({ success: true, data: { supplier } });
+  })
+);
+
+/**
+ * GET /suppliers/:id — single supplier
+ */
+router.get('/suppliers/:id', protect, authorize('pharmacy', 'admin', 'superadmin'),
+  asyncHandler(async (req, res) => {
+    const supplier = await Supplier.findById(req.params.id).lean();
+    if (!supplier) return res.status(404).json({ success: false, message: 'Supplier not found.' });
+    res.status(200).json({ success: true, data: { supplier } });
+  })
+);
+
+/**
+ * PATCH /suppliers/:id — update supplier
+ */
+router.patch('/suppliers/:id', protect, authorize('admin', 'superadmin'),
+  asyncHandler(async (req, res) => {
+    const supplier = await Supplier.findByIdAndUpdate(
+      req.params.id,
+      { $set: req.body },
+      { new: true, runValidators: true }
+    );
+    if (!supplier) return res.status(404).json({ success: false, message: 'Supplier not found.' });
+    await sysLog(req, { level: 'info', category: 'system', message: `Supplier updated: ${supplier.name}` });
+    res.status(200).json({ success: true, data: { supplier } });
+  })
+);
+
+/**
+ * DELETE /suppliers/:id — soft deactivate
+ */
+router.delete('/suppliers/:id', protect, authorize('admin', 'superadmin'),
+  asyncHandler(async (req, res) => {
+    const supplier = await Supplier.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+    if (!supplier) return res.status(404).json({ success: false, message: 'Supplier not found.' });
+    await sysLog(req, { level: 'warning', category: 'system', message: `Supplier deactivated: ${supplier.name}` });
+    res.status(200).json({ success: true, message: `Supplier ${supplier.name} deactivated.` });
+  })
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ▶▶ SECTION B3 — PURCHASE ORDER MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /purchase-orders — list POs for this store
+ */
+router.get('/purchase-orders', protect, authorize('pharmacy', 'admin', 'superadmin'), attachPharmacyStore,
+  asyncHandler(async (req, res) => {
+    const { status, supplierId, dateFilter = 'last30days', startDate, endDate } = req.query;
+    const { page, limit, skip } = getPagination(req.query);
+    const storeId = req.pharmacy.store._id;
+
+    const filter = { storeId };
+    if (status)     filter.status     = status;
+    if (supplierId) filter.supplierId = supplierId;
+    filter.createdAt = parseDateFilter(dateFilter, startDate, endDate);
+
+    const [pos, total] = await Promise.all([
+      PurchaseOrder.find(filter)
+        .populate('supplierId', 'name code contact.phone')
+        .populate('items.medicineId', 'name brandName genericName category')
+        .populate('receivedBy', 'name role')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      PurchaseOrder.countDocuments(filter),
+    ]);
+
+    res.status(200).json({ success: true, data: { purchaseOrders: pos, pagination: { currentPage: page, totalPages: Math.ceil(total / limit), totalItems: total } } });
+  })
+);
+
+/**
+ * POST /purchase-orders — create PO
+ */
+router.post('/purchase-orders', protect, authorize('pharmacy', 'admin', 'superadmin'), attachPharmacyStore,
+  asyncHandler(async (req, res) => {
+    const { supplierId, items, expectedDeliveryDate, notes } = req.body;
+    if (!supplierId) return res.status(400).json({ success: false, message: 'supplierId required.' });
+    if (!items?.length) return res.status(400).json({ success: false, message: 'items array required.' });
+
+    const supplier = await Supplier.findById(supplierId).lean();
+    if (!supplier) return res.status(404).json({ success: false, message: 'Supplier not found.' });
+
+    // Validate items and compute financials
+    let subTotal = 0, taxTotal = 0;
+    const validatedItems = [];
+    for (const item of items) {
+      if (!item.medicineId || !item.requestedQuantity || !item.unitPrice) {
+        return res.status(400).json({ success: false, message: 'Each item needs medicineId, requestedQuantity, unitPrice.' });
+      }
+      const med = await Medicine.findById(item.medicineId).populate('hsnCode', 'gstPercentage').lean();
+      if (!med) return res.status(404).json({ success: false, message: `Medicine ${item.medicineId} not found.` });
+
+      const gstPc   = med.hsnCode?.gstPercentage ?? med.gstPercentage ?? 0;
+      const tax     = parseFloat(((item.unitPrice * item.requestedQuantity * gstPc) / 100).toFixed(2));
+      const total   = parseFloat((item.unitPrice * item.requestedQuantity + tax).toFixed(2));
+      subTotal     += item.unitPrice * item.requestedQuantity;
+      taxTotal     += tax;
+
+      validatedItems.push({
+        medicineId:        item.medicineId,
+        requestedQuantity: item.requestedQuantity,
+        receivedQuantity:  0,
+        unitPrice:         item.unitPrice,
+        taxAmount:         tax,
+        totalPrice:        total,
+      });
+    }
+
+    const grandTotal = parseFloat((subTotal + taxTotal).toFixed(2));
+    const poNumber   = `PO-${req.pharmacy.store._id.toString().slice(-4).toUpperCase()}-${Date.now()}`;
+
+    const po = await PurchaseOrder.create({
+      poNumber,
+      storeId:  req.pharmacy.store._id,
+      supplierId,
+      items:    validatedItems,
+      financials: { subTotal: parseFloat(subTotal.toFixed(2)), taxTotal, discountTotal: 0, grandTotal },
+      expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : undefined,
+      notes,
+      status: 'Draft',
+    });
+
+    await sysLog(req, { level: 'success', category: 'system', message: `PO created: ${poNumber}`, relatedEntity: { model: 'PurchaseOrder', entityId: po._id } });
+    res.status(201).json({ success: true, data: { purchaseOrder: po } });
+  })
+);
+
+/**
+ * GET /purchase-orders/:id — single PO
+ */
+router.get('/purchase-orders/:id', protect, authorize('pharmacy', 'admin', 'superadmin'), attachPharmacyStore,
+  asyncHandler(async (req, res) => {
+    const po = await PurchaseOrder.findOne({ _id: req.params.id, storeId: req.pharmacy.store._id })
+      .populate('supplierId', 'name code contact address legal')
+      .populate('items.medicineId', 'name brandName genericName category hsnCode gstPercentage dosage manufacturer')
+      .populate('receivedBy', 'name role')
+      .lean();
+    if (!po) return res.status(404).json({ success: false, message: 'Purchase order not found.' });
+    res.status(200).json({ success: true, data: { purchaseOrder: po } });
+  })
+);
+
+/**
+ * PATCH /purchase-orders/:id/status — update PO status (Sent, Cancelled)
+ */
+router.patch('/purchase-orders/:id/status', protect, authorize('pharmacy', 'admin', 'superadmin'), attachPharmacyStore,
+  asyncHandler(async (req, res) => {
+    const { status, notes } = req.body;
+    const allowed = ['Draft', 'Sent', 'Cancelled'];
+    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: `Status must be one of: ${allowed.join(', ')}` });
+
+    const po = await PurchaseOrder.findOne({ _id: req.params.id, storeId: req.pharmacy.store._id });
+    if (!po) return res.status(404).json({ success: false, message: 'Purchase order not found.' });
+    if (po.status === 'Received') return res.status(400).json({ success: false, message: 'Cannot change status of a fully received PO.' });
+
+    po.status = status;
+    if (notes) po.notes = notes;
+    await po.save();
+
+    await sysLog(req, { level: 'info', category: 'system', message: `PO ${po.poNumber} status → ${status}` });
+    res.status(200).json({ success: true, message: `PO status updated to ${status}.`, data: { purchaseOrder: po } });
+  })
+);
+
+/**
+ * POST /purchase-orders/:id/receive
+ * NEW — receive stock against a PO: creates/updates MedicineInventory + MedicineBatch + InventoryMovement
+ */
+router.post('/purchase-orders/:id/receive', protect, authorize('pharmacy', 'admin', 'superadmin'), attachPharmacyStore,
+  asyncHandler(async (req, res) => {
+    const { items } = req.body;
+    // items: [{ medicineId, receivedQuantity, batchNumber, expiryDate, manufacturingDate, mrp, sellingPrice }]
+    if (!items?.length) return res.status(400).json({ success: false, message: 'items array required.' });
+
+    const po = await PurchaseOrder.findOne({ _id: req.params.id, storeId: req.pharmacy.store._id });
+    if (!po) return res.status(404).json({ success: false, message: 'Purchase order not found.' });
+    if (!['Sent', 'Partially_Received'].includes(po.status)) {
+      return res.status(400).json({ success: false, message: 'PO must be in Sent or Partially_Received status to receive.' });
+    }
+
+    const storeId = req.pharmacy.store._id;
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const results = [];
+
+      for (const incomingItem of items) {
+        const { medicineId, receivedQuantity, batchNumber, expiryDate, manufacturingDate, mrp, sellingPrice, discountPercent = 0 } = incomingItem;
+        if (!receivedQuantity || receivedQuantity <= 0 || !batchNumber || !expiryDate) {
+          throw new Error(`Item ${medicineId}: receivedQuantity, batchNumber, expiryDate all required.`);
+        }
+
+        // Update PO item received quantity
+        const poItem = po.items.find((i) => i.medicineId.equals(medicineId));
+        if (!poItem) throw new Error(`Medicine ${medicineId} not in this PO.`);
+        poItem.receivedQuantity = (poItem.receivedQuantity || 0) + receivedQuantity;
+
+        // Upsert MedicineInventory
+        let inv = await MedicineInventory.findOne({ medicineId, storeId }).session(session);
+        const prevStock = inv?.stockQuantity || 0;
+        if (!inv) {
+          inv = new MedicineInventory({
+            medicineId, storeId,
+            mrp:            mrp || poItem.unitPrice,
+            sellingPrice:   sellingPrice || mrp || poItem.unitPrice,
+            discountPercent,
+            createdBy:      req.user._id,
+          });
+        } else {
+          if (mrp)          inv.mrp          = mrp;
+          if (sellingPrice) inv.sellingPrice  = sellingPrice;
+          inv.discountPercent = discountPercent;
+        }
+        inv.stockQuantity  = (inv.stockQuantity || 0) + receivedQuantity;
+        inv.availableStock = Math.max(0, inv.stockQuantity - (inv.reservedStock || 0));
+        inv.isOutOfStock   = inv.availableStock <= 0;
+        inv.isLowStock     = !inv.isOutOfStock && inv.availableStock <= (inv.reorderLevel || LOW_STOCK_THRESHOLD);
+        inv.updatedBy      = req.user._id;
+        inv.supplierId     = po.supplierId;
+        await inv.save({ session });
+
+        // Upsert batch
+        let batch = await MedicineBatch.findOne({ medicineId, storeId, batchNumber }).session(session);
+        if (batch) {
+          batch.remainingQuantity  += receivedQuantity;
+          batch.quantityPurchased  += receivedQuantity;
+          batch.expiryDate          = new Date(expiryDate);
+          batch.purchaseOrderId     = po._id;
+          batch.purchasePrice       = poItem.unitPrice;
+          batch.purchaseInvoiceNo   = po.supplierInvoiceNumber || undefined;
+          batch.updatedBy           = req.user._id;
+          await batch.save({ session });
+        } else {
+          [batch] = await MedicineBatch.create([{
+            medicineId, storeId,
+            supplierId:       po.supplierId,
+            purchaseOrderId:  po._id,
+            batchNumber,
+            manufacturingDate: manufacturingDate ? new Date(manufacturingDate) : undefined,
+            expiryDate:       new Date(expiryDate),
+            purchasePrice:    poItem.unitPrice,
+            purchaseInvoiceNo: po.supplierInvoiceNumber || undefined,
+            quantityPurchased: receivedQuantity,
+            remainingQuantity: receivedQuantity,
+            createdBy: req.user._id,
+          }], { session });
+        }
+
+        // Update FEFO pointer
+        const earliestBatch = await MedicineBatch.findOne({
+          medicineId, storeId, status: 'Active', isDeleted: false,
+          remainingQuantity: { $gt: 0 },
+        }).sort({ fifoPriority: 1 }).session(session);
+        if (earliestBatch) { inv.batchId = earliestBatch._id; await inv.save({ session }); }
+
+        // Log movement
+        await InventoryMovement.create([{
+          storeId, medicineId,
+          batchId:         batch._id,
+          movementType:    'Purchase',
+          quantityChanged: receivedQuantity,
+          previousStock:   prevStock,
+          newStock:        inv.stockQuantity,
+          referenceModel:  'PurchaseOrder',
+          referenceId:     po._id,
+          reason:          `Received via PO ${po.poNumber}`,
+          performedBy:     req.user._id,
+        }], { session });
+
+        results.push({ medicineId, batchNumber, receivedQuantity, inventoryId: inv._id, batchId: batch._id });
+      }
+
+      // Update PO status
+      const allReceived = po.items.every((i) => i.receivedQuantity >= i.requestedQuantity);
+      po.status     = allReceived ? 'Received' : 'Partially_Received';
+      po.receivedAt = allReceived ? new Date() : undefined;
+      po.receivedBy = req.user._id;
+      await po.save({ session });
+
+      await session.commitTransaction();
+      await invalidateStoreCache(storeId);
+
+      await sysLog(req, {
+        level: 'success', category: 'system',
+        message: `PO ${po.poNumber} stock received — status: ${po.status}`,
+        relatedEntity: { model: 'PurchaseOrder', entityId: po._id },
+        metadata: { results },
+      });
+
+      res.status(200).json({ success: true, message: `Stock received. PO status: ${po.status}.`, data: { purchaseOrder: po, received: results } });
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      session.endSession();
+    }
   })
 );
 
@@ -1457,8 +2268,6 @@ router.get('/financials/monthly', protect, authorize('pharmacy'), attachPharmacy
 
 /**
  * [24] GET /financials/total
- * FIX: Aggregation used '$items.medicineId' but the schema field is 'items.medicine'.
- *      Changed _id grouping key to '$items.medicine' throughout all medicine aggregations.
  */
 router.get('/financials/total', protect, authorize('pharmacy'), attachPharmacyStore,
   cache(600, (req) => `pharmacy:${req.pharmacy?.store?._id}:financial:total`),
@@ -1474,19 +2283,10 @@ router.get('/financials/total', protect, authorize('pharmacy'), attachPharmacySt
         { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } }, revenue: { $sum: '$billing.totalPayable' }, orders: { $sum: 1 } } },
         { $sort: { _id: 1 } },
       ]),
-      // FIX: was '$items.medicineId' — correct field name is '$items.medicine'
       PharmacyOrder.aggregate([
         { $match: { store: storeId, isArchived: false, 'payment.status': 'Paid' } },
         { $unwind: '$items' },
-        {
-          $group: {
-            _id:          '$items.medicine',   // ← FIX
-            name:         { $first: '$items.name' },
-            brandName:    { $first: '$items.brandName' },
-            totalQty:     { $sum: '$items.quantity' },
-            totalRevenue: { $sum: { $multiply: ['$items.pricePerUnit', '$items.quantity'] } },
-          },
-        },
+        { $group: { _id: '$items.medicine', name: { $first: '$items.name' }, brandName: { $first: '$items.brandName' }, totalQty: { $sum: '$items.quantity' }, totalRevenue: { $sum: { $multiply: ['$items.pricePerUnit', '$items.quantity'] } } } },
         { $sort: { totalRevenue: -1 } },
         { $limit: 10 },
       ]),
@@ -1511,6 +2311,79 @@ router.get('/financials/history', protect, authorize('pharmacy'), attachPharmacy
       PharmacyOrder.aggregate([{ $match: filter }, { $group: { _id: null, totalRevenue: { $sum: '$billing.totalPayable' }, totalGst: { $sum: '$billing.gstAmount' }, totalDiscount: { $sum: '$billing.discountAmount' } } }]),
     ]);
     res.status(200).json({ success: true, data: { orders, summary: summary[0] || { totalRevenue: 0, totalGst: 0, totalDiscount: 0 }, pagination: { currentPage: page, totalPages: Math.ceil(totalCount / limit), totalItems: totalCount } } });
+  })
+);
+
+/**
+ * GET /financials/cod-pending
+ * NEW — COD orders where payment.status is Paid (delivered) but store hasn't
+ * remitted platform cut yet. Shows exactly how much the store owes platform.
+ */
+router.get('/financials/cod-pending', protect, authorize('pharmacy', 'admin', 'superadmin'), attachPharmacyStore,
+  cache(60, (req) => `pharmacy:${req.pharmacy?.store?._id}:financial:cod-pending`),
+  asyncHandler(async (req, res) => {
+    const storeId = req.pharmacy.store._id;
+    const store   = await PharmacyStore.findById(storeId).lean();
+    const config  = await PlatformPricingConfig.getGlobal();
+    const pharmacyCfg = config?.pharmacy || {};
+
+    const codOrders = await PharmacyOrder.find({
+      store:           storeId,
+      isArchived:      false,
+      'payment.method': 'COD',
+      'payment.status': 'Paid',
+      'delivery.status': 'Delivered',
+    }).select('orderId billing payment delivery.deliveredAt createdAt').lean();
+
+    const isOwnedStore    = store?.storeType === 'Owned';
+    const platformFee     = pharmacyCfg.platformFee || { type: 'percentage', value: 10 };
+    const commissionPc    = isOwnedStore ? (pharmacyCfg.ownStoreMarginPercent || 30) : (store?.bankDetails?.commissionPercent || 0);
+
+    let totalCollected = 0, totalMustRemit = 0, totalStoreNet = 0;
+    const breakdown = codOrders.map((order) => {
+      const total    = order.billing?.totalPayable || 0;
+      const subTotal = order.billing?.subTotal || 0;
+      const gst      = order.billing?.gstAmount || 0;
+
+      let platformCut = 0;
+      if (platformFee.type === 'percentage') {
+        platformCut = parseFloat(((subTotal * commissionPc) / 100).toFixed(2));
+      } else {
+        platformCut = platformFee.value;
+      }
+
+      const mustRemit  = parseFloat((platformCut + gst).toFixed(2));
+      const storeNet   = parseFloat((total - mustRemit).toFixed(2));
+
+      totalCollected  += total;
+      totalMustRemit  += mustRemit;
+      totalStoreNet   += storeNet;
+
+      return {
+        orderId:       order.orderId,
+        deliveredAt:   order.delivery?.deliveredAt,
+        totalCollected:total,
+        platformCut,
+        gstOnOrder:    gst,
+        mustRemitToPlatform: mustRemit,
+        storeNetAfterRemit:  storeNet,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        summary: {
+          totalCODOrders:  codOrders.length,
+          totalCollected:  parseFloat(totalCollected.toFixed(2)),
+          totalMustRemit:  parseFloat(totalMustRemit.toFixed(2)),
+          totalStoreNet:   parseFloat(totalStoreNet.toFixed(2)),
+          commissionPercent: commissionPc,
+          storeType:       store?.storeType,
+        },
+        orders: breakdown,
+      },
+    });
   })
 );
 
@@ -1678,13 +2551,32 @@ router.get('/analytics/overview', protect, authorize('pharmacy'), attachPharmacy
   asyncHandler(async (req, res) => {
     const { dateFilter = 'today' } = req.query;
     const dateRange = parseDateFilter(dateFilter);
-    const filter    = { store: req.pharmacy.store._id, isArchived: false, createdAt: dateRange };
-    const [totalOrders, revenueData, statusBreakdown] = await Promise.all([
+    const storeId   = req.pharmacy.store._id;
+    const filter    = { store: storeId, isArchived: false, createdAt: dateRange };
+
+    const [totalOrders, revenueData, statusBreakdown, inventorySummary] = await Promise.all([
       PharmacyOrder.countDocuments(filter),
       PharmacyOrder.aggregate([{ $match: { ...filter, 'payment.status': 'Paid' } }, { $group: { _id: null, total: { $sum: '$billing.totalPayable' }, gst: { $sum: '$billing.gstAmount' } } }]),
       PharmacyOrder.aggregate([{ $match: filter }, { $group: { _id: '$delivery.status', count: { $sum: 1 } } }]),
+      Promise.all([
+        MedicineInventory.countDocuments({ storeId, isLowStock: true, isActive: true, isDeleted: false }),
+        MedicineInventory.countDocuments({ storeId, isOutOfStock: true, isActive: true, isDeleted: false }),
+      ]),
     ]);
-    res.status(200).json({ success: true, data: { totalOrders, totalRevenue: revenueData[0]?.total || 0, gstCollected: revenueData[0]?.gst || 0, statusBreakdown: statusBreakdown.reduce((acc, s) => { acc[s._id] = s.count; return acc; }, {}) } });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        totalOrders,
+        totalRevenue:   revenueData[0]?.total || 0,
+        gstCollected:   revenueData[0]?.gst   || 0,
+        statusBreakdown: statusBreakdown.reduce((acc, s) => { acc[s._id] = s.count; return acc; }, {}),
+        inventory: {
+          lowStockCount:  inventorySummary[0],
+          outOfStockCount:inventorySummary[1],
+        },
+      },
+    });
   })
 );
 
@@ -1710,7 +2602,6 @@ router.get('/analytics/returns', protect, authorize('pharmacy'), attachPharmacyS
 
 /**
  * [40] GET /analytics/top-medicines
- * FIX: was '$items.medicineId' — correct field name is '$items.medicine'
  */
 router.get('/analytics/top-medicines', protect, authorize('pharmacy'), attachPharmacyStore,
   cache(300, (req) => `pharmacy:${req.pharmacy?.store?._id}:analytics:top-medicines:${req.query.dateFilter}`),
@@ -1720,19 +2611,40 @@ router.get('/analytics/top-medicines', protect, authorize('pharmacy'), attachPha
     const topMedicines = await PharmacyOrder.aggregate([
       { $match: { store: req.pharmacy.store._id, isArchived: false, 'payment.status': 'Paid', createdAt: dateRange } },
       { $unwind: '$items' },
-      {
-        $group: {
-          _id:          '$items.medicine',    // ← FIX
-          name:         { $first: '$items.name' },
-          brandName:    { $first: '$items.brandName' },
-          totalQty:     { $sum: '$items.quantity' },
-          totalRevenue: { $sum: { $multiply: ['$items.pricePerUnit', '$items.quantity'] } },
-        },
-      },
+      { $group: { _id: '$items.medicine', name: { $first: '$items.name' }, brandName: { $first: '$items.brandName' }, totalQty: { $sum: '$items.quantity' }, totalRevenue: { $sum: { $multiply: ['$items.pricePerUnit', '$items.quantity'] } } } },
       { $sort: { totalRevenue: -1 } },
       { $limit: parseInt(req.query.limit, 10) || 10 },
     ]);
     res.status(200).json({ success: true, data: { topMedicines } });
+  })
+);
+
+/**
+ * GET /analytics/inventory-value
+ * NEW — total inventory value for this store (stock × finalPrice)
+ */
+router.get('/analytics/inventory-value', protect, authorize('pharmacy'), attachPharmacyStore,
+  cache(300, (req) => `pharmacy:${req.pharmacy?.store?._id}:analytics:inv-value`),
+  asyncHandler(async (req, res) => {
+    const storeId = req.pharmacy.store._id;
+
+    const result = await MedicineInventory.aggregate([
+      { $match: { storeId, isActive: true, isDeleted: false } },
+      {
+        $group: {
+          _id:             null,
+          totalSKUs:       { $sum: 1 },
+          totalUnits:      { $sum: '$stockQuantity' },
+          totalMRPValue:   { $sum: { $multiply: ['$mrp', '$stockQuantity'] } },
+          totalSellValue:  { $sum: { $multiply: ['$finalPrice', '$availableStock'] } },
+          totalCostValue:  { $sum: { $multiply: ['$purchasePrice', '$stockQuantity'] } },
+        },
+      },
+    ]);
+
+    const data = result[0] || { totalSKUs: 0, totalUnits: 0, totalMRPValue: 0, totalSellValue: 0, totalCostValue: 0 };
+
+    res.status(200).json({ success: true, data });
   })
 );
 
@@ -1816,6 +2728,10 @@ router.put('/store', protect, authorize('pharmacy'), attachPharmacyStore,
   })
 );
 
+/**
+ * GET /store/inventory-summary
+ * FIX: Was aggregating Medicine.inventory[]. Now reads MedicineInventory directly.
+ */
 router.get('/store/inventory-summary', protect, authorize('pharmacy'), attachPharmacyStore,
   cache(60, (req) => `pharmacy:${req.pharmacy?.store?._id}:inv-summary`),
   asyncHandler(async (req, res) => {
@@ -1824,26 +2740,32 @@ router.get('/store/inventory-summary', protect, authorize('pharmacy'), attachPha
     const cutoff  = new Date();
     cutoff.setDate(cutoff.getDate() + EXPIRY_ALERT_DAYS);
 
-    const [totals, lowStock, expiringSoon] = await Promise.all([
-      Medicine.aggregate([
-        { $match: { 'inventory.storeId': storeId } },
-        { $unwind: '$inventory' },
-        { $match: { 'inventory.storeId': storeId } },
-        { $group: { _id: null, totalSKUs: { $sum: 1 }, totalUnits: { $sum: '$inventory.stockQuantity' } } },
+    const [totals, lowStock, outOfStock, expiringSoon] = await Promise.all([
+      MedicineInventory.aggregate([
+        { $match: { storeId, isActive: true, isDeleted: false } },
+        { $group: {
+          _id:        null,
+          totalSKUs:  { $sum: 1 },
+          totalUnits: { $sum: '$stockQuantity' },
+          totalValue: { $sum: { $multiply: ['$finalPrice', '$availableStock'] } },
+        }},
       ]),
-      Medicine.countDocuments({ 'inventory.storeId': storeId, 'inventory.stockQuantity': { $lte: LOW_STOCK_THRESHOLD } }),
-      Medicine.countDocuments({ 'inventory.storeId': storeId, 'inventory.expiryDate': { $gte: now, $lte: cutoff } }),
+      MedicineInventory.countDocuments({ storeId, isLowStock: true,    isActive: true, isDeleted: false }),
+      MedicineInventory.countDocuments({ storeId, isOutOfStock: true,  isActive: true, isDeleted: false }),
+      MedicineBatch.countDocuments({ storeId, isNearExpiry: true, status: 'Active', isDeleted: false, remainingQuantity: { $gt: 0 } }),
     ]);
 
     res.status(200).json({
       success: true,
       data: {
-        totalSKUs:         totals[0]?.totalSKUs  || 0,
-        totalUnits:        totals[0]?.totalUnits || 0,
-        lowStockCount:     lowStock,
-        expiringSoonCount: expiringSoon,
-        lowStockThreshold: LOW_STOCK_THRESHOLD,
-        expiryAlertDays:   EXPIRY_ALERT_DAYS,
+        totalSKUs:          totals[0]?.totalSKUs   || 0,
+        totalUnits:         totals[0]?.totalUnits  || 0,
+        totalInventoryValue:totals[0]?.totalValue  || 0,
+        lowStockCount:      lowStock,
+        outOfStockCount:    outOfStock,
+        expiringSoonCount:  expiringSoon,
+        lowStockThreshold:  LOW_STOCK_THRESHOLD,
+        expiryAlertDays:    EXPIRY_ALERT_DAYS,
       },
     });
   })

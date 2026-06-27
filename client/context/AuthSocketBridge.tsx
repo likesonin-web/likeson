@@ -5,7 +5,7 @@ import { useSelector } from 'react-redux';
 import { selectToken } from '@/store/slices/userSlice';
 
 // Import the default export from your new ChatProvider file.
-import ChatProvider from '@/providers/ChatProvider';
+import SocketProvider from '@/context/SocketProvider';
 
 interface AuthSocketBridgeProps {
   children: React.ReactNode;
@@ -25,12 +25,12 @@ export default function AuthSocketBridge({
       : null;
   }, [rawToken]);
 
-  // Always wrap children in the ChatProvider! 
-  // If token is null, ChatProvider will simply not connect the socket, 
+  // Always wrap children in the SocketProvider! 
+  // If token is null, SocketProvider will simply not connect the socket, 
   // but it WILL still provide the Context so useChatSocket() doesn't crash.
   return (
-    <ChatProvider token={token}>
+    <SocketProvider  >
       {children}
-    </ChatProvider>
+    </SocketProvider>
   );
 }

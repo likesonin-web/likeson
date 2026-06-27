@@ -10,15 +10,18 @@ const { Schema } = mongoose;
  *       Basic Care | Standard Care | Premium Care |
  *       Family Care | Pregnant Women Care | NRI's Care
  *
+ *       Care Assistant: NO subscription benefit / quota tracking.
+ *       All CA bookings on fixed plans charge platform rate at booking time.
+ *       careAssistant fields kept for display/reference only.
+ *
  *  B) CUSTOM PLAN  (built per-customer from admin-priced option blocks)
  *       Customer selects what they want; price = sum of chosen option lineTotals.
  *       Discount caps enforced from PlatformPricingConfig
  *       (pharmacy ≤ 25%, diagnostics ≤ 25%).
  *       Custom plans are visible ONLY to the customer who created them.
+ *       Care Assistant quota IS tracked on custom plans.
  *
  * "No Plan" removed — pay-per-use pricing lives in PlatformPricingConfig.
- *
- * Source: WhatsApp_Image_2026-03-14 + Project_Overview_original.pdf
  */
 
 // ─── Sub-schema: one selectable option block inside a Custom Plan ─────────────
@@ -32,13 +35,13 @@ const customPlanOptionSchema = new Schema(
       type: String,
       required: true,
       enum: [
-        "consultations", // doctor consultations quota
-        "transport", // discounted rides quota
-        "diagnostics", // diagnostic discount %
-        "pharmacy", // pharmacy discount % (max 25%)
-        "careAssistant", // care-assistant visits quota
-        "homeSampleCollection", // home sample collection add-on
-        "prioritySupport", // upgrade to Priority support tier
+        "consultations",       // doctor consultations quota
+        "transport",           // discounted rides quota
+        "diagnostics",         // diagnostic discount %
+        "pharmacy",            // pharmacy discount % (max 25%)
+        "careAssistant",       // care-assistant visits quota (custom plan only)
+        "homeSampleCollection",// home sample collection add-on
+        "prioritySupport",     // upgrade to Priority support tier
       ],
     },
 
@@ -67,11 +70,9 @@ const customPlanOptionSchema = new Schema(
     lineTotal: { type: Number, required: true, default: 0 },
 
     /**
-     * careAssistant only.
+     * careAssistant only — custom plan only.
      * Index into PlatformPricingConfig.customPlanOptions.careAssistant.pricingTiers[]
-     * that was selected by the customer at plan-creation time.
-     * Snapshotted so the tier label/price displayed stays consistent
-     * even if admin later reorders or adds tiers.
+     * selected by customer at plan-creation time. Snapshotted.
      * Default 0 = first tier.
      */
     careAssistantTierIndex: { type: Number, default: 0, min: 0 },
@@ -87,8 +88,6 @@ const subscriptionPlanSchema = new Schema(
       type: String,
       required: true,
       trim: true,
-      // Custom plans use a customer-supplied name so enum is NOT used here;
-      // fixedTier handles the strict 6-value validation for fixed plans.
     },
 
     slug: {
@@ -122,7 +121,7 @@ const subscriptionPlanSchema = new Schema(
       type: String,
       enum: [
         "Basic Care",
-        "Standard Care", // ← ADD THIS
+        "Standard Care",
         "Premium Care",
         "Family Care",
         "Pregnant Women Care",
@@ -191,7 +190,7 @@ const subscriptionPlanSchema = new Schema(
       membershipNote: { type: String },
     },
 
-    // ── Doctor Consultations ──────────────────────────────────────────────────────
+    // ── Doctor Consultations ──────────────────────────────────────────────────
     consultations: {
       freePerMonth: { type: Number, default: 0 },
       modes: {
@@ -199,7 +198,6 @@ const subscriptionPlanSchema = new Schema(
         video: { type: Boolean, default: false },
         home: { type: Boolean, default: false },
       },
- 
       onlineModeAllowed: { type: Boolean, default: false },
       specialNote: { type: String },
     },
@@ -208,7 +206,7 @@ const subscriptionPlanSchema = new Schema(
     pharmacy: {
       /**
        * Discount % on online medicine purchases (online booking only).
-       * Admin hard-cap: max 25% (enforced via PlatformPricingConfig.caps.pharmacyDiscountMax).
+       * Admin hard-cap: max 25%.
        */
       discountMin: { type: Number, default: 0, min: 0, max: 25 },
       discountMax: { type: Number, default: 0, min: 0, max: 25 },
@@ -230,7 +228,7 @@ const subscriptionPlanSchema = new Schema(
     diagnostics: {
       /**
        * Discount % on diagnostic bookings.
-       * Admin hard-cap: max 25% (PlatformPricingConfig.caps.diagnosticsDiscountMax).
+       * Admin hard-cap: max 25%.
        */
       discountPercent: { type: Number, default: 0, min: 0, max: 25 },
       isApplicable: { type: Boolean, default: true },
@@ -251,11 +249,15 @@ const subscriptionPlanSchema = new Schema(
     },
 
     // ── Care Assistant ────────────────────────────────────────────────────────
+    /**
+     * FIXED PLANS: Display/reference only. NO subscription benefit or quota.
+     *   All CA bookings on fixed plans charge platform rate at booking time.
+     *   included/isDedicated/serviceType used only for marketing copy.
+     *
+     * CUSTOM PLANS: Not used here — CA config lives in customOptions[].
+     *   careAssistant optionKey in customOptions controls quota + pricing.
+     */
     careAssistant: {
-      /**
-       * included: true = standard service price applies (not free)
-       * isDedicated: true = Pregnant Women Care — exclusive dedicated assistant
-       */
       included: { type: Boolean, default: false },
       isDedicated: { type: Boolean, default: false },
 
@@ -265,7 +267,7 @@ const subscriptionPlanSchema = new Schema(
         default: "None",
       },
 
-      /** Visits/month for custom plan */
+      /** Reference only — not enforced for fixed plans */
       visitsPerMonth: { type: Number, default: null },
 
       note: { type: String },
@@ -296,8 +298,8 @@ const subscriptionPlanSchema = new Schema(
     /**
      * ONLY populated when planType === 'custom'.
      * Not stored for fixed plans (undefined, not []).
-     * Prices in each block are snapshotted from PlatformPricingConfig at
-     * creation time so future admin price changes don't mutate old plans.
+     * Prices snapshotted from PlatformPricingConfig at creation time.
+     * careAssistant optionKey here = quota-tracked CA for custom plans.
      */
     customOptions: {
       type: [customPlanOptionSchema],
@@ -338,53 +340,33 @@ subscriptionPlanSchema.pre("save", async function () {
     this.customOptions.forEach((opt) => {
       const packageBasedOptions = ["transport", "diagnostics", "pharmacy"];
 
-      // ─────────────────────────────────────
-      // PACKAGE-BASED OPTIONS
-      // DO NOT MULTIPLY
-      // ─────────────────────────────────────
-
+      // ── PACKAGE-BASED: no multiply ────────────────────────────────────────
       if (packageBasedOptions.includes(opt.optionKey)) {
         opt.lineTotal = +Number(opt.unitPrice || 0).toFixed(2);
-
         return;
       }
 
-      // ─────────────────────────────────────
-      // BOOLEAN ADDONS
-      // ─────────────────────────────────────
-
+      // ── BOOLEAN ADDONS ────────────────────────────────────────────────────
       if (["homeSampleCollection", "prioritySupport"].includes(opt.optionKey)) {
         opt.lineTotal =
           Number(opt.quantity) > 0 ? +Number(opt.unitPrice || 0).toFixed(2) : 0;
-
         return;
       }
 
-      // ─────────────────────────────────────
-      // NORMAL MULTIPLICATIVE OPTIONS
-      // consultations
-      // careAssistant
-      // ─────────────────────────────────────
-
+      // ── MULTIPLICATIVE: consultations, careAssistant ──────────────────────
       opt.lineTotal = +(
         Number(opt.quantity || 0) * Number(opt.unitPrice || 0)
       ).toFixed(2);
     });
 
-    // ─────────────────────────────────────
-    // TOTAL MONTHLY
-    // ─────────────────────────────────────
-
+    // ── Total monthly ─────────────────────────────────────────────────────────
     const total = this.customOptions.reduce((sum, opt) => {
       return sum + Number(opt.lineTotal || 0);
     }, 0);
 
     this.pricing.monthly = +total.toFixed(2);
-
     this.pricing.billingCycle = "custom";
-
     this.pricing.billingLabel = "/month";
-
     this.visibleToCustomerOnly = true;
   }
 });

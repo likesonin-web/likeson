@@ -35,6 +35,7 @@ import {
   selectLoading,
   selectError,
 } from '@/store/slices/soloDriverSlice';
+import BackButton from '../../../../components/BackButton';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -332,6 +333,8 @@ export default function MyPricingConfig() {
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto space-y-6">
+            <BackButton className=' my-2 rounded-md px-3' />
+      
       {/* ── header ── */}
       <motion.div
         initial={{ opacity: 0, y: -12 }}

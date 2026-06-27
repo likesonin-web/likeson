@@ -31,10 +31,7 @@ const extractError = (err) =>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 0a. GET /upload/auth
-// Fetches ImageKit authentication parameters for client-side direct uploads.
-// Returns: { token, expire, signature, publicKey, urlEndpoint }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const fetchUploadAuth = createAsyncThunk(
   'pharmacy/fetchUploadAuth',
   async (_, { rejectWithValue }) => {
@@ -42,7 +39,7 @@ export const fetchUploadAuth = createAsyncThunk(
       const { data } = await API.get(`${BASE}/upload/auth`, {
         headers: authHeaders(),
       });
-      return data; // { token, expire, signature, publicKey, urlEndpoint }
+      return data;
     } catch (err) {
       const msg = extractError(err);
       toast.error(msg);
@@ -53,35 +50,20 @@ export const fetchUploadAuth = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 0b. POST /upload/prescription
-// Uploads a prescription file to ImageKit via the server.
-// Accepts a File object (multipart) OR a { base64, fileName } object.
-//
-// Usage A — File object (from <input type="file">):
-//   dispatch(uploadPrescriptionFile({ file: fileObj }))
-//
-// Usage B — Base64 string:
-//   dispatch(uploadPrescriptionFile({ base64: '...', fileName: 'rx.jpg' }))
-//
-// Returns: { imageUrl, fileName, size?, mimeType? }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const uploadPrescriptionFile = createAsyncThunk(
   'pharmacy/uploadPrescriptionFile',
   async ({ file, base64, fileName, mimeType }, { rejectWithValue }) => {
     try {
       let data;
-
       if (file) {
-        // ── Multipart upload ─────────────────────────────────────────────────
         const formData = new FormData();
         formData.append('prescription', file);
-
         const response = await API.post(`${BASE}/upload/prescription`, formData, {
           headers: multipartHeaders(),
         });
         data = response.data;
       } else if (base64) {
-        // ── Base64 JSON upload ───────────────────────────────────────────────
         const response = await API.post(
           `${BASE}/upload/prescription`,
           { base64, fileName: fileName || 'prescription.jpg', mimeType: mimeType || 'image/jpeg' },
@@ -91,9 +73,8 @@ export const uploadPrescriptionFile = createAsyncThunk(
       } else {
         return rejectWithValue('Provide either a file or a base64 string.');
       }
-
       toast.success('Prescription uploaded successfully.');
-      return data; // { success, imageUrl, fileName, size, mimeType }
+      return data;
     } catch (err) {
       const msg = extractError(err);
       toast.error(msg);
@@ -104,15 +85,33 @@ export const uploadPrescriptionFile = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. GET /medicines
-// Query params: search, category, storeId, page, limit, sort
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const fetchMedicines = createAsyncThunk(
   'pharmacy/fetchMedicines',
   async (params = {}, { rejectWithValue }) => {
     try {
       const { data } = await API.get(`${BASE}/medicines`, { params });
-      return data; // { success, pagination, medicines }
+      return data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1a. GET /medicines/:id/stores
+// ─────────────────────────────────────────────────────────────────────────────
+export const fetchMedicineStores = createAsyncThunk(
+  'pharmacy/fetchMedicineStores',
+  async ({ id, qty = 1, deliveryType = 'Standard' }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`${BASE}/medicines/${id}/stores`, {
+        params: { qty, deliveryType },
+        headers: authHeaders(),
+      });
+      return data; 
     } catch (err) {
       const msg = extractError(err);
       toast.error(msg);
@@ -123,9 +122,7 @@ export const fetchMedicines = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. GET /cart
-// Returns cart with populated items + prescriptionSummary
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const fetchCart = createAsyncThunk(
   'pharmacy/fetchCart',
   async (_, { rejectWithValue }) => {
@@ -144,10 +141,7 @@ export const fetchCart = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. POST /cart/add
-// Body: { medicineId, quantity, storeId, prescription?: { imageUrl } }
-// NOTE: no auth required — works for guests too
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const addToCart = createAsyncThunk(
   'pharmacy/addToCart',
   async ({ medicineId, quantity = 1, storeId, prescription }, { rejectWithValue }) => {
@@ -171,9 +165,7 @@ export const addToCart = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. POST /cart/update
-// Body: { medicineId, quantity }  — quantity=0 removes the item
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const updateCartItem = createAsyncThunk(
   'pharmacy/updateCartItem',
   async ({ medicineId, quantity }, { rejectWithValue }) => {
@@ -193,9 +185,8 @@ export const updateCartItem = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4b. POST /cart/update (quantity = 0) — dedicated "remove" thunk
+// 4b. POST /cart/update (quantity = 0)
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const removeCartItem = createAsyncThunk(
   'pharmacy/removeCartItem',
   async ({ medicineId, medicineName }, { rejectWithValue }) => {
@@ -216,9 +207,8 @@ export const removeCartItem = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. DELETE /cart — clears entire cart
+// 5. DELETE /cart
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const purgeCart = createAsyncThunk(
   'pharmacy/purgeCart',
   async (_, { rejectWithValue }) => {
@@ -236,11 +226,7 @@ export const purgeCart = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 5a. POST /cart/prescription
-// Attach an already-uploaded prescription imageUrl to a cart item.
-// Use uploadPrescriptionFile() first to get the URL, then call this.
-// Body: { medicineId, imageUrl }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const uploadCartItemPrescription = createAsyncThunk(
   'pharmacy/uploadCartItemPrescription',
   async ({ medicineId, imageUrl }, { rejectWithValue }) => {
@@ -262,11 +248,7 @@ export const uploadCartItemPrescription = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 5b. POST /cart/prescription/upload
-// All-in-one: upload prescription file + save to cart item in one request.
-// Accepts: { medicineId, file } — where file is a File object.
-// Returns: { imageUrl, cart }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const uploadCartItemPrescriptionFile = createAsyncThunk(
   'pharmacy/uploadCartItemPrescriptionFile',
   async ({ medicineId, file }, { rejectWithValue }) => {
@@ -284,7 +266,7 @@ export const uploadCartItemPrescriptionFile = createAsyncThunk(
         { headers: multipartHeaders() },
       );
       toast.success('Prescription uploaded and saved to cart.');
-      return data; // { success, imageUrl, cart }
+      return data;
     } catch (err) {
       const msg = extractError(err);
       toast.error(msg);
@@ -295,9 +277,7 @@ export const uploadCartItemPrescriptionFile = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 6. POST /coupon/validate
-// Body: { couponCode, orderTotal }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const validateCoupon = createAsyncThunk(
   'pharmacy/validateCoupon',
   async ({ couponCode, orderTotal }, { rejectWithValue }) => {
@@ -325,20 +305,17 @@ export const validateCoupon = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7. POST /order/checkout
-// Body: { address, paymentMethod, couponCode? }
+// GET /coupon/eligibility
 // ─────────────────────────────────────────────────────────────────────────────
-
-export const checkoutCart = createAsyncThunk(
-  'pharmacy/checkoutCart',
-  async ({ address, paymentMethod, couponCode }, { rejectWithValue }) => {
+export const checkCouponEligibility = createAsyncThunk(
+  'pharmacy/checkCouponEligibility',
+  async ({ couponCode, orderTotal }, { rejectWithValue }) => {
     try {
-      const { data } = await API.post(
-        `${BASE}/order/checkout`,
-        { address, paymentMethod, couponCode },
-        { headers: authHeaders() },
-      );
-      return data; // { success, order, razorpayKey }
+      const { data } = await API.get(`${BASE}/coupon/eligibility`, {
+        params: { couponCode, orderTotal },
+        headers: authHeaders(),
+      });
+      return data; 
     } catch (err) {
       const msg = extractError(err);
       toast.error(msg);
@@ -348,10 +325,49 @@ export const checkoutCart = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8. POST /order/verify (Razorpay payment verification for cart checkout)
-// Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature }
+// 6a. GET /checkout/preview
 // ─────────────────────────────────────────────────────────────────────────────
+export const fetchCheckoutPreview = createAsyncThunk(
+  'pharmacy/fetchCheckoutPreview',
+  async ({ couponCode, deliveryType = 'Standard' } = {}, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`${BASE}/checkout/preview`, {
+        params: { couponCode, deliveryType },
+        headers: authHeaders(),
+      });
+      return data.preview;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. POST /order/checkout
+// ─────────────────────────────────────────────────────────────────────────────
+export const checkoutCart = createAsyncThunk(
+  'pharmacy/checkoutCart',
+  async ({ address, paymentMethod, couponCode, deliveryType }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.post(
+        `${BASE}/order/checkout`,
+        { address, paymentMethod, couponCode, deliveryType },
+        { headers: authHeaders() },
+      );
+      return data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. POST /order/verify
+// ─────────────────────────────────────────────────────────────────────────────
 export const verifyPayment = createAsyncThunk(
   'pharmacy/verifyPayment',
   async ({ razorpay_order_id, razorpay_payment_id, razorpay_signature }, { rejectWithValue }) => {
@@ -372,10 +388,8 @@ export const verifyPayment = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 9. POST /wallet/pay (wallet payment for an existing order)
-// Body: { orderId }
+// 9. POST /wallet/pay
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const payViaWallet = createAsyncThunk(
   'pharmacy/payViaWallet',
   async ({ orderId }, { rejectWithValue }) => {
@@ -397,9 +411,7 @@ export const payViaWallet = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 10. GET /orders/my-orders
-// Query params: page, limit, status
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const fetchMyOrders = createAsyncThunk(
   'pharmacy/fetchMyOrders',
   async (params = {}, { rejectWithValue }) => {
@@ -408,7 +420,7 @@ export const fetchMyOrders = createAsyncThunk(
         params,
         headers: authHeaders(),
       });
-      return data; // { success, pagination, orders }
+      return data;
     } catch (err) {
       const msg = extractError(err);
       toast.error(msg);
@@ -420,7 +432,6 @@ export const fetchMyOrders = createAsyncThunk(
 // ─────────────────────────────────────────────────────────────────────────────
 // 11. GET /orders/:id
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const fetchOrderById = createAsyncThunk(
   'pharmacy/fetchOrderById',
   async (orderId, { rejectWithValue }) => {
@@ -437,12 +448,15 @@ export const fetchOrderById = createAsyncThunk(
   },
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /medicines/:id/similar
+// ─────────────────────────────────────────────────────────────────────────────
 export const fetchSimilarMedicines = createAsyncThunk(
   'pharmacy/fetchSimilarMedicines',
   async ({ id, limit = 10 } = {}, { rejectWithValue }) => {
     try {
       const { data } = await API.get(`${BASE}/medicines/${id}/similar`, { params: { limit } });
-      return data; // { success, count, medicines }
+      return data;
     } catch (err) {
       const msg = extractError(err);
       toast.error(msg);
@@ -453,11 +467,7 @@ export const fetchSimilarMedicines = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 11a. POST /order/upload-prescription
-// Attach an already-uploaded prescription imageUrl to an existing order.
-// Use uploadPrescriptionFile() first to get the imageUrl, then call this.
-// Body: { orderId, imageUrl }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const uploadOrderPrescription = createAsyncThunk(
   'pharmacy/uploadOrderPrescription',
   async ({ orderId, imageUrl }, { rejectWithValue }) => {
@@ -479,11 +489,7 @@ export const uploadOrderPrescription = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 11b. POST /order/upload-prescription/file
-// All-in-one: upload prescription file to ImageKit + attach to order.
-// Accepts: { orderId, file } — file is a File object from <input type="file">
-// Returns: { imageUrl, prescription }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const uploadOrderPrescriptionFile = createAsyncThunk(
   'pharmacy/uploadOrderPrescriptionFile',
   async ({ orderId, file }, { rejectWithValue }) => {
@@ -501,31 +507,7 @@ export const uploadOrderPrescriptionFile = createAsyncThunk(
         { headers: multipartHeaders() },
       );
       toast.success('Prescription uploaded. Pending pharmacist verification.');
-      return data; // { success, imageUrl, prescription }
-    } catch (err) {
-      const msg = extractError(err);
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  },
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 11c. POST /order/verify-prescription (Pharmacist / Admin only)
-// Body: { orderId, action: 'approve' | 'reject', notes?, rejectionReason? }
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const verifyOrderPrescription = createAsyncThunk(
-  'pharmacy/verifyOrderPrescription',
-  async ({ orderId, action, notes = '', rejectionReason = '' }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post(
-        `${BASE}/order/verify-prescription`,
-        { orderId, action, notes, rejectionReason },
-        { headers: authHeaders() },
-      );
-      toast.success(data.message);
-      return data.prescription;
+      return data;
     } catch (err) {
       const msg = extractError(err);
       toast.error(msg);
@@ -536,9 +518,7 @@ export const verifyOrderPrescription = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 12. POST /order/cancel
-// Body: { orderId, reason? }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const cancelOrder = createAsyncThunk(
   'pharmacy/cancelOrder',
   async ({ orderId, reason = 'Customer requested cancellation' }, { rejectWithValue }) => {
@@ -560,14 +540,7 @@ export const cancelOrder = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 13. POST /order/request-return
-// Body:
-//   orderId        {string}   required
-//   returnReason   {string}   required, min 10 chars
-//   evidence       {Array}    required — [{ mediaType: 'image'|'video', url }]
-//   refundMethod   {string}   required — 'Wallet'|'Online'|'Bank_Transfer'|'Custom_Bank'
-//   bankDetails    {Object?}  required for Bank_Transfer/Custom_Bank
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const requestReturn = createAsyncThunk(
   'pharmacy/requestReturn',
   async ({ orderId, returnReason, evidence, refundMethod, bankDetails }, { rejectWithValue }) => {
@@ -588,58 +561,8 @@ export const requestReturn = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 14. POST /order/approve-return (Pharmacist / Admin only)
-// Body: { orderId, decision: 'Accepted' | 'Rejected', notes? }
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const approveReturn = createAsyncThunk(
-  'pharmacy/approveReturn',
-  async ({ orderId, decision, notes = '' }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post(
-        `${BASE}/order/approve-return`,
-        { orderId, decision, notes },
-        { headers: authHeaders() },
-      );
-      toast.success(`Return request ${decision.toLowerCase()} successfully.`);
-      return data.order;
-    } catch (err) {
-      const msg = extractError(err);
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  },
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 15. POST /order/verify-pickup (Store_Manager / Pharmacist / Admin only)
-// Body: { orderId, conditionGood?: boolean, notes?: string }
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const verifyPickup = createAsyncThunk(
-  'pharmacy/verifyPickup',
-  async ({ orderId, conditionGood = true, notes = '' }, { rejectWithValue }) => {
-    try {
-      const { data } = await API.post(
-        `${BASE}/order/verify-pickup`,
-        { orderId, conditionGood, notes },
-        { headers: authHeaders() },
-      );
-      toast.success(data.message);
-      return data.order;
-    } catch (err) {
-      const msg = extractError(err);
-      toast.error(msg);
-      return rejectWithValue(msg);
-    }
-  },
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
 // 16. POST /order/submit-feedback
-// Body: { orderId, rating (1-5), comment? }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const submitFeedback = createAsyncThunk(
   'pharmacy/submitFeedback',
   async ({ orderId, rating, comment = '' }, { rejectWithValue }) => {
@@ -661,9 +584,7 @@ export const submitFeedback = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 17. POST /wallet/add-money
-// Body: { amount } — creates a Razorpay order for the top-up
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const addMoneyToWallet = createAsyncThunk(
   'pharmacy/addMoneyToWallet',
   async ({ amount }, { rejectWithValue }) => {
@@ -673,7 +594,7 @@ export const addMoneyToWallet = createAsyncThunk(
         { amount },
         { headers: authHeaders() },
       );
-      return data; // { success, rzpOrder, razorpayKey }
+      return data;
     } catch (err) {
       const msg = extractError(err);
       toast.error(msg);
@@ -684,9 +605,7 @@ export const addMoneyToWallet = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 18. POST /wallet/verify-topup
-// Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature, amount }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const verifyWalletTopup = createAsyncThunk(
   'pharmacy/verifyWalletTopup',
   async ({ razorpay_order_id, razorpay_payment_id, razorpay_signature, amount }, { rejectWithValue }) => {
@@ -708,23 +627,20 @@ export const verifyWalletTopup = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 19. POST /order/direct
-// Body: { medicineId, quantity, address, paymentMethod, storeId,
-//         couponCode?, prescription?: { imageUrl } }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const placeDirectOrder = createAsyncThunk(
   'pharmacy/placeDirectOrder',
   async (
-    { medicineId, quantity, address, paymentMethod = 'Razorpay', storeId, couponCode, prescription },
+    { medicineId, quantity, address, paymentMethod = 'Razorpay', storeId, couponCode, prescription, deliveryType },
     { rejectWithValue },
   ) => {
     try {
       const { data } = await API.post(
         `${BASE}/order/direct`,
-        { medicineId, quantity, address, paymentMethod, storeId, couponCode, prescription },
+        { medicineId, quantity, address, paymentMethod, storeId, couponCode, prescription, deliveryType },
         { headers: authHeaders() },
       );
-      return data; // { success, order, razorpayKey }
+      return data;
     } catch (err) {
       const msg = extractError(err);
       toast.error(msg);
@@ -734,10 +650,8 @@ export const placeDirectOrder = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 20. POST /order/direct/verify (Razorpay verification for direct orders)
-// Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature }
+// 20. POST /order/direct/verify
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const verifyDirectPayment = createAsyncThunk(
   'pharmacy/verifyDirectPayment',
   async ({ razorpay_order_id, razorpay_payment_id, razorpay_signature }, { rejectWithValue }) => {
@@ -759,9 +673,7 @@ export const verifyDirectPayment = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 21. POST /order/verify-delivery-otp
-// Body: { orderId, otp }
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const verifyDeliveryOtp = createAsyncThunk(
   'pharmacy/verifyDeliveryOtp',
   async ({ orderId, otp }, { rejectWithValue }) => {
@@ -782,10 +694,28 @@ export const verifyDeliveryOtp = createAsyncThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 22. GET /orders/:id/invoice
-// Returns raw HTML string for in-browser viewing + print-to-PDF.
+// GET /delivery/pricing
 // ─────────────────────────────────────────────────────────────────────────────
+export const fetchDeliveryPricing = createAsyncThunk(
+  'pharmacy/fetchDeliveryPricing',
+  async ({ orderTotal, deliveryType = 'Standard' }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`${BASE}/delivery/pricing`, {
+        params: { orderTotal, deliveryType },
+        headers: authHeaders(),
+      });
+      return data;
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg);
+      return rejectWithValue(msg);
+    }
+  },
+);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 22. GET /orders/:id/invoice
+// ─────────────────────────────────────────────────────────────────────────────
 export const fetchOrderInvoice = createAsyncThunk(
   'pharmacy/fetchOrderInvoice',
   async (orderId, { rejectWithValue }) => {
@@ -794,7 +724,6 @@ export const fetchOrderInvoice = createAsyncThunk(
         headers: { ...authHeaders(), Accept: 'text/html' },
         responseType: 'text',
       });
-      // The server may set X-Invoice-Url header with the permanent CDN URL
       const invoiceUrl = headers?.['x-invoice-url'] || null;
       return { orderId, html: data, invoiceUrl };
     } catch (err) {
@@ -807,9 +736,7 @@ export const fetchOrderInvoice = createAsyncThunk(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 22a. GET /orders/:id/invoice/download
-// Triggers browser file download of the invoice HTML.
 // ─────────────────────────────────────────────────────────────────────────────
-
 export const downloadOrderInvoice = createAsyncThunk(
   'pharmacy/downloadOrderInvoice',
   async (orderId, { rejectWithValue }) => {
@@ -819,7 +746,6 @@ export const downloadOrderInvoice = createAsyncThunk(
         responseType: 'blob',
       });
 
-      // Trigger browser download
       const url      = window.URL.createObjectURL(new Blob([response.data], { type: 'text/html' }));
       const link     = document.createElement('a');
       link.href      = url;
@@ -848,8 +774,14 @@ const initialState = {
   medicines:  [],
   pagination: { total: 0, pages: 1, page: 1, limit: 12 },
   similarMedicines:        [],
-similarMedicinesLoading: false,
-similarMedicinesError:   null,
+  similarMedicinesLoading: false,
+  similarMedicinesError:   null,
+
+  // ── Medicine Stores (Single Item) ──
+  medicineStores:        [],
+  medicineStoresLoading: false,
+  medicineStoresError:   null,
+
   // ── Cart ──
   cart: {
     items:      [],
@@ -868,8 +800,18 @@ similarMedicinesError:   null,
   // ── Current order ──
   currentOrder: null,
 
+  // ── Checkout Preview ──
+  checkoutPreview:        null,
+  checkoutPreviewLoading: false,
+  checkoutPreviewError:   null,
+
+  // ── Delivery Pricing ──
+  deliveryPricing:        null,
+  deliveryPricingLoading: false,
+  deliveryPricingError:   null,
+
   // ── Invoice ──
-  invoiceData:    null,   // { orderId, html, invoiceUrl? }
+  invoiceData:    null,
   invoiceLoading: false,
   invoiceError:   null,
 
@@ -877,7 +819,7 @@ similarMedicinesError:   null,
   orders:           [],
   ordersPagination: { total: 0, pages: 1, page: 1, limit: 10 },
 
-  // ── Coupon ──
+  // ── Coupon Validation/Apply ──
   coupon: {
     code:           null,
     discountAmount: 0,
@@ -887,11 +829,14 @@ similarMedicinesError:   null,
     finalTotal:     null,
   },
 
+  // ── Coupon Eligibility Info ──
+  couponEligibility:        null,
+  couponEligibilityLoading: false,
+
   // ── Wallet top-up Razorpay order (transient) ──
   walletTopupOrder: null,
 
   // ── Prescription upload (transient) ──
-  // Holds the last successfully uploaded prescription URL (use to chain calls)
   prescriptionUpload: {
     imageUrl:  null,
     fileName:  null,
@@ -900,7 +845,7 @@ similarMedicinesError:   null,
     error:     null,
   },
 
-  // ── ImageKit auth params (for client-side direct upload) ──
+  // ── ImageKit auth params ──
   uploadAuth: {
     token:       null,
     expire:      null,
@@ -950,8 +895,9 @@ const pharmacyOrderSlice = createSlice({
 
   reducers: {
     clearCoupon(state) {
-      state.coupon      = initialState.coupon;
-      state.couponError = null;
+      state.coupon            = initialState.coupon;
+      state.couponEligibility = null;
+      state.couponError       = null;
     },
     clearPharmacyErrors(state) {
       state.orderError   = null;
@@ -969,7 +915,6 @@ const pharmacyOrderSlice = createSlice({
       state.invoiceData  = null;
       state.invoiceError = null;
     },
-    // Clear the transient prescription upload result (e.g. after attaching to cart/order)
     clearPrescriptionUpload(state) {
       state.prescriptionUpload = initialState.prescriptionUpload;
     },
@@ -1000,7 +945,6 @@ const pharmacyOrderSlice = createSlice({
 
     // ─────────────────────────────────────────────────────────────────────────
     // 0b. uploadPrescriptionFile
-    // Stores the resulting imageUrl so the component can chain the next call.
     // ─────────────────────────────────────────────────────────────────────────
     builder
       .addCase(uploadPrescriptionFile.pending, (state) => {
@@ -1035,6 +979,24 @@ const pharmacyOrderSlice = createSlice({
       .addCase(fetchMedicines.rejected, (state, { payload }) => {
         state.globalLoading = false;
         state.error         = payload;
+      });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 1a. fetchMedicineStores
+    // ─────────────────────────────────────────────────────────────────────────
+    builder
+      .addCase(fetchMedicineStores.pending, (state) => {
+        state.medicineStoresLoading = true;
+        state.medicineStoresError   = null;
+        state.medicineStores        = [];
+      })
+      .addCase(fetchMedicineStores.fulfilled, (state, { payload }) => {
+        state.medicineStoresLoading = false;
+        state.medicineStores        = payload.stores ?? [];
+      })
+      .addCase(fetchMedicineStores.rejected, (state, { payload }) => {
+        state.medicineStoresLoading = false;
+        state.medicineStoresError   = payload;
       });
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1125,7 +1087,7 @@ const pharmacyOrderSlice = createSlice({
       });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 5a. uploadCartItemPrescription (URL-attach only)
+    // 5a. uploadCartItemPrescription
     // ─────────────────────────────────────────────────────────────────────────
     builder
       .addCase(uploadCartItemPrescription.pending, (state) => {
@@ -1142,7 +1104,7 @@ const pharmacyOrderSlice = createSlice({
       });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 5b. uploadCartItemPrescriptionFile (file upload + attach in one shot)
+    // 5b. uploadCartItemPrescriptionFile
     // ─────────────────────────────────────────────────────────────────────────
     builder
       .addCase(uploadCartItemPrescriptionFile.pending, (state) => {
@@ -1155,7 +1117,6 @@ const pharmacyOrderSlice = createSlice({
         state.prescriptionUpload.loading  = false;
         state.prescriptionUpload.imageUrl = payload.imageUrl ?? null;
         state.actionLoading               = false;
-        // payload.cart is the full updated cart
         if (payload.cart) state.cart = payload.cart;
       })
       .addCase(uploadCartItemPrescriptionFile.rejected, (state, { payload }) => {
@@ -1180,6 +1141,40 @@ const pharmacyOrderSlice = createSlice({
         state.couponLoading = false;
         state.couponError   = payload;
         state.coupon        = initialState.coupon;
+      });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // checkCouponEligibility
+    // ─────────────────────────────────────────────────────────────────────────
+    builder
+      .addCase(checkCouponEligibility.pending, (state) => {
+        state.couponEligibilityLoading = true;
+        state.couponEligibility        = null;
+      })
+      .addCase(checkCouponEligibility.fulfilled, (state, { payload }) => {
+        state.couponEligibilityLoading = false;
+        state.couponEligibility        = payload;
+      })
+      .addCase(checkCouponEligibility.rejected, (state, { payload }) => {
+        state.couponEligibilityLoading = false;
+      });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 6a. fetchCheckoutPreview
+    // ─────────────────────────────────────────────────────────────────────────
+    builder
+      .addCase(fetchCheckoutPreview.pending, (state) => {
+        state.checkoutPreviewLoading = true;
+        state.checkoutPreviewError   = null;
+        state.checkoutPreview        = null;
+      })
+      .addCase(fetchCheckoutPreview.fulfilled, (state, { payload }) => {
+        state.checkoutPreviewLoading = false;
+        state.checkoutPreview        = payload;
+      })
+      .addCase(fetchCheckoutPreview.rejected, (state, { payload }) => {
+        state.checkoutPreviewLoading = false;
+        state.checkoutPreviewError   = payload;
       });
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1277,22 +1272,27 @@ const pharmacyOrderSlice = createSlice({
         state.globalLoading = false;
         state.orderError    = payload;
       });
-      builder
-  .addCase(fetchSimilarMedicines.pending, (state) => {
-    state.similarMedicinesLoading = true;
-    state.similarMedicinesError   = null;
-    state.similarMedicines        = [];
-  })
-  .addCase(fetchSimilarMedicines.fulfilled, (state, { payload }) => {
-    state.similarMedicinesLoading = false;
-    state.similarMedicines        = payload.medicines ?? [];
-  })
-  .addCase(fetchSimilarMedicines.rejected, (state, { payload }) => {
-    state.similarMedicinesLoading = false;
-    state.similarMedicinesError   = payload;
-  });
+
     // ─────────────────────────────────────────────────────────────────────────
-    // 11a. uploadOrderPrescription (URL-attach only)
+    // fetchSimilarMedicines
+    // ─────────────────────────────────────────────────────────────────────────
+    builder
+      .addCase(fetchSimilarMedicines.pending, (state) => {
+        state.similarMedicinesLoading = true;
+        state.similarMedicinesError   = null;
+        state.similarMedicines        = [];
+      })
+      .addCase(fetchSimilarMedicines.fulfilled, (state, { payload }) => {
+        state.similarMedicinesLoading = false;
+        state.similarMedicines        = payload.medicines ?? [];
+      })
+      .addCase(fetchSimilarMedicines.rejected, (state, { payload }) => {
+        state.similarMedicinesLoading = false;
+        state.similarMedicinesError   = payload;
+      });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 11a. uploadOrderPrescription
     // ─────────────────────────────────────────────────────────────────────────
     builder
       .addCase(uploadOrderPrescription.pending, (state) => {
@@ -1311,7 +1311,7 @@ const pharmacyOrderSlice = createSlice({
       });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 11b. uploadOrderPrescriptionFile (file upload + attach in one shot)
+    // 11b. uploadOrderPrescriptionFile
     // ─────────────────────────────────────────────────────────────────────────
     builder
       .addCase(uploadOrderPrescriptionFile.pending, (state) => {
@@ -1332,25 +1332,6 @@ const pharmacyOrderSlice = createSlice({
         state.prescriptionUpload.loading = false;
         state.prescriptionUpload.error   = payload;
         state.actionLoading              = false;
-      });
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 11c. verifyOrderPrescription (Pharmacist / Admin)
-    // ─────────────────────────────────────────────────────────────────────────
-    builder
-      .addCase(verifyOrderPrescription.pending, (state) => {
-        state.actionLoading = true;
-        state.error         = null;
-      })
-      .addCase(verifyOrderPrescription.fulfilled, (state, { payload }) => {
-        state.actionLoading = false;
-        if (state.currentOrder && payload) {
-          state.currentOrder.prescription = payload;
-        }
-      })
-      .addCase(verifyOrderPrescription.rejected, (state, { payload }) => {
-        state.actionLoading = false;
-        state.error         = payload;
       });
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1385,40 +1366,6 @@ const pharmacyOrderSlice = createSlice({
       .addCase(requestReturn.rejected, (state, { payload }) => {
         state.actionLoading = false;
         state.orderError    = payload;
-      });
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 14. approveReturn
-    // ─────────────────────────────────────────────────────────────────────────
-    builder
-      .addCase(approveReturn.pending, (state) => {
-        state.actionLoading = true;
-        state.error         = null;
-      })
-      .addCase(approveReturn.fulfilled, (state, { payload }) => {
-        state.actionLoading = false;
-        patchOrderInList(state, payload);
-      })
-      .addCase(approveReturn.rejected, (state, { payload }) => {
-        state.actionLoading = false;
-        state.error         = payload;
-      });
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 15. verifyPickup
-    // ─────────────────────────────────────────────────────────────────────────
-    builder
-      .addCase(verifyPickup.pending, (state) => {
-        state.actionLoading = true;
-        state.error         = null;
-      })
-      .addCase(verifyPickup.fulfilled, (state, { payload }) => {
-        state.actionLoading = false;
-        patchOrderInList(state, payload);
-      })
-      .addCase(verifyPickup.rejected, (state, { payload }) => {
-        state.actionLoading = false;
-        state.error         = payload;
       });
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1526,6 +1473,24 @@ const pharmacyOrderSlice = createSlice({
       });
 
     // ─────────────────────────────────────────────────────────────────────────
+    // fetchDeliveryPricing
+    // ─────────────────────────────────────────────────────────────────────────
+    builder
+      .addCase(fetchDeliveryPricing.pending, (state) => {
+        state.deliveryPricingLoading = true;
+        state.deliveryPricingError   = null;
+        state.deliveryPricing        = null;
+      })
+      .addCase(fetchDeliveryPricing.fulfilled, (state, { payload }) => {
+        state.deliveryPricingLoading = false;
+        state.deliveryPricing        = payload;
+      })
+      .addCase(fetchDeliveryPricing.rejected, (state, { payload }) => {
+        state.deliveryPricingLoading = false;
+        state.deliveryPricingError   = payload;
+      });
+
+    // ─────────────────────────────────────────────────────────────────────────
     // 22. fetchOrderInvoice
     // ─────────────────────────────────────────────────────────────────────────
     builder
@@ -1536,7 +1501,7 @@ const pharmacyOrderSlice = createSlice({
       })
       .addCase(fetchOrderInvoice.fulfilled, (state, { payload }) => {
         state.invoiceLoading = false;
-        state.invoiceData    = payload; // { orderId, html, invoiceUrl? }
+        state.invoiceData    = payload;
       })
       .addCase(fetchOrderInvoice.rejected, (state, { payload }) => {
         state.invoiceLoading = false;
@@ -1545,7 +1510,6 @@ const pharmacyOrderSlice = createSlice({
 
     // ─────────────────────────────────────────────────────────────────────────
     // 22a. downloadOrderInvoice
-    // Uses its own transient loading flag to avoid blocking other UI.
     // ─────────────────────────────────────────────────────────────────────────
     builder
       .addCase(downloadOrderInvoice.pending, (state) => {
@@ -1585,21 +1549,39 @@ export const selectCartStore               = (s) => s.pharmacyOrder.cart.store;
 export const selectCartBillSummary         = (s) => s.pharmacyOrder.cart.billSummary ?? { itemsTotal: 0, estimatedTax: 0, totalAmount: 0 };
 export const selectCartPrescriptionSummary = (s) => s.pharmacyOrder.cart.prescriptionSummary ?? { hasRxItems: false, missingUploads: [] };
 
+// ── Checkout Preview ──────────────────────────────────────────────────────────
+export const selectCheckoutPreview         = (s) => s.pharmacyOrder.checkoutPreview;
+export const selectCheckoutPreviewLoading  = (s) => s.pharmacyOrder.checkoutPreviewLoading;
+export const selectCheckoutPreviewError    = (s) => s.pharmacyOrder.checkoutPreviewError;
+
 // ── Medicines ─────────────────────────────────────────────────────────────────
-export const selectMedicines          = (s) => s.pharmacyOrder.medicines;
-export const selectMedicinePagination = (s) => s.pharmacyOrder.pagination;
+export const selectMedicines               = (s) => s.pharmacyOrder.medicines;
+export const selectMedicinePagination      = (s) => s.pharmacyOrder.pagination;
 export const selectSimilarMedicines        = (s) => s.pharmacyOrder.similarMedicines;
 export const selectSimilarMedicinesLoading = (s) => s.pharmacyOrder.similarMedicinesLoading;
 export const selectSimilarMedicinesError   = (s) => s.pharmacyOrder.similarMedicinesError;
+
+// ── Medicine Stores (Single Item) ─────────────────────────────────────────────
+export const selectMedicineStores          = (s) => s.pharmacyOrder.medicineStores;
+export const selectMedicineStoresLoading   = (s) => s.pharmacyOrder.medicineStoresLoading;
+export const selectMedicineStoresError     = (s) => s.pharmacyOrder.medicineStoresError;
+
 // ── Orders ────────────────────────────────────────────────────────────────────
 export const selectCurrentOrder     = (s) => s.pharmacyOrder.currentOrder;
 export const selectOrders           = (s) => s.pharmacyOrder.orders;
 export const selectOrdersPagination = (s) => s.pharmacyOrder.ordersPagination;
 
+// ── Delivery Pricing ──────────────────────────────────────────────────────────
+export const selectDeliveryPricing        = (s) => s.pharmacyOrder.deliveryPricing;
+export const selectDeliveryPricingLoading = (s) => s.pharmacyOrder.deliveryPricingLoading;
+export const selectDeliveryPricingError   = (s) => s.pharmacyOrder.deliveryPricingError;
+
 // ── Coupon ────────────────────────────────────────────────────────────────────
-export const selectCoupon        = (s) => s.pharmacyOrder.coupon;
-export const selectCouponLoading = (s) => s.pharmacyOrder.couponLoading;
-export const selectCouponError   = (s) => s.pharmacyOrder.couponError;
+export const selectCoupon                 = (s) => s.pharmacyOrder.coupon;
+export const selectCouponLoading          = (s) => s.pharmacyOrder.couponLoading;
+export const selectCouponError            = (s) => s.pharmacyOrder.couponError;
+export const selectCouponEligibility      = (s) => s.pharmacyOrder.couponEligibility;
+export const selectCouponEligibilityLoading = (s) => s.pharmacyOrder.couponEligibilityLoading;
 
 // ── Invoice ───────────────────────────────────────────────────────────────────
 export const selectInvoiceData    = (s) => s.pharmacyOrder.invoiceData;

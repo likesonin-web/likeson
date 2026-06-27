@@ -13,6 +13,7 @@ const ERROR_MESSAGES = {
   // Orders
   FETCH_ORDERS:               'Failed to fetch orders',
   FETCH_ORDER_DETAILS:        'Failed to fetch order details',
+  FETCH_ORDER_PRICING:        'Failed to fetch order pricing breakdown',
   VERIFY_PRESCRIPTION:        'Failed to verify prescription',
   CONFIRM_ORDER:              'Failed to confirm order',
   UPDATE_ORDER_STATUS:        'Failed to update order status',
@@ -24,16 +25,35 @@ const ERROR_MESSAGES = {
   EXPORT_ORDER:               'Failed to export order',
   FETCH_ORDER_INVOICE:        'Failed to fetch order invoice',
   FETCH_ORDER_LABEL:          'Failed to fetch order label',
-  // Inventory
+  
+  // Inventory & Medicines
   FETCH_MEDICINES:            'Failed to fetch medicines',
+  FETCH_MEDICINE_INVENTORY:   'Failed to fetch medicine inventory details',
   ADD_STOCK:                  'Failed to add stock',
   DEDUCT_STOCK:               'Failed to deduct stock',
   FETCH_MEDICINE_STOCK:       'Failed to fetch medicine stock',
+  UPDATE_MEDICINE_INVENTORY:  'Failed to update medicine inventory',
   FETCH_BATCHES:              'Failed to fetch inventory batches',
+  UPDATE_BATCH:               'Failed to update batch',
   FETCH_EXPIRY_ALERTS:        'Failed to fetch expiry alerts',
   FETCH_LOW_STOCK:            'Failed to fetch low-stock items',
   REQUEST_STOCK:              'Failed to request stock replenishment',
+  FETCH_MOVEMENTS:            'Failed to fetch inventory movements',
   FETCH_INVENTORY_SUMMARY:    'Failed to fetch inventory summary',
+  
+  // Suppliers
+  FETCH_SUPPLIERS:            'Failed to fetch suppliers',
+  CREATE_SUPPLIER:            'Failed to create supplier',
+  UPDATE_SUPPLIER:            'Failed to update supplier',
+  DELETE_SUPPLIER:            'Failed to deactivate supplier',
+
+  // Purchase Orders
+  FETCH_PURCHASE_ORDERS:      'Failed to fetch purchase orders',
+  FETCH_PURCHASE_ORDER:       'Failed to fetch purchase order details',
+  CREATE_PURCHASE_ORDER:      'Failed to create purchase order',
+  UPDATE_PO_STATUS:           'Failed to update purchase order status',
+  RECEIVE_PO_STOCK:           'Failed to receive purchase order stock',
+
   // HSN
   FETCH_HSN_CODES:            'Failed to fetch HSN codes',
   FETCH_HSN_STATS:            'Failed to fetch HSN stats',
@@ -43,13 +63,16 @@ const ERROR_MESSAGES = {
   DELETE_HSN_CODE:            'Failed to delete HSN code',
   HSN_BULK_DELETE:            'Failed to bulk delete HSN codes',
   HSN_UPLOAD:                 'Failed to upload HSN file',
+  
   // Financials
   FETCH_DAILY_EARNINGS:       'Failed to fetch daily earnings',
   FETCH_MONTHLY_EARNINGS:     'Failed to fetch monthly earnings',
   FETCH_TOTAL_EARNINGS:       'Failed to fetch lifetime earnings',
   FETCH_EARNINGS_HISTORY:     'Failed to fetch earnings history',
+  FETCH_COD_PENDING:          'Failed to fetch pending COD remits',
   FETCH_STORE_INVOICE:        'Failed to fetch store invoice',
   SEND_STORE_INVOICE:         'Failed to send store invoice',
+  
   // Payment Accounts
   FETCH_PAYMENT_ACCOUNT:      'Failed to fetch payment account',
   ADD_BANK_ACCOUNT:           'Failed to add bank account',
@@ -57,15 +80,19 @@ const ERROR_MESSAGES = {
   DELETE_BANK_ACCOUNT:        'Failed to delete bank account',
   ADD_UPI:                    'Failed to add UPI handle',
   DELETE_UPI:                 'Failed to delete UPI handle',
+  
   // Settlements
   FETCH_SETTLEMENTS:          'Failed to fetch settlement summary',
   REQUEST_SETTLEMENT:         'Failed to request settlement',
   FETCH_SETTLEMENT_HISTORY:   'Failed to fetch settlement history',
+  
   // Analytics
   FETCH_ANALYTICS_OVERVIEW:   'Failed to fetch analytics overview',
   FETCH_ANALYTICS_REVENUE:    'Failed to fetch revenue analytics',
   FETCH_ANALYTICS_RETURNS:    'Failed to fetch return analytics',
   FETCH_TOP_MEDICINES:        'Failed to fetch top medicines analytics',
+  FETCH_INVENTORY_VALUE:      'Failed to fetch inventory value',
+  
   // Profile & Store
   FETCH_PROFILE:              'Failed to fetch profile',
   UPDATE_PROFILE:             'Failed to update profile',
@@ -74,6 +101,7 @@ const ERROR_MESSAGES = {
   UPDATE_PHARMACY_PROFILE:    'Failed to update pharmacy profile',
   FETCH_STORE:                'Failed to fetch store details',
   UPDATE_STORE:               'Failed to update store',
+  
   // Audit
   FETCH_SESSIONS:             'Failed to fetch sessions',
   REVOKE_SESSION:             'Failed to revoke session',
@@ -115,31 +143,16 @@ const replaceOrderInList = (list, updated) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// § ASYNC THUNKS — ORDER MANAGEMENT (Routes 01–13)
+// § ASYNC THUNKS — ORDER MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Route 01: fetchOrders ─────────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/orders
- * Router accepts: status, dateFilter (default:'today'), startDate, endDate,
- *                 paymentStatus, page, limit, sortBy (default:'createdAt'),
- *                 sortOrder (default:'desc')
- */
 export const fetchOrders = createAsyncThunk(
   'pharmacyStore/fetchOrders',
   async (params, { rejectWithValue }) => {
-  
     try {
       const {
-        status,
-        dateFilter = 'today',
-        startDate,
-        endDate,
-        paymentStatus,
-        page = 1,
-        limit = 20,
-        sortBy = 'createdAt',
-        sortOrder = 'desc',
+        status, dateFilter = 'today', startDate, endDate, paymentStatus,
+        page = 1, limit = 20, sortBy = 'createdAt', sortOrder = 'desc',
       } = params || {};
       const qs = buildQueryParams({
         status, dateFilter, startDate, endDate, paymentStatus,
@@ -154,12 +167,6 @@ export const fetchOrders = createAsyncThunk(
   },
 );
 
-// ── Route 02: fetchOrderDetails ───────────────────────────────────────────────
-/**
- * GET /pharmacy-store/orders/:orderId
- * Router uses findOrderPopulated → returns order.toObject({ virtuals: true })
- * Response shape: { success, data: { order } }
- */
 export const fetchOrderDetails = createAsyncThunk(
   'pharmacyStore/fetchOrderDetails',
   async (orderId, { rejectWithValue }) => {
@@ -174,12 +181,20 @@ export const fetchOrderDetails = createAsyncThunk(
   },
 );
 
-// ── Route 03: verifyPrescription ──────────────────────────────────────────────
-/**
- * POST /pharmacy-store/orders/:orderId/verify-prescription
- * Body: { isVerified: bool, verificationNotes?, rejectionReason? }
- * Response: { success, message, data: { order } }
- */
+export const fetchOrderPricingBreakdown = createAsyncThunk(
+  'pharmacyStore/fetchOrderPricingBreakdown',
+  async (orderId, { rejectWithValue }) => {
+    try {
+      if (!orderId) return rejectWithValue({ message: 'orderId is required' });
+      const { data } = await API.get(`${API_BASE}/orders/${orderId}/pricing-breakdown`);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_ORDER_PRICING });
+      return data.data;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.FETCH_ORDER_PRICING, details: extractErrorMessage(err) });
+    }
+  },
+);
+
 export const verifyPrescription = createAsyncThunk(
   'pharmacyStore/verifyPrescription',
   async ({ orderId, isVerified, verificationNotes, rejectionReason }, { rejectWithValue }) => {
@@ -202,16 +217,6 @@ export const verifyPrescription = createAsyncThunk(
   },
 );
 
-// ── Route 04: confirmOrder ────────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/orders/:orderId/confirm
- * Body: { deliveryType: 'Internal'|'Third-Party', internalPartner?, externalPartner? }
- * Router only requires deliveryType; partner fields are optional even on the router.
- * FIX: Removed client-side hard requirement for internalPartner when Internal —
- *      the router doesn't enforce it (it does a conditional assignment). Keeping
- *      the validation is still good UX but it must not block the thunk.
- * Response: { success, message, data: { order } }
- */
 export const confirmOrder = createAsyncThunk(
   'pharmacyStore/confirmOrder',
   async ({ orderId, deliveryType, internalPartner, externalPartner }, { rejectWithValue }) => {
@@ -232,22 +237,6 @@ export const confirmOrder = createAsyncThunk(
   },
 );
 
-// ── Route 05: updateOrderStatus ───────────────────────────────────────────────
-/**
- * PATCH /pharmacy-store/orders/:orderId/status
- * Body: { status (required), note?, estimatedArrival? }
- * Router valid transitions:
- *   Placed → Confirmed | Cancelled
- *   Confirmed → Processing | Cancelled
- *   Processing → Out-for-Delivery | Cancelled
- *   Out-for-Delivery → Delivered | Cancelled
- *   Delivered → Return_Requested
- *   Return_Requested → Return_Accepted | Return_Rejected
- *   Return_Accepted → Pickup_Assigned
- *   Pickup_Assigned → Pickup_Done
- *   Pickup_Done → Returned
- * Response: { success, message, data: { order } }
- */
 export const updateOrderStatus = createAsyncThunk(
   'pharmacyStore/updateOrderStatus',
   async ({ orderId, status, note, estimatedArrival }, { rejectWithValue }) => {
@@ -266,14 +255,6 @@ export const updateOrderStatus = createAsyncThunk(
   },
 );
 
-// ── Route 06: acceptReturn ────────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/orders/:orderId/return-accept
- * Body: { pickupPartner?, pickupEstimatedAt? }
- * Router does NOT enforce pickupPartner as required — it conditionally assigns it.
- * FIX: Removed hard client-side guard so callers can omit pickupPartner.
- * Response: { success, message, data: { order } }
- */
 export const acceptReturn = createAsyncThunk(
   'pharmacyStore/acceptReturn',
   async ({ orderId, pickupPartner, pickupEstimatedAt }, { rejectWithValue }) => {
@@ -290,13 +271,6 @@ export const acceptReturn = createAsyncThunk(
   },
 );
 
-// ── Route 07: processRefund ───────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/orders/:orderId/process-refund
- * Body: { amount: number (₹, router converts to paise internally), reason? }
- * Router requires order.payment.razorpayPaymentId to exist.
- * Response: { success, message, data: { order, refundId } }
- */
 export const processRefund = createAsyncThunk(
   'pharmacyStore/processRefund',
   async ({ orderId, amount, reason }, { rejectWithValue }) => {
@@ -315,12 +289,6 @@ export const processRefund = createAsyncThunk(
   },
 );
 
-// ── Route 08: addOrderNote ────────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/orders/:orderId/add-admin-note
- * Body: { note: string }
- * Response: { success, message, data: { order } }
- */
 export const addOrderNote = createAsyncThunk(
   'pharmacyStore/addOrderNote',
   async ({ orderId, note }, { rejectWithValue }) => {
@@ -335,12 +303,6 @@ export const addOrderNote = createAsyncThunk(
   },
 );
 
-// ── Route 09: assignDeliveryPartner ───────────────────────────────────────────
-/**
- * POST /pharmacy-store/orders/:orderId/assign-delivery-partner
- * Body: { deliveryPartnerId (required) }
- * Response: { success, message, data: { order } }
- */
 export const assignDeliveryPartner = createAsyncThunk(
   'pharmacyStore/assignDeliveryPartner',
   async ({ orderId, deliveryPartnerId }, { rejectWithValue }) => {
@@ -355,13 +317,6 @@ export const assignDeliveryPartner = createAsyncThunk(
   },
 );
 
-// ── Route 10: exportOrder ─────────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/orders/:orderId/export
- * Uses findOrderPopulated → response: { success, data: { order } }
- * FIX: Payload is data.data (which contains { order }) — stored separately
- *      from currentOrder so it doesn't overwrite the live detail view.
- */
 export const exportOrder = createAsyncThunk(
   'pharmacyStore/exportOrder',
   async (orderId, { rejectWithValue }) => {
@@ -376,15 +331,6 @@ export const exportOrder = createAsyncThunk(
   },
 );
 
-// ── Route 11: verifyPickup ────────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/orders/:orderId/pickup-verify
- * Body: { pickupConditionGood: bool (required), pickupConditionNotes?: string }
- * Router requires order.delivery.status === 'Pickup_Done'.
- * Refund routing (Wallet vs Original_Source) is handled server-side from
- * order.cancellation.selectedRefundMethod.
- * Response: { success, message, data: { order } }
- */
 export const verifyPickup = createAsyncThunk(
   'pharmacyStore/verifyPickup',
   async ({ orderId, pickupConditionGood, pickupConditionNotes }, { rejectWithValue }) => {
@@ -404,13 +350,6 @@ export const verifyPickup = createAsyncThunk(
   },
 );
 
-// ── Route 12: fetchOrderInvoice ───────────────────────────────────────────────
-/**
- * GET /pharmacy-store/orders/:orderId/invoice
- * Router responds with text/html (res.status(200).send(html)).
- * Must use responseType: 'text' to prevent Axios JSON-parsing.
- * Response: raw HTML string
- */
 export const fetchOrderInvoice = createAsyncThunk(
   'pharmacyStore/fetchOrderInvoice',
   async (orderId, { rejectWithValue }) => {
@@ -424,13 +363,6 @@ export const fetchOrderInvoice = createAsyncThunk(
   },
 );
 
-// ── Route 13: fetchOrderLabel ─────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/orders/:orderId/label
- * Router responds with text/html (res.status(200).send(html)).
- * Must use responseType: 'text'.
- * Response: raw HTML string
- */
 export const fetchOrderLabel = createAsyncThunk(
   'pharmacyStore/fetchOrderLabel',
   async (orderId, { rejectWithValue }) => {
@@ -445,15 +377,9 @@ export const fetchOrderLabel = createAsyncThunk(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// § ASYNC THUNKS — MEDICINE & INVENTORY MANAGEMENT (Routes 14–21)
+// § ASYNC THUNKS — MEDICINE & INVENTORY MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Route 14: fetchMedicines ──────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/medicines
- * Params: { search?, category?, lowStock?, expiringSoon?, page?, limit? }
- * Response: { success, data: { medicines, pagination } }
- */
 export const fetchMedicines = createAsyncThunk(
   'pharmacyStore/fetchMedicines',
   async (params, { rejectWithValue }) => {
@@ -469,68 +395,85 @@ export const fetchMedicines = createAsyncThunk(
   },
 );
 
-// ── Route 15: addStock ────────────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/medicines/:medicineId/add-stock
- * Body: { stockQuantity (required, >0), batchNumber (required),
- *          expiryDate (required), pricePerUnit? }
- * isLowStock is computed server-side; never send it.
- * Response: { success, message, data: { medicine } }
- */
+export const fetchMedicineInventoryDetail = createAsyncThunk(
+  'pharmacyStore/fetchMedicineInventoryDetail',
+  async (medicineId, { rejectWithValue }) => {
+    try {
+      if (!medicineId) return rejectWithValue({ message: 'medicineId is required' });
+      const { data } = await API.get(`${API_BASE}/medicines/${medicineId}/inventory`);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_MEDICINE_INVENTORY });
+      return data.data; // { inventory, batches }
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.FETCH_MEDICINE_INVENTORY, details: extractErrorMessage(err) });
+    }
+  },
+);
+
 export const addStock = createAsyncThunk(
   'pharmacyStore/addStock',
-  async ({ medicineId, stockQuantity, batchNumber, expiryDate, pricePerUnit }, { rejectWithValue }) => {
+  async (
+    {
+      medicineId, stockQuantity, batchNumber, expiryDate,
+      mrp, sellingPrice, discountPercent,
+      manufacturingDate, purchasePrice, purchaseInvoiceNo, purchaseInvoiceDate,
+      supplierId, rackLocation,
+    },
+    { rejectWithValue }
+  ) => {
     try {
       if (!stockQuantity || stockQuantity <= 0)
-        return rejectWithValue({ message: 'stockQuantity must be greater than 0' });
+        return rejectWithValue({ message: 'stockQuantity must be > 0' });
       if (!batchNumber) return rejectWithValue({ message: 'batchNumber is required' });
       if (!expiryDate)  return rejectWithValue({ message: 'expiryDate is required' });
-
+      if (!mrp || mrp <= 0) return rejectWithValue({ message: 'mrp is required and must be > 0' });
+      if (!sellingPrice || sellingPrice <= 0) return rejectWithValue({ message: 'sellingPrice is required and must be > 0' });
+ 
       const { data } = await API.post(`${API_BASE}/medicines/${medicineId}/add-stock`, {
         stockQuantity,
         batchNumber,
         expiryDate,
-        ...(pricePerUnit !== undefined && { pricePerUnit }),
+        mrp,
+        sellingPrice,
+        ...(discountPercent    !== undefined && { discountPercent }),
+        ...(manufacturingDate  && { manufacturingDate }),
+        ...(purchasePrice      !== undefined && { purchasePrice }),
+        ...(purchaseInvoiceNo  && { purchaseInvoiceNo }),
+        ...(purchaseInvoiceDate && { purchaseInvoiceDate }),
+        ...(supplierId         && { supplierId }),
+        ...(rackLocation       && { rackLocation }),
       });
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.ADD_STOCK });
-      return data.data; // { medicine }
+      return data.data; // { inventory, batch }
     } catch (err) {
       return rejectWithValue({ message: ERROR_MESSAGES.ADD_STOCK, details: extractErrorMessage(err) });
     }
   },
 );
 
-// ── Route 16: deductStock ─────────────────────────────────────────────────────
-/**
- * PATCH /pharmacy-store/medicines/:medicineId/deduct-stock
- * Body: { quantity (required, >0), batchNumber?, reason? }
- * Response: { success, message, data: { medicine } }
- */
 export const deductStock = createAsyncThunk(
   'pharmacyStore/deductStock',
-  async ({ medicineId, quantity, batchNumber, reason }, { rejectWithValue }) => {
+  async ({ medicineId, quantity, batchNumber, reason, movementType = 'Adjustment_Sub' }, { rejectWithValue }) => {
     try {
       if (!quantity || quantity <= 0)
-        return rejectWithValue({ message: 'quantity must be greater than 0' });
+        return rejectWithValue({ message: 'quantity must be > 0' });
+      const validMovements = ['Adjustment_Sub', 'Damage', 'Expiry', 'Transfer_Out'];
+      if (!validMovements.includes(movementType))
+        return rejectWithValue({ message: `movementType must be one of: ${validMovements.join(', ')}` });
+ 
       const { data } = await API.patch(`${API_BASE}/medicines/${medicineId}/deduct-stock`, {
         quantity,
+        movementType,
         ...(batchNumber && { batchNumber }),
         ...(reason      && { reason }),
       });
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.DEDUCT_STOCK });
-      return data.data; // { medicine }
+      return data.data; // { inventory }
     } catch (err) {
       return rejectWithValue({ message: ERROR_MESSAGES.DEDUCT_STOCK, details: extractErrorMessage(err) });
     }
   },
 );
 
-// ── Route 17: fetchMedicineStock ──────────────────────────────────────────────
-/**
- * GET /pharmacy-store/medicines/:medicineId/stock
- * Response: { success, data: { medicineId, name, brandName, mrp,
- *             storeInventory, totalStock, isLowStock } }
- */
 export const fetchMedicineStock = createAsyncThunk(
   'pharmacyStore/fetchMedicineStock',
   async (medicineId, { rejectWithValue }) => {
@@ -545,18 +488,27 @@ export const fetchMedicineStock = createAsyncThunk(
   },
 );
 
-// ── Route 18: fetchInventoryBatches ───────────────────────────────────────────
-/**
- * GET /pharmacy-store/inventory/batches
- * Params: { page?, limit? }
- * Response: { success, data: { batches, pagination } }
- */
+export const updateMedicineInventory = createAsyncThunk(
+  'pharmacyStore/updateMedicineInventory',
+  async ({ medicineId, ...payload }, { rejectWithValue }) => {
+    try {
+      if (!medicineId) return rejectWithValue({ message: 'medicineId is required' });
+      if (!Object.keys(payload).length) return rejectWithValue({ message: 'No fields to update' });
+      const { data } = await API.patch(`${API_BASE}/medicines/${medicineId}/inventory`, payload);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.UPDATE_MEDICINE_INVENTORY });
+      return data.data.inventory;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.UPDATE_MEDICINE_INVENTORY, details: extractErrorMessage(err) });
+    }
+  },
+);
+
 export const fetchInventoryBatches = createAsyncThunk(
   'pharmacyStore/fetchInventoryBatches',
   async (params, { rejectWithValue }) => {
     try {
-      const { page = 1, limit = 20 } = params || {};
-      const qs = buildQueryParams({ page, limit });
+      const { page = 1, limit = 20, status, search, nearExpiry } = params || {};
+      const qs = buildQueryParams({ page, limit, status, search, nearExpiry });
       const { data } = await API.get(`${API_BASE}/inventory/batches${qs}`);
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_BATCHES });
       return data.data; // { batches, pagination }
@@ -566,18 +518,26 @@ export const fetchInventoryBatches = createAsyncThunk(
   },
 );
 
-// ── Route 19: fetchExpiryAlerts ───────────────────────────────────────────────
-/**
- * GET /pharmacy-store/inventory/expiry-alerts
- * Params: { days?, sendEmail? }
- * Response: { success, data: { expiringMedicines, count, alertDays } }
- */
+export const updateBatch = createAsyncThunk(
+  'pharmacyStore/updateBatch',
+  async ({ batchId, ...payload }, { rejectWithValue }) => {
+    try {
+      if (!batchId) return rejectWithValue({ message: 'batchId is required' });
+      const { data } = await API.patch(`${API_BASE}/inventory/batches/${batchId}`, payload);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.UPDATE_BATCH });
+      return data.data.batch;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.UPDATE_BATCH, details: extractErrorMessage(err) });
+    }
+  },
+);
+
 export const fetchExpiryAlerts = createAsyncThunk(
   'pharmacyStore/fetchExpiryAlerts',
   async (params, { rejectWithValue }) => {
     try {
-      const { days, sendEmail } = params || {};
-      const qs = buildQueryParams({ days, sendEmail });
+      const { days, sendEmail, storeId } = params || {};
+      const qs = buildQueryParams({ days, sendEmail, storeId });
       const { data } = await API.get(`${API_BASE}/inventory/expiry-alerts${qs}`);
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_EXPIRY_ALERTS });
       return data.data; // { expiringMedicines, count, alertDays }
@@ -587,12 +547,6 @@ export const fetchExpiryAlerts = createAsyncThunk(
   },
 );
 
-// ── Route 20: fetchLowStock ───────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/inventory/low-stock
- * Params: { threshold?, sendEmail? }
- * Response: { success, data: { lowStockItems, count, threshold } }
- */
 export const fetchLowStock = createAsyncThunk(
   'pharmacyStore/fetchLowStock',
   async (params, { rejectWithValue }) => {
@@ -608,15 +562,9 @@ export const fetchLowStock = createAsyncThunk(
   },
 );
 
-// ── Route 21: requestStock ────────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/medicines/:medicineId/request-stock
- * Body: { requiredQuantity (required, >0), urgency?: 'Low'|'Medium'|'High'|'Critical' }
- * Response: { success, message, data: { medicineId, medicineName, requiredQuantity, urgency } }
- */
 export const requestStock = createAsyncThunk(
   'pharmacyStore/requestStock',
-  async ({ medicineId, requiredQuantity, urgency = 'Medium' }, { rejectWithValue }) => {
+  async ({ medicineId, requiredQuantity, urgency = 'Medium', supplierId, notes }, { rejectWithValue }) => {
     try {
       const validUrgencies = ['Low', 'Medium', 'High', 'Critical'];
       if (!requiredQuantity || requiredQuantity <= 0)
@@ -627,30 +575,209 @@ export const requestStock = createAsyncThunk(
       const { data } = await API.post(`${API_BASE}/medicines/${medicineId}/request-stock`, {
         requiredQuantity,
         urgency,
+        ...(supplierId && { supplierId }),
+        ...(notes && { notes })
       });
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.REQUEST_STOCK });
-      return data.data; // { medicineId, medicineName, requiredQuantity, urgency }
+      return data.data; 
     } catch (err) {
       return rejectWithValue({ message: ERROR_MESSAGES.REQUEST_STOCK, details: extractErrorMessage(err) });
     }
   },
 );
 
+export const fetchInventoryMovements = createAsyncThunk(
+  'pharmacyStore/fetchInventoryMovements',
+  async (params, { rejectWithValue }) => {
+    try {
+      const { medicineId, movementType, dateFilter = 'last30days', startDate, endDate, page = 1, limit = 20 } = params || {};
+      const qs = buildQueryParams({ medicineId, movementType, dateFilter, startDate, endDate, page, limit });
+      const { data } = await API.get(`${API_BASE}/inventory/movements${qs}`);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_MOVEMENTS });
+      return data.data; // { movements, pagination }
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.FETCH_MOVEMENTS, details: extractErrorMessage(err) });
+    }
+  },
+);
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// § ASYNC THUNKS — HSN CODE MANAGEMENT
-// Router order matters: /hsn/stats and /hsn/bulk-delete are declared BEFORE
-// /hsn/:code so they are not swallowed by the param route.
+// § ASYNC THUNKS — SUPPLIERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Route H1: fetchHsnCodes ───────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/hsn
- * Params: { search?, gst?, isActive? (default:'true'), page?, limit?, sort? }
- * Router sort options: 'hsnCode'(default)|'hsnCode_desc'|'gst_asc'|'newest'
- * Response: { success, total, metadata: { currentPage, totalPages, pageSize }, data: codes[] }
- * FIX: Return shape is NOT data.data — the router puts codes in data.data
- *      but total and metadata are siblings of data at the top level.
- */
+export const fetchSuppliers = createAsyncThunk(
+  'pharmacyStore/fetchSuppliers',
+  async (params, { rejectWithValue }) => {
+    try {
+      const { search, isActive = 'true', page = 1, limit = 20 } = params || {};
+      const qs = buildQueryParams({ search, isActive, page, limit });
+      const { data } = await API.get(`${API_BASE}/suppliers${qs}`);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_SUPPLIERS });
+      return data.data; // { suppliers, pagination }
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.FETCH_SUPPLIERS, details: extractErrorMessage(err) });
+    }
+  },
+);
+ 
+export const fetchSupplier = createAsyncThunk(
+  'pharmacyStore/fetchSupplier',
+  async (supplierId, { rejectWithValue }) => {
+    try {
+      if (!supplierId) return rejectWithValue({ message: 'supplierId is required' });
+      const { data } = await API.get(`${API_BASE}/suppliers/${supplierId}`);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_SUPPLIERS });
+      return data.data.supplier;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.FETCH_SUPPLIERS, details: extractErrorMessage(err) });
+    }
+  },
+);
+ 
+export const createSupplier = createAsyncThunk(
+  'pharmacyStore/createSupplier',
+  async (payload, { rejectWithValue }) => {
+    try {
+      const { name, contact, legal } = payload || {};
+      if (!name || !contact?.email || !contact?.phone)
+        return rejectWithValue({ message: 'name, contact.email, contact.phone required' });
+      if (!legal?.gstNumber || !legal?.dlNumber)
+        return rejectWithValue({ message: 'legal.gstNumber and legal.dlNumber required' });
+      const { data } = await API.post(`${API_BASE}/suppliers`, payload);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.CREATE_SUPPLIER });
+      return data.data.supplier;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.CREATE_SUPPLIER, details: extractErrorMessage(err) });
+    }
+  },
+);
+ 
+export const updateSupplier = createAsyncThunk(
+  'pharmacyStore/updateSupplier',
+  async ({ supplierId, ...payload }, { rejectWithValue }) => {
+    try {
+      if (!supplierId) return rejectWithValue({ message: 'supplierId is required' });
+      const { data } = await API.patch(`${API_BASE}/suppliers/${supplierId}`, payload);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.UPDATE_SUPPLIER });
+      return data.data.supplier;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.UPDATE_SUPPLIER, details: extractErrorMessage(err) });
+    }
+  },
+);
+ 
+export const deactivateSupplier = createAsyncThunk(
+  'pharmacyStore/deactivateSupplier',
+  async (supplierId, { rejectWithValue }) => {
+    try {
+      if (!supplierId) return rejectWithValue({ message: 'supplierId is required' });
+      const { data } = await API.delete(`${API_BASE}/suppliers/${supplierId}`);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.DELETE_SUPPLIER });
+      return supplierId;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.DELETE_SUPPLIER, details: extractErrorMessage(err) });
+    }
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// § ASYNC THUNKS — PURCHASE ORDERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const fetchPurchaseOrders = createAsyncThunk(
+  'pharmacyStore/fetchPurchaseOrders',
+  async (params, { rejectWithValue }) => {
+    try {
+      const { status, supplierId, dateFilter = 'last30days', startDate, endDate, page = 1, limit = 20 } = params || {};
+      const qs = buildQueryParams({ status, supplierId, dateFilter, startDate, endDate, page, limit });
+      const { data } = await API.get(`${API_BASE}/purchase-orders${qs}`);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_PURCHASE_ORDERS });
+      return data.data; // { purchaseOrders, pagination }
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.FETCH_PURCHASE_ORDERS, details: extractErrorMessage(err) });
+    }
+  },
+);
+ 
+export const createPurchaseOrder = createAsyncThunk(
+  'pharmacyStore/createPurchaseOrder',
+  async ({ supplierId, items, expectedDeliveryDate, notes }, { rejectWithValue }) => {
+    try {
+      if (!supplierId) return rejectWithValue({ message: 'supplierId is required' });
+      if (!items?.length) return rejectWithValue({ message: 'items array required' });
+      for (const item of items) {
+        if (!item.medicineId || !item.requestedQuantity || !item.unitPrice)
+          return rejectWithValue({ message: 'Each item needs medicineId, requestedQuantity, unitPrice' });
+      }
+      const { data } = await API.post(`${API_BASE}/purchase-orders`, {
+        supplierId, items,
+        ...(expectedDeliveryDate && { expectedDeliveryDate }),
+        ...(notes && { notes }),
+      });
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.CREATE_PURCHASE_ORDER });
+      return data.data.purchaseOrder;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.CREATE_PURCHASE_ORDER, details: extractErrorMessage(err) });
+    }
+  },
+);
+ 
+export const fetchPurchaseOrder = createAsyncThunk(
+  'pharmacyStore/fetchPurchaseOrder',
+  async (poId, { rejectWithValue }) => {
+    try {
+      if (!poId) return rejectWithValue({ message: 'poId is required' });
+      const { data } = await API.get(`${API_BASE}/purchase-orders/${poId}`);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_PURCHASE_ORDER });
+      return data.data.purchaseOrder;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.FETCH_PURCHASE_ORDER, details: extractErrorMessage(err) });
+    }
+  },
+);
+ 
+export const updatePurchaseOrderStatus = createAsyncThunk(
+  'pharmacyStore/updatePurchaseOrderStatus',
+  async ({ poId, status, notes }, { rejectWithValue }) => {
+    try {
+      if (!poId) return rejectWithValue({ message: 'poId is required' });
+      const allowed = ['Draft', 'Sent', 'Cancelled'];
+      if (!allowed.includes(status)) return rejectWithValue({ message: `status must be one of: ${allowed.join(', ')}` });
+      const { data } = await API.patch(`${API_BASE}/purchase-orders/${poId}/status`, {
+        status,
+        ...(notes && { notes }),
+      });
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.UPDATE_PO_STATUS });
+      return data.data.purchaseOrder;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.UPDATE_PO_STATUS, details: extractErrorMessage(err) });
+    }
+  },
+);
+ 
+export const receivePurchaseOrderStock = createAsyncThunk(
+  'pharmacyStore/receivePurchaseOrderStock',
+  async ({ poId, items }, { rejectWithValue }) => {
+    try {
+      if (!poId) return rejectWithValue({ message: 'poId is required' });
+      if (!items?.length) return rejectWithValue({ message: 'items array required' });
+      for (const item of items) {
+        if (!item.receivedQuantity || item.receivedQuantity <= 0 || !item.batchNumber || !item.expiryDate)
+          return rejectWithValue({ message: 'Each item needs receivedQuantity, batchNumber, expiryDate' });
+      }
+      const { data } = await API.post(`${API_BASE}/purchase-orders/${poId}/receive`, { items });
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.RECEIVE_PO_STOCK });
+      return data.data; // { purchaseOrder, received }
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.RECEIVE_PO_STOCK, details: extractErrorMessage(err) });
+    }
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// § ASYNC THUNKS — HSN CODE MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export const fetchHsnCodes = createAsyncThunk(
   'pharmacyStore/fetchHsnCodes',
   async (params, { rejectWithValue }) => {
@@ -659,7 +786,6 @@ export const fetchHsnCodes = createAsyncThunk(
       const qs = buildQueryParams({ search, gst, isActive, page, limit, sort });
       const { data } = await API.get(`${API_BASE}/hsn${qs}`);
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_HSN_CODES });
-      // data = { success, total, metadata, data: codes[] }
       return data;
     } catch (err) {
       return rejectWithValue({ message: ERROR_MESSAGES.FETCH_HSN_CODES, details: extractErrorMessage(err) });
@@ -667,13 +793,6 @@ export const fetchHsnCodes = createAsyncThunk(
   },
 );
 
-// ── Route H2: fetchHsnStats ───────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/hsn/stats
- * @access Admin, SuperAdmin only
- * Response: { success, data: { gstDistribution, sourceBreakdown,
- *             activeVsInactive, totals }, generatedAt }
- */
 export const fetchHsnStats = createAsyncThunk(
   'pharmacyStore/fetchHsnStats',
   async (_, { rejectWithValue }) => {
@@ -687,13 +806,6 @@ export const fetchHsnStats = createAsyncThunk(
   },
 );
 
-// ── Route H3: hsnBulkDelete ───────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/hsn/bulk-delete
- * Body: { codes: string[] } — soft-deactivates (isActive: false)
- * @access SuperAdmin only
- * Response: { success, message, matched, deactivated }
- */
 export const hsnBulkDelete = createAsyncThunk(
   'pharmacyStore/hsnBulkDelete',
   async (codes, { rejectWithValue }) => {
@@ -702,23 +814,13 @@ export const hsnBulkDelete = createAsyncThunk(
         return rejectWithValue({ message: 'Provide a non-empty array of HSN codes' });
       const { data } = await API.post(`${API_BASE}/hsn/bulk-delete`, { codes });
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.HSN_BULK_DELETE });
-      return data; // { success, message, matched, deactivated }
+      return data; 
     } catch (err) {
       return rejectWithValue({ message: ERROR_MESSAGES.HSN_BULK_DELETE, details: extractErrorMessage(err) });
     }
   },
 );
 
-// ── Route H4: uploadHsnFile ───────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/hsn/upload
- * Body: multipart/form-data, field name = "file" (Excel .xlsx/.xls/.csv or PDF)
- * Max size: 20 MB. Router uploads to ImageKit first, then parses rows.
- * @access Admin, SuperAdmin
- * Response (200 all good | 207 partial errors):
- *   { success, message, upload: { imagekitUrl, imagekitFileId, originalName, source },
- *     result: { inserted, updated, skipped, errors[] } }
- */
 export const uploadHsnFile = createAsyncThunk(
   'pharmacyStore/uploadHsnFile',
   async (formData, { rejectWithValue }) => {
@@ -729,20 +831,13 @@ export const uploadHsnFile = createAsyncThunk(
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.HSN_UPLOAD });
-      return data; // { success, message, upload, result }
+      return data; 
     } catch (err) {
       return rejectWithValue({ message: ERROR_MESSAGES.HSN_UPLOAD, details: extractErrorMessage(err) });
     }
   },
 );
 
-// ── Route H5: fetchHsnCode ────────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/hsn/:code
- * code must be 4–8 digits (router validates this).
- * Response: { success, data: { _id, hsnCode, description, chapterHeading,
- *             gstPercentage, cgstPercentage, sgstPercentage, igstPercentage } }
- */
 export const fetchHsnCode = createAsyncThunk(
   'pharmacyStore/fetchHsnCode',
   async (code, { rejectWithValue }) => {
@@ -757,14 +852,6 @@ export const fetchHsnCode = createAsyncThunk(
   },
 );
 
-// ── Route H6: createHsnCode ───────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/hsn
- * Body: { hsnCode (4–8 digits), description (required), gstPercentage (required,
- *          one of 0|5|12|18|28), chapterHeading? }
- * @access Admin, SuperAdmin
- * Response: { success, data: <HsnCode document> }
- */
 export const createHsnCode = createAsyncThunk(
   'pharmacyStore/createHsnCode',
   async ({ hsnCode, description, gstPercentage, chapterHeading }, { rejectWithValue }) => {
@@ -785,13 +872,6 @@ export const createHsnCode = createAsyncThunk(
   },
 );
 
-// ── Route H7: updateHsnCode ───────────────────────────────────────────────────
-/**
- * PATCH /pharmacy-store/hsn/:code
- * Body: { description?, chapterHeading?, gstPercentage?, isActive? }
- * @access Admin, SuperAdmin
- * Response: { success, data: <updated HsnCode document> }
- */
 export const updateHsnCode = createAsyncThunk(
   'pharmacyStore/updateHsnCode',
   async ({ code, description, chapterHeading, gstPercentage, isActive }, { rejectWithValue }) => {
@@ -815,14 +895,6 @@ export const updateHsnCode = createAsyncThunk(
   },
 );
 
-// ── Route H8: deleteHsnCode ───────────────────────────────────────────────────
-/**
- * DELETE /pharmacy-store/hsn/:code
- * Soft-delete only — sets isActive: false; returns 409 if already inactive.
- * @access SuperAdmin only
- * Response: { success, message }
- * FIX: Returns the code string so the reducer can optimistically update the list.
- */
 export const deleteHsnCode = createAsyncThunk(
   'pharmacyStore/deleteHsnCode',
   async (code, { rejectWithValue }) => {
@@ -830,7 +902,7 @@ export const deleteHsnCode = createAsyncThunk(
       if (!code) return rejectWithValue({ message: 'HSN code is required' });
       const { data } = await API.delete(`${API_BASE}/hsn/${code}`);
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.DELETE_HSN_CODE });
-      return code; // return deactivated code string for optimistic list update
+      return code; 
     } catch (err) {
       return rejectWithValue({ message: ERROR_MESSAGES.DELETE_HSN_CODE, details: extractErrorMessage(err) });
     }
@@ -838,16 +910,9 @@ export const deleteHsnCode = createAsyncThunk(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// § ASYNC THUNKS — FINANCIAL REPORTS & EARNINGS (Routes 22–27)
+// § ASYNC THUNKS — FINANCIAL REPORTS & EARNINGS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Route 22: fetchDailyEarnings ──────────────────────────────────────────────
-/**
- * GET /pharmacy-store/financials/daily
- * Params: { date? } — ISO date string e.g. '2024-12-01'; defaults to today
- * Response: { success, data: { date, totalOrders, grossRevenue, gstCollected,
- *             discounts, netRevenue, paidOrders, statusBreakdown } }
- */
 export const fetchDailyEarnings = createAsyncThunk(
   'pharmacyStore/fetchDailyEarnings',
   async (params, { rejectWithValue }) => {
@@ -862,13 +927,6 @@ export const fetchDailyEarnings = createAsyncThunk(
   },
 );
 
-// ── Route 23: fetchMonthlyEarnings ────────────────────────────────────────────
-/**
- * GET /pharmacy-store/financials/monthly
- * Params: { month? } — format 'YYYY-MM'; defaults to current month
- * Response: { success, data: { month, grossRevenue, gstCollected, discounts,
- *             netRevenue, totalOrders, dailyBreakdown[] } }
- */
 export const fetchMonthlyEarnings = createAsyncThunk(
   'pharmacyStore/fetchMonthlyEarnings',
   async (params, { rejectWithValue }) => {
@@ -883,14 +941,6 @@ export const fetchMonthlyEarnings = createAsyncThunk(
   },
 );
 
-// ── Route 24: fetchTotalEarnings ──────────────────────────────────────────────
-/**
- * GET /pharmacy-store/financials/total
- * No params.
- * Response: { success, data: { grossRevenue, gstCollected, discounts, netRevenue,
- *             totalOrders, monthlyTrend[], topMedicines[] } }
- * Note: topMedicines here are aggregated by items.medicine (not medicineId).
- */
 export const fetchTotalEarnings = createAsyncThunk(
   'pharmacyStore/fetchTotalEarnings',
   async (_, { rejectWithValue }) => {
@@ -904,14 +954,6 @@ export const fetchTotalEarnings = createAsyncThunk(
   },
 );
 
-// ── Route 25: fetchEarningsHistory ────────────────────────────────────────────
-/**
- * GET /pharmacy-store/financials/history
- * Params: { dateFilter? (default:'last30days'), startDate?, endDate?,
- *           paymentMethod?, page?, limit? }
- * Response: { success, data: { orders[], summary: { totalRevenue, totalGst,
- *             totalDiscount }, pagination } }
- */
 export const fetchEarningsHistory = createAsyncThunk(
   'pharmacyStore/fetchEarningsHistory',
   async (params, { rejectWithValue }) => {
@@ -930,13 +972,19 @@ export const fetchEarningsHistory = createAsyncThunk(
   },
 );
 
-// ── Route 26: fetchStoreInvoice ───────────────────────────────────────────────
-/**
- * GET /pharmacy-store/financials/store-invoice
- * Params: { dateFilter? (default:'last30days'), startDate?, endDate? }
- * Router responds with text/html (res.status(200).send(html)).
- * Must use responseType: 'text'.
- */
+export const fetchCodPending = createAsyncThunk(
+  'pharmacyStore/fetchCodPending',
+  async (_, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`${API_BASE}/financials/cod-pending`);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_COD_PENDING });
+      return data.data; // { summary, orders }
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.FETCH_COD_PENDING, details: extractErrorMessage(err) });
+    }
+  },
+);
+
 export const fetchStoreInvoice = createAsyncThunk(
   'pharmacyStore/fetchStoreInvoice',
   async (params, { rejectWithValue }) => {
@@ -951,13 +999,6 @@ export const fetchStoreInvoice = createAsyncThunk(
   },
 );
 
-// ── Route 27: sendStoreInvoice ────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/financials/store-invoice/send
- * Body: { dateFilter? (default:'last30days'), startDate?, endDate?, recipientEmail? }
- * Router falls back to req.user email if recipientEmail is not provided.
- * Response: { success, message }
- */
 export const sendStoreInvoice = createAsyncThunk(
   'pharmacyStore/sendStoreInvoice',
   async ({ dateFilter = 'last30days', startDate, endDate, recipientEmail } = {}, { rejectWithValue }) => {
@@ -977,15 +1018,9 @@ export const sendStoreInvoice = createAsyncThunk(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// § ASYNC THUNKS — BANK SETTLEMENTS & PAYMENT ACCOUNTS (Routes 28–36)
+// § ASYNC THUNKS — BANK SETTLEMENTS & PAYMENT ACCOUNTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Route 28: fetchPaymentAccount ─────────────────────────────────────────────
-/**
- * GET /pharmacy-store/financials/payment-account
- * Router creates a new PaymentAccount if none exists.
- * Response: { success, data: { account } }
- */
 export const fetchPaymentAccount = createAsyncThunk(
   'pharmacyStore/fetchPaymentAccount',
   async (_, { rejectWithValue }) => {
@@ -999,14 +1034,6 @@ export const fetchPaymentAccount = createAsyncThunk(
   },
 );
 
-// ── Route 29: addBankAccount ──────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/financials/payment-account/bank
- * Body: { accountHolderName (req), accountNumber (req), ifscCode (req),
- *          bankName?, branchName?, accountType? (default:'Current'),
- *          isPrimary?, cancelledChequeUrl? }
- * Response: { success, message, data: { account } }
- */
 export const addBankAccount = createAsyncThunk(
   'pharmacyStore/addBankAccount',
   async (payload, { rejectWithValue }) => {
@@ -1024,14 +1051,6 @@ export const addBankAccount = createAsyncThunk(
   },
 );
 
-// ── Route 30: updateBankAccount ───────────────────────────────────────────────
-/**
- * PATCH /pharmacy-store/financials/payment-account/bank/:bankId
- * Body: { accountHolderName?, ifscCode?, bankName?, branchName?,
- *          accountType?, isPrimary?, cancelledChequeUrl? }
- * Note: accountNumber is NOT updatable (not in router's patch handler).
- * Response: { success, message, data: { account } }
- */
 export const updateBankAccount = createAsyncThunk(
   'pharmacyStore/updateBankAccount',
   async ({ bankId, ...payload }, { rejectWithValue }) => {
@@ -1046,11 +1065,6 @@ export const updateBankAccount = createAsyncThunk(
   },
 );
 
-// ── Route 31: deleteBankAccount ───────────────────────────────────────────────
-/**
- * DELETE /pharmacy-store/financials/payment-account/bank/:bankId
- * Response: { success, message }
- */
 export const deleteBankAccount = createAsyncThunk(
   'pharmacyStore/deleteBankAccount',
   async (bankId, { rejectWithValue }) => {
@@ -1065,12 +1079,6 @@ export const deleteBankAccount = createAsyncThunk(
   },
 );
 
-// ── Route 32: addUpiHandle ────────────────────────────────────────────────────
-/**
- * POST /pharmacy-store/financials/payment-account/upi
- * Body: { upiId (required), upiName?, isPrimary? }
- * Response: { success, message, data: { account } }
- */
 export const addUpiHandle = createAsyncThunk(
   'pharmacyStore/addUpiHandle',
   async ({ upiId, upiName, isPrimary }, { rejectWithValue }) => {
@@ -1078,7 +1086,7 @@ export const addUpiHandle = createAsyncThunk(
       if (!upiId) return rejectWithValue({ message: 'upiId is required' });
       const { data } = await API.post(`${API_BASE}/financials/payment-account/upi`, {
         upiId,
-        ...(upiName                        && { upiName }),
+        ...(upiName                         && { upiName }),
         ...(typeof isPrimary === 'boolean' && { isPrimary }),
       });
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.ADD_UPI });
@@ -1089,13 +1097,6 @@ export const addUpiHandle = createAsyncThunk(
   },
 );
 
-// ── Route 33: deleteUpiHandle ─────────────────────────────────────────────────
-/**
- * DELETE /pharmacy-store/financials/payment-account/upi/:upiId
- * Note: :upiId here is the MongoDB _id of the upiHandle subdocument,
- *       NOT the UPI string like 'user@upi'. The router uses account.upiHandles.pull({ _id: req.params.upiId }).
- * Response: { success, message }
- */
 export const deleteUpiHandle = createAsyncThunk(
   'pharmacyStore/deleteUpiHandle',
   async (upiHandleId, { rejectWithValue }) => {
@@ -1103,20 +1104,13 @@ export const deleteUpiHandle = createAsyncThunk(
       if (!upiHandleId) return rejectWithValue({ message: 'upiHandleId (_id) is required' });
       const { data } = await API.delete(`${API_BASE}/financials/payment-account/upi/${upiHandleId}`);
       if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.DELETE_UPI });
-      return upiHandleId; // the MongoDB _id of the removed subdoc
+      return upiHandleId;
     } catch (err) {
       return rejectWithValue({ message: ERROR_MESSAGES.DELETE_UPI, details: extractErrorMessage(err) });
     }
   },
 );
 
-// ── Route 34: fetchSettlements ────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/financials/settlements
- * Response: { success, data: { pendingBalance, totalEarned, totalSettled,
- *             totalDeductions, preferredPayoutMethod, payoutCycle,
- *             primaryBank, primaryUpi, settlementHistory[] (last 20) } }
- */
 export const fetchSettlements = createAsyncThunk(
   'pharmacyStore/fetchSettlements',
   async (_, { rejectWithValue }) => {
@@ -1130,13 +1124,6 @@ export const fetchSettlements = createAsyncThunk(
   },
 );
 
-// ── Route 35: requestSettlement ───────────────────────────────────────────────
-/**
- * POST /pharmacy-store/financials/settlements/request
- * Body: { amount (required, >0, ≤ pendingBalance), method?, note? }
- * Router subtracts from pendingBalance and pushes to settlementHistory.
- * Response: { success, message, data: { pendingBalance, totalSettled } }
- */
 export const requestSettlement = createAsyncThunk(
   'pharmacyStore/requestSettlement',
   async ({ amount, method, note }, { rejectWithValue }) => {
@@ -1156,13 +1143,6 @@ export const requestSettlement = createAsyncThunk(
   },
 );
 
-// ── Route 36: fetchSettlementHistory ──────────────────────────────────────────
-/**
- * GET /pharmacy-store/financials/settlements/history
- * Params: { page?, limit? }
- * Router reverses the array and slices in-memory (not DB-level pagination).
- * Response: { success, data: { history[], pagination } }
- */
 export const fetchSettlementHistory = createAsyncThunk(
   'pharmacyStore/fetchSettlementHistory',
   async (params, { rejectWithValue }) => {
@@ -1179,18 +1159,9 @@ export const fetchSettlementHistory = createAsyncThunk(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// § ASYNC THUNKS — ANALYTICS (Routes 37–40)
+// § ASYNC THUNKS — ANALYTICS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Route 37: fetchAnalyticsOverview ──────────────────────────────────────────
-/**
- * GET /pharmacy-store/analytics/overview
- * Params: { dateFilter? (default:'today') }
- * Note: Router only reads dateFilter; startDate/endDate are NOT forwarded
- *       to parseDateFilter in the analytics/overview route.
- * Response: { success, data: { totalOrders, totalRevenue, gstCollected,
- *             statusBreakdown } }
- */
 export const fetchAnalyticsOverview = createAsyncThunk(
   'pharmacyStore/fetchAnalyticsOverview',
   async (params, { rejectWithValue }) => {
@@ -1206,13 +1177,6 @@ export const fetchAnalyticsOverview = createAsyncThunk(
   },
 );
 
-// ── Route 38: fetchRevenueAnalytics ───────────────────────────────────────────
-/**
- * GET /pharmacy-store/analytics/revenue
- * Params: { dateFilter? (default:'last30days') }
- * Note: Router only reads dateFilter for revenue analytics.
- * Response: { success, data: { revenueByDay[] } }
- */
 export const fetchRevenueAnalytics = createAsyncThunk(
   'pharmacyStore/fetchRevenueAnalytics',
   async (params, { rejectWithValue }) => {
@@ -1228,12 +1192,6 @@ export const fetchRevenueAnalytics = createAsyncThunk(
   },
 );
 
-// ── Route 39: fetchReturnAnalytics ────────────────────────────────────────────
-/**
- * GET /pharmacy-store/analytics/returns
- * Params: { dateFilter? (default:'last30days') }
- * Response: { success, data: { returnMetrics[] } }
- */
 export const fetchReturnAnalytics = createAsyncThunk(
   'pharmacyStore/fetchReturnAnalytics',
   async (params, { rejectWithValue }) => {
@@ -1249,13 +1207,6 @@ export const fetchReturnAnalytics = createAsyncThunk(
   },
 );
 
-// ── Route 40: fetchTopMedicines ───────────────────────────────────────────────
-/**
- * GET /pharmacy-store/analytics/top-medicines
- * Params: { dateFilter? (default:'last30days'), limit? (default:10) }
- * Router groups by items.medicine (not items.medicineId — fixed in router).
- * Response: { success, data: { topMedicines[] } }
- */
 export const fetchTopMedicines = createAsyncThunk(
   'pharmacyStore/fetchTopMedicines',
   async (params, { rejectWithValue }) => {
@@ -1271,15 +1222,23 @@ export const fetchTopMedicines = createAsyncThunk(
   },
 );
 
+export const fetchInventoryValue = createAsyncThunk(
+  'pharmacyStore/fetchInventoryValue',
+  async (_, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`${API_BASE}/analytics/inventory-value`);
+      if (!data.success) return rejectWithValue({ message: data.message || ERROR_MESSAGES.FETCH_INVENTORY_VALUE });
+      return data.data;
+    } catch (err) {
+      return rejectWithValue({ message: ERROR_MESSAGES.FETCH_INVENTORY_VALUE, details: extractErrorMessage(err) });
+    }
+  },
+);
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// § ASYNC THUNKS — PROFILE & STORE (Routes 41–48)
+// § ASYNC THUNKS — PROFILE & STORE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Route 41: fetchProfile ────────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/profile
- * Response: { success, data: { user } }  (password field excluded by router)
- */
 export const fetchProfile = createAsyncThunk(
   'pharmacyStore/fetchProfile',
   async (_, { rejectWithValue }) => {
@@ -1293,12 +1252,6 @@ export const fetchProfile = createAsyncThunk(
   },
 );
 
-// ── Route 42: updateUserProfile ───────────────────────────────────────────────
-/**
- * PUT /pharmacy-store/profile
- * Body: { name?, phone?, avatar? }
- * Response: { success, message, data: { user } }
- */
 export const updateUserProfile = createAsyncThunk(
   'pharmacyStore/updateUserProfile',
   async ({ name, phone, avatar }, { rejectWithValue }) => {
@@ -1320,13 +1273,6 @@ export const updateUserProfile = createAsyncThunk(
   },
 );
 
-// ── Route 43: changePassword ──────────────────────────────────────────────────
-/**
- * PUT /pharmacy-store/profile/password
- * Body: { currentPassword (req), newPassword (req, ≥8 chars), confirmPassword (req) }
- * Router validates match and length server-side too.
- * Response: { success, message }
- */
 export const changePassword = createAsyncThunk(
   'pharmacyStore/changePassword',
   async ({ currentPassword, newPassword, confirmPassword }, { rejectWithValue }) => {
@@ -1351,12 +1297,6 @@ export const changePassword = createAsyncThunk(
   },
 );
 
-// ── Route 44: fetchPharmacyProfile ────────────────────────────────────────────
-/**
- * GET /pharmacy-store/profile/pharmacy
- * Response: { success, data: { pharmacyProfile } }
- * Router populates 'assignedStore'.
- */
 export const fetchPharmacyProfile = createAsyncThunk(
   'pharmacyStore/fetchPharmacyProfile',
   async (_, { rejectWithValue }) => {
@@ -1370,13 +1310,6 @@ export const fetchPharmacyProfile = createAsyncThunk(
   },
 );
 
-// ── Route 45: updatePharmacyProfile ──────────────────────────────────────────
-/**
- * PUT /pharmacy-store/profile/pharmacy
- * Body: { experienceYears?: number, qualification?: string }
- * Router only accepts these two fields.
- * Response: { success, message, data: { pharmacyProfile } }
- */
 export const updatePharmacyProfile = createAsyncThunk(
   'pharmacyStore/updatePharmacyProfile',
   async ({ experienceYears, qualification }, { rejectWithValue }) => {
@@ -1397,11 +1330,6 @@ export const updatePharmacyProfile = createAsyncThunk(
   },
 );
 
-// ── Route 46: fetchStore ──────────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/store
- * Response: { success, data: { store } }  (returns req.pharmacy.store)
- */
 export const fetchStore = createAsyncThunk(
   'pharmacyStore/fetchStore',
   async (_, { rejectWithValue }) => {
@@ -1415,15 +1343,6 @@ export const fetchStore = createAsyncThunk(
   },
 );
 
-// ── Route 47: updateStore ─────────────────────────────────────────────────────
-/**
- * PUT /pharmacy-store/store
- * Body: { deliveryRadiusKm?: number, estimatedDeliveryTime?: string,
- *          timings?, status? }
- * Router maps to nested paths: 'deliverySettings.deliveryRadiusKm',
- * 'deliverySettings.estimatedDeliveryTime'.
- * Response: { success, message, data: { store } }
- */
 export const updateStore = createAsyncThunk(
   'pharmacyStore/updateStore',
   async ({ deliveryRadiusKm, estimatedDeliveryTime, timings, status }, { rejectWithValue }) => {
@@ -1446,12 +1365,6 @@ export const updateStore = createAsyncThunk(
   },
 );
 
-// ── Route 48: fetchInventorySummary ───────────────────────────────────────────
-/**
- * GET /pharmacy-store/store/inventory-summary
- * Response: { success, data: { totalSKUs, totalUnits, lowStockCount,
- *             expiringSoonCount, lowStockThreshold, expiryAlertDays } }
- */
 export const fetchInventorySummary = createAsyncThunk(
   'pharmacyStore/fetchInventorySummary',
   async (_, { rejectWithValue }) => {
@@ -1466,14 +1379,9 @@ export const fetchInventorySummary = createAsyncThunk(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// § ASYNC THUNKS — AUDIT: SESSIONS & DEVICES (Routes 49–54)
+// § ASYNC THUNKS — AUDIT: SESSIONS & DEVICES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Route 49: fetchSessions ───────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/audit/sessions
- * Response: { success, data: { sessions } }
- */
 export const fetchSessions = createAsyncThunk(
   'pharmacyStore/fetchSessions',
   async (_, { rejectWithValue }) => {
@@ -1487,11 +1395,6 @@ export const fetchSessions = createAsyncThunk(
   },
 );
 
-// ── Route 50: revokeSession ───────────────────────────────────────────────────
-/**
- * DELETE /pharmacy-store/audit/sessions/:sessionId
- * Response: { success, message }
- */
 export const revokeSession = createAsyncThunk(
   'pharmacyStore/revokeSession',
   async (sessionId, { rejectWithValue }) => {
@@ -1506,12 +1409,6 @@ export const revokeSession = createAsyncThunk(
   },
 );
 
-// ── Route 51: logoutAllDevices ────────────────────────────────────────────────
-/**
- * DELETE /pharmacy-store/audit/all-sessions
- * Clears auditSessions array on the User document.
- * Response: { success, message }
- */
 export const logoutAllDevices = createAsyncThunk(
   'pharmacyStore/logoutAllDevices',
   async (_, { rejectWithValue }) => {
@@ -1525,11 +1422,6 @@ export const logoutAllDevices = createAsyncThunk(
   },
 );
 
-// ── Route 52: fetchDevices ────────────────────────────────────────────────────
-/**
- * GET /pharmacy-store/audit/devices
- * Response: { success, data: { devices } }
- */
 export const fetchDevices = createAsyncThunk(
   'pharmacyStore/fetchDevices',
   async (_, { rejectWithValue }) => {
@@ -1543,11 +1435,6 @@ export const fetchDevices = createAsyncThunk(
   },
 );
 
-// ── Route 53: removeDevice ────────────────────────────────────────────────────
-/**
- * DELETE /pharmacy-store/audit/devices/:deviceId
- * Response: { success, message }
- */
 export const removeDevice = createAsyncThunk(
   'pharmacyStore/removeDevice',
   async (deviceId, { rejectWithValue }) => {
@@ -1562,12 +1449,6 @@ export const removeDevice = createAsyncThunk(
   },
 );
 
-// ── Route 54: removeAllDevices ────────────────────────────────────────────────
-/**
- * DELETE /pharmacy-store/audit/devices
- * Clears deviceTokens array on the User document.
- * Response: { success, message }
- */
 export const removeAllDevices = createAsyncThunk(
   'pharmacyStore/removeAllDevices',
   async (_, { rejectWithValue }) => {
@@ -1592,44 +1473,56 @@ const initialState = {
   orders:                   [],
   ordersPagination:         { ...DEFAULT_PAGINATION },
   currentOrder:             null,
-  /** Exported order payload — kept separate from currentOrder detail. */
+  orderPricingBreakdown:    null,
   exportedOrder:            null,
   currentOrderInvoiceHtml:  null,
   currentOrderLabelHtml:    null,
 
   // ── Medicines & Inventory ──────────────────────────────────────────────────
-  medicines:            [],
-  medicinesPagination:  { ...DEFAULT_PAGINATION },
-  /** Single-medicine stock detail (fetchMedicineStock). */
-  medicineStockDetail:  null,
-  inventoryBatches:     [],
-  batchesPagination:    { ...DEFAULT_PAGINATION },
-  expiryAlerts:         [],
-  expiryAlertsMeta:     { count: 0, alertDays: 30 },
-  lowStockItems:        [],
-  lowStockMeta:         { count: 0, threshold: 5 },
-  /** Dashboard summary card (fetchInventorySummary). */
-  inventorySummary:     null,
+  medicines:                [],
+  medicinesPagination:      { ...DEFAULT_PAGINATION },
+  medicineStockDetail:      null,
+  medicineInventoryDetail:  null,
+  inventoryBatches:         [],
+  batchesPagination:        { ...DEFAULT_PAGINATION },
+  expiryAlerts:             [],
+  expiryAlertsMeta:         { count: 0, alertDays: 30 },
+  lowStockItems:            [],
+  lowStockMeta:             { count: 0, threshold: 5 },
+  inventorySummary:         null,
+  inventoryMovements:       [],
+  movementsPagination:      { ...DEFAULT_PAGINATION },
+
+  // ── Suppliers ──────────────────────────────────────────────────────────────
+  suppliers:                [],
+  suppliersPagination:      { ...DEFAULT_PAGINATION },
+  currentSupplier:          null,
+
+  // ── Purchase Orders ────────────────────────────────────────────────────────
+  purchaseOrders:           [],
+  purchaseOrdersPagination: { ...DEFAULT_PAGINATION },
+  currentPurchaseOrder:     null,
+  poReceivingResult:        null,
 
   // ── HSN Codes ──────────────────────────────────────────────────────────────
-  hsnCodes:             [],
-  hsnCodesPagination:   { ...DEFAULT_PAGINATION },
-  hsnCodesTotal:        0,
-  hsnStats:             null,
-  /** Single HSN code detail (fetchHsnCode). */
-  currentHsnCode:       null,
+  hsnCodes:                 [],
+  hsnCodesPagination:       { ...DEFAULT_PAGINATION },
+  hsnCodesTotal:            0,
+  hsnStats:                 null,
+  currentHsnCode:           null,
 
   // ── Financials ─────────────────────────────────────────────────────────────
-  dailyEarnings:              null,
-  monthlyEarnings:            null,
-  totalEarnings:              null,
-  earningsHistory:            [],
-  earningsHistoryPagination:  { ...DEFAULT_PAGINATION },
-  earningsHistorySummary:     null,
-  storeInvoiceHtml:           null,
+  dailyEarnings:            null,
+  monthlyEarnings:          null,
+  totalEarnings:            null,
+  earningsHistory:          [],
+  earningsHistoryPagination:{ ...DEFAULT_PAGINATION },
+  earningsHistorySummary:   null,
+  codPending:               null,
+  storeInvoiceHtml:         null,
 
   // ── Payment Accounts ────────────────────────────────────────────────────────
-  paymentAccount: null,
+  paymentAccount:           null,
 
   // ── Settlements ─────────────────────────────────────────────────────────────
   settlements:                 null,
@@ -1637,165 +1530,208 @@ const initialState = {
   settlementHistoryPagination: { ...DEFAULT_PAGINATION },
 
   // ── Analytics ──────────────────────────────────────────────────────────────
-  analyticsOverview: null,
-  revenueAnalytics:  null,
-  returnAnalytics:   null,
-  topMedicines:      [],
+  analyticsOverview:        null,
+  revenueAnalytics:         null,
+  returnAnalytics:          null,
+  topMedicines:             [],
+  inventoryValue:           null,
 
   // ── Profile ────────────────────────────────────────────────────────────────
-  userProfile:     null,
-  pharmacyProfile: null,
+  userProfile:              null,
+  pharmacyProfile:          null,
 
   // ── Store ───────────────────────────────────────────────────────────────────
-  store: null,
+  store:                    null,
 
   // ── Audit & Security ────────────────────────────────────────────────────────
-  sessions: [],
-  devices:  [],
+  sessions:                 [],
+  devices:                  [],
 
   // ── Loading flags ───────────────────────────────────────────────────────────
   loading: {
-    orders:            false,
-    orderDetails:      false,
-    prescription:      false,
-    orderConfirm:      false,
-    orderStatus:       false,
-    returnAccept:      false,
-    pickupVerify:      false,
-    refund:            false,
-    orderNote:         false,
-    driverAssign:      false,
-    orderExport:       false,
-    orderInvoice:      false,
-    orderLabel:        false,
-    medicines:         false,
-    medicineStock:     false,
-    addStock:          false,
-    deductStock:       false,
-    inventoryBatches:  false,
-    expiryAlerts:      false,
-    lowStock:          false,
-    requestStock:      false,
-    inventorySummary:  false,
-    hsnCodes:          false,
-    hsnStats:          false,
-    hsnCode:           false,
-    hsnCreate:         false,
-    hsnUpdate:         false,
-    hsnDelete:         false,
-    hsnBulkDelete:     false,
-    hsnUpload:         false,
-    dailyEarnings:     false,
-    monthlyEarnings:   false,
-    totalEarnings:     false,
-    earningsHistory:   false,
-    storeInvoice:      false,
-    sendStoreInvoice:  false,
-    paymentAccount:    false,
-    bankAccount:       false,
-    upiHandle:         false,
-    settlements:          false,
-    settlementRequest:    false,
-    settlementHistory:    false,
-    analyticsOverview:  false,
-    analyticsRevenue:   false,
-    analyticsReturns:   false,
-    topMedicines:       false,
-    profile:         false,
-    pharmacyProfile: false,
-    store:           false,
-    sessions: false,
-    devices:  false,
+    orders:                   false,
+    orderDetails:             false,
+    orderPricing:             false,
+    prescription:             false,
+    orderConfirm:             false,
+    orderStatus:              false,
+    returnAccept:             false,
+    pickupVerify:             false,
+    refund:                   false,
+    orderNote:                false,
+    driverAssign:             false,
+    orderExport:              false,
+    orderInvoice:             false,
+    orderLabel:               false,
+    medicines:                false,
+    medicineStock:            false,
+    medicineInventoryDetail:  false,
+    addStock:                 false,
+    deductStock:              false,
+    updateMedicineInventory:  false,
+    inventoryBatches:         false,
+    updateBatch:              false,
+    expiryAlerts:             false,
+    lowStock:                 false,
+    requestStock:             false,
+    inventoryMovements:       false,
+    inventorySummary:         false,
+    suppliers:                false,
+    supplierDetail:           false,
+    createSupplier:           false,
+    updateSupplier:           false,
+    deleteSupplier:           false,
+    purchaseOrders:           false,
+    purchaseOrderDetail:      false,
+    createPurchaseOrder:      false,
+    updatePurchaseOrder:      false,
+    receivePurchaseOrder:     false,
+    hsnCodes:                 false,
+    hsnStats:                 false,
+    hsnCode:                  false,
+    hsnCreate:                false,
+    hsnUpdate:                false,
+    hsnDelete:                false,
+    hsnBulkDelete:            false,
+    hsnUpload:                false,
+    dailyEarnings:            false,
+    monthlyEarnings:          false,
+    totalEarnings:            false,
+    earningsHistory:          false,
+    codPending:               false,
+    storeInvoice:             false,
+    sendStoreInvoice:         false,
+    paymentAccount:           false,
+    bankAccount:              false,
+    upiHandle:                false,
+    settlements:              false,
+    settlementRequest:        false,
+    settlementHistory:        false,
+    analyticsOverview:        false,
+    analyticsRevenue:         false,
+    analyticsReturns:         false,
+    topMedicines:             false,
+    inventoryValue:           false,
+    profile:                  false,
+    pharmacyProfile:          false,
+    store:                    false,
+    sessions:                 false,
+    devices:                  false,
   },
 
   // ── Errors ──────────────────────────────────────────────────────────────────
   errors: {
-    orders:            null,
-    orderDetails:      null,
-    prescription:      null,
-    orderConfirm:      null,
-    orderStatus:       null,
-    returnAccept:      null,
-    pickupVerify:      null,
-    refund:            null,
-    orderNote:         null,
-    driverAssign:      null,
-    orderExport:       null,
-    orderInvoice:      null,
-    orderLabel:        null,
-    medicines:         null,
-    medicineStock:     null,
-    addStock:          null,
-    deductStock:       null,
-    inventoryBatches:  null,
-    expiryAlerts:      null,
-    lowStock:          null,
-    requestStock:      null,
-    inventorySummary:  null,
-    hsnCodes:          null,
-    hsnStats:          null,
-    hsnCode:           null,
-    hsnCreate:         null,
-    hsnUpdate:         null,
-    hsnDelete:         null,
-    hsnBulkDelete:     null,
-    hsnUpload:         null,
-    dailyEarnings:     null,
-    monthlyEarnings:   null,
-    totalEarnings:     null,
-    earningsHistory:   null,
-    storeInvoice:      null,
-    sendStoreInvoice:  null,
-    paymentAccount:    null,
-    bankAccount:       null,
-    upiHandle:         null,
-    settlements:          null,
-    settlementRequest:    null,
-    settlementHistory:    null,
-    analyticsOverview:  null,
-    analyticsRevenue:   null,
-    analyticsReturns:   null,
-    topMedicines:       null,
-    profile:         null,
-    pharmacyProfile: null,
-    store:           null,
-    sessions: null,
-    devices:  null,
+    orders:                   null,
+    orderDetails:             null,
+    orderPricing:             null,
+    prescription:             null,
+    orderConfirm:             null,
+    orderStatus:              null,
+    returnAccept:             null,
+    pickupVerify:             null,
+    refund:                   null,
+    orderNote:                null,
+    driverAssign:             null,
+    orderExport:              null,
+    orderInvoice:             null,
+    orderLabel:               null,
+    medicines:                null,
+    medicineStock:            null,
+    medicineInventoryDetail:  null,
+    addStock:                 null,
+    deductStock:              null,
+    updateMedicineInventory:  null,
+    inventoryBatches:         null,
+    updateBatch:              null,
+    expiryAlerts:             null,
+    lowStock:                 null,
+    requestStock:             null,
+    inventoryMovements:       null,
+    inventorySummary:         null,
+    suppliers:                null,
+    supplierDetail:           null,
+    createSupplier:           null,
+    updateSupplier:           null,
+    deleteSupplier:           null,
+    purchaseOrders:           null,
+    purchaseOrderDetail:      null,
+    createPurchaseOrder:      null,
+    updatePurchaseOrder:      null,
+    receivePurchaseOrder:     null,
+    hsnCodes:                 null,
+    hsnStats:                 null,
+    hsnCode:                  null,
+    hsnCreate:                null,
+    hsnUpdate:                null,
+    hsnDelete:                null,
+    hsnBulkDelete:            null,
+    hsnUpload:                null,
+    dailyEarnings:            null,
+    monthlyEarnings:          null,
+    totalEarnings:            null,
+    earningsHistory:          null,
+    codPending:               null,
+    storeInvoice:             null,
+    sendStoreInvoice:         null,
+    paymentAccount:           null,
+    bankAccount:              null,
+    upiHandle:                null,
+    settlements:              null,
+    settlementRequest:        null,
+    settlementHistory:        null,
+    analyticsOverview:        null,
+    analyticsRevenue:         null,
+    analyticsReturns:         null,
+    topMedicines:             null,
+    inventoryValue:           null,
+    profile:                  null,
+    pharmacyProfile:          null,
+    store:                    null,
+    sessions:                 null,
+    devices:                  null,
   },
 
   // ── One-shot success flags ───────────────────────────────────────────────────
   success: {
-    prescription:              false,
-    orderConfirm:              false,
-    orderStatus:               false,
-    returnAccept:              false,
-    pickupVerify:              false,
-    refund:                    false,
-    orderNote:                 false,
-    driverAssign:              false,
-    addStock:                  false,
-    deductStock:               false,
-    requestStock:              false,
-    sendStoreInvoice:          false,
-    addBankAccount:            false,
-    updateBankAccount:         false,
-    deleteBankAccount:         false,
-    addUpiHandle:              false,
-    deleteUpiHandle:           false,
-    settlementRequest:         false,
-    profileUpdate:             false,
-    pharmacyProfileUpdate:     false,
-    passwordChange:            false,
-    storeUpdate:               false,
-    sessionRevoke:             false,
-    logoutAll:                 false,
-    deviceRemove:              false,
-    allDevicesRemoved:         false,
-    hsnCreate:                 false,
-    hsnUpdate:                 false,
-    hsnDelete:                 false,
-    hsnBulkDelete:             false,
-    hsnUpload:                 false,
+    prescription:             false,
+    orderConfirm:             false,
+    orderStatus:              false,
+    returnAccept:             false,
+    pickupVerify:             false,
+    refund:                   false,
+    orderNote:                false,
+    driverAssign:             false,
+    addStock:                 false,
+    deductStock:              false,
+    requestStock:             false,
+    updateMedicineInventory:  false,
+    updateBatch:              false,
+    createSupplier:           false,
+    updateSupplier:           false,
+    deleteSupplier:           false,
+    createPurchaseOrder:      false,
+    updatePurchaseOrder:      false,
+    receivePurchaseOrder:     false,
+    sendStoreInvoice:         false,
+    addBankAccount:           false,
+    updateBankAccount:        false,
+    deleteBankAccount:        false,
+    addUpiHandle:             false,
+    deleteUpiHandle:          false,
+    settlementRequest:        false,
+    profileUpdate:            false,
+    pharmacyProfileUpdate:    false,
+    passwordChange:           false,
+    storeUpdate:              false,
+    sessionRevoke:            false,
+    logoutAll:                false,
+    deviceRemove:             false,
+    allDevicesRemoved:        false,
+    hsnCreate:                false,
+    hsnUpdate:                false,
+    hsnDelete:                false,
+    hsnBulkDelete:            false,
+    hsnUpload:                false,
   },
 };
 
@@ -1806,72 +1742,57 @@ const initialState = {
 const pharmacyStoreSlice = createSlice({
   name: 'pharmacyStore',
   initialState,
-
   reducers: {
-    /** Clear a single error field. payload: keyof errors */
     clearError: (state, { payload }) => {
       if (payload && payload in state.errors) state.errors[payload] = null;
     },
-
-    /** Clear a single success flag. payload: keyof success */
     clearSuccess: (state, { payload }) => {
       if (payload && payload in state.success) state.success[payload] = false;
     },
-
-    /** Clear every error field in one shot. */
     clearAllErrors: (state) => {
       Object.keys(state.errors).forEach((k) => { state.errors[k] = null; });
     },
-
-    /** Clear every success flag in one shot. */
     clearAllSuccess: (state) => {
       Object.keys(state.success).forEach((k) => { state.success[k] = false; });
     },
-
-    /** Hard-reset to initialState — call on logout. */
     resetPharmacyStore: () => initialState,
-
-    /** Manually set the active order (e.g. from a navigation event). */
     setCurrentOrder: (state, { payload }) => {
       state.currentOrder = payload;
     },
-
-    /** Clear the active order and any HTML artefacts. */
     clearCurrentOrder: (state) => {
       state.currentOrder            = null;
+      state.orderPricingBreakdown   = null;
       state.currentOrderInvoiceHtml = null;
       state.currentOrderLabelHtml   = null;
     },
-
-    /** Clear rendered HTML invoices/labels (e.g. on modal close). */
     clearOrderDocuments: (state) => {
       state.currentOrderInvoiceHtml = null;
       state.currentOrderLabelHtml   = null;
     },
-
-    /** Clear store invoice HTML (e.g. on modal close). */
     clearStoreInvoice: (state) => {
       state.storeInvoiceHtml = null;
     },
-
-    /** Clear the currently viewed single HSN code. */
     clearCurrentHsnCode: (state) => {
       state.currentHsnCode = null;
     },
-
-    /** Clear exported order data. */
     clearExportedOrder: (state) => {
       state.exportedOrder = null;
     },
+    clearCurrentSupplier: (state) => {
+      state.currentSupplier = null;
+    },
+    clearCurrentPurchaseOrder: (state) => {
+      state.currentPurchaseOrder = null;
+      state.poReceivingResult = null;
+    }
   },
 
   extraReducers: (builder) => {
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ▶ ORDERS (Routes 01–13)
+    // ▶ ORDERS
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Route 01 — fetchOrders
     builder
       .addCase(fetchOrders.pending, (state) => {
         state.loading.orders = true;
@@ -1888,7 +1809,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_ORDERS);
       });
 
-    // Route 02 — fetchOrderDetails
     builder
       .addCase(fetchOrderDetails.pending, (state) => {
         state.loading.orderDetails = true;
@@ -1904,7 +1824,21 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_ORDER_DETAILS);
       });
 
-    // Route 03 — verifyPrescription
+    builder
+      .addCase(fetchOrderPricingBreakdown.pending, (state) => {
+        state.loading.orderPricing = true;
+        state.errors.orderPricing  = null;
+      })
+      .addCase(fetchOrderPricingBreakdown.fulfilled, (state, { payload }) => {
+        state.loading.orderPricing = false;
+        state.orderPricingBreakdown = payload;
+      })
+      .addCase(fetchOrderPricingBreakdown.rejected, (state, { payload }) => {
+        state.loading.orderPricing = false;
+        state.errors.orderPricing  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.FETCH_ORDER_PRICING);
+      });
+
     builder
       .addCase(verifyPrescription.pending, (state) => {
         state.loading.prescription = true;
@@ -1924,7 +1858,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.VERIFY_PRESCRIPTION);
       });
 
-    // Route 04 — confirmOrder
     builder
       .addCase(confirmOrder.pending, (state) => {
         state.loading.orderConfirm = true;
@@ -1944,7 +1877,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.CONFIRM_ORDER);
       });
 
-    // Route 05 — updateOrderStatus
     builder
       .addCase(updateOrderStatus.pending, (state) => {
         state.loading.orderStatus = true;
@@ -1964,7 +1896,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.UPDATE_ORDER_STATUS);
       });
 
-    // Route 06 — acceptReturn
     builder
       .addCase(acceptReturn.pending, (state) => {
         state.loading.returnAccept = true;
@@ -1984,7 +1915,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.RETURN_ACCEPT);
       });
 
-    // Route 07 — processRefund
     builder
       .addCase(processRefund.pending, (state) => {
         state.loading.refund = true;
@@ -2006,7 +1936,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.PROCESS_REFUND);
       });
 
-    // Route 08 — addOrderNote
     builder
       .addCase(addOrderNote.pending, (state) => {
         state.loading.orderNote = true;
@@ -2026,7 +1955,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.ADD_NOTE);
       });
 
-    // Route 09 — assignDeliveryPartner
     builder
       .addCase(assignDeliveryPartner.pending, (state) => {
         state.loading.driverAssign = true;
@@ -2046,9 +1974,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.ASSIGN_DRIVER);
       });
 
-    // Route 10 — exportOrder
-    // FIX: payload is data.data = { order } — stored in exportedOrder, NOT
-    //      currentOrder, so it does not clobber the live detail view.
     builder
       .addCase(exportOrder.pending, (state) => {
         state.loading.orderExport = true;
@@ -2065,7 +1990,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.EXPORT_ORDER);
       });
 
-    // Route 11 — verifyPickup
     builder
       .addCase(verifyPickup.pending, (state) => {
         state.loading.pickupVerify = true;
@@ -2085,7 +2009,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.PICKUP_VERIFY);
       });
 
-    // Route 12 — fetchOrderInvoice
     builder
       .addCase(fetchOrderInvoice.pending, (state) => {
         state.loading.orderInvoice = true;
@@ -2101,7 +2024,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_ORDER_INVOICE);
       });
 
-    // Route 13 — fetchOrderLabel
     builder
       .addCase(fetchOrderLabel.pending, (state) => {
         state.loading.orderLabel = true;
@@ -2118,10 +2040,9 @@ const pharmacyStoreSlice = createSlice({
       });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ▶ MEDICINE & INVENTORY (Routes 14–21)
+    // ▶ MEDICINE & INVENTORY
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Route 14 — fetchMedicines
     builder
       .addCase(fetchMedicines.pending, (state) => {
         state.loading.medicines = true;
@@ -2138,7 +2059,21 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_MEDICINES);
       });
 
-    // Route 15 — addStock
+    builder
+      .addCase(fetchMedicineInventoryDetail.pending, (state) => {
+        state.loading.medicineInventoryDetail = true;
+        state.errors.medicineInventoryDetail  = null;
+      })
+      .addCase(fetchMedicineInventoryDetail.fulfilled, (state, { payload }) => {
+        state.loading.medicineInventoryDetail = false;
+        state.medicineInventoryDetail         = payload;
+      })
+      .addCase(fetchMedicineInventoryDetail.rejected, (state, { payload }) => {
+        state.loading.medicineInventoryDetail = false;
+        state.errors.medicineInventoryDetail  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.FETCH_MEDICINE_INVENTORY);
+      });
+
     builder
       .addCase(addStock.pending, (state) => {
         state.loading.addStock = true;
@@ -2156,7 +2091,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.ADD_STOCK);
       });
 
-    // Route 16 — deductStock
     builder
       .addCase(deductStock.pending, (state) => {
         state.loading.deductStock = true;
@@ -2174,7 +2108,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.DEDUCT_STOCK);
       });
 
-    // Route 17 — fetchMedicineStock
     builder
       .addCase(fetchMedicineStock.pending, (state) => {
         state.loading.medicineStock = true;
@@ -2190,7 +2123,23 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_MEDICINE_STOCK);
       });
 
-    // Route 18 — fetchInventoryBatches
+    builder
+      .addCase(updateMedicineInventory.pending, (state) => {
+        state.loading.updateMedicineInventory = true;
+        state.errors.updateMedicineInventory  = null;
+        state.success.updateMedicineInventory = false;
+      })
+      .addCase(updateMedicineInventory.fulfilled, (state) => {
+        state.loading.updateMedicineInventory = false;
+        state.success.updateMedicineInventory = true;
+        toast.success('Inventory updated successfully');
+      })
+      .addCase(updateMedicineInventory.rejected, (state, { payload }) => {
+        state.loading.updateMedicineInventory = false;
+        state.errors.updateMedicineInventory  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.UPDATE_MEDICINE_INVENTORY);
+      });
+
     builder
       .addCase(fetchInventoryBatches.pending, (state) => {
         state.loading.inventoryBatches = true;
@@ -2207,7 +2156,23 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_BATCHES);
       });
 
-    // Route 19 — fetchExpiryAlerts
+    builder
+      .addCase(updateBatch.pending, (state) => {
+        state.loading.updateBatch = true;
+        state.errors.updateBatch  = null;
+        state.success.updateBatch = false;
+      })
+      .addCase(updateBatch.fulfilled, (state) => {
+        state.loading.updateBatch = false;
+        state.success.updateBatch = true;
+        toast.success('Batch updated successfully');
+      })
+      .addCase(updateBatch.rejected, (state, { payload }) => {
+        state.loading.updateBatch = false;
+        state.errors.updateBatch  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.UPDATE_BATCH);
+      });
+
     builder
       .addCase(fetchExpiryAlerts.pending, (state) => {
         state.loading.expiryAlerts = true;
@@ -2224,7 +2189,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_EXPIRY_ALERTS);
       });
 
-    // Route 20 — fetchLowStock
     builder
       .addCase(fetchLowStock.pending, (state) => {
         state.loading.lowStock = true;
@@ -2241,7 +2205,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_LOW_STOCK);
       });
 
-    // Route 21 — requestStock
     builder
       .addCase(requestStock.pending, (state) => {
         state.loading.requestStock = true;
@@ -2259,13 +2222,197 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.REQUEST_STOCK);
       });
 
+    builder
+      .addCase(fetchInventoryMovements.pending, (state) => {
+        state.loading.inventoryMovements = true;
+        state.errors.inventoryMovements  = null;
+      })
+      .addCase(fetchInventoryMovements.fulfilled, (state, { payload }) => {
+        state.loading.inventoryMovements = false;
+        state.inventoryMovements         = payload.movements  || [];
+        state.movementsPagination        = payload.pagination || initialState.movementsPagination;
+      })
+      .addCase(fetchInventoryMovements.rejected, (state, { payload }) => {
+        state.loading.inventoryMovements = false;
+        state.errors.inventoryMovements  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.FETCH_MOVEMENTS);
+      });
+
     // ─────────────────────────────────────────────────────────────────────────
-    // ▶ HSN CODE MANAGEMENT (Routes H1–H8)
+    // ▶ SUPPLIERS
+    // ─────────────────────────────────────────────────────────────────────────
+    builder
+      .addCase(fetchSuppliers.pending, (state) => {
+        state.loading.suppliers = true;
+        state.errors.suppliers  = null;
+      })
+      .addCase(fetchSuppliers.fulfilled, (state, { payload }) => {
+        state.loading.suppliers   = false;
+        state.suppliers           = payload.suppliers || [];
+        state.suppliersPagination = payload.pagination || initialState.suppliersPagination;
+      })
+      .addCase(fetchSuppliers.rejected, (state, { payload }) => {
+        state.loading.suppliers = false;
+        state.errors.suppliers  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.FETCH_SUPPLIERS);
+      });
+
+    builder
+      .addCase(fetchSupplier.pending, (state) => {
+        state.loading.supplierDetail = true;
+        state.errors.supplierDetail  = null;
+      })
+      .addCase(fetchSupplier.fulfilled, (state, { payload }) => {
+        state.loading.supplierDetail = false;
+        state.currentSupplier        = payload;
+      })
+      .addCase(fetchSupplier.rejected, (state, { payload }) => {
+        state.loading.supplierDetail = false;
+        state.errors.supplierDetail  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.FETCH_SUPPLIERS);
+      });
+
+    builder
+      .addCase(createSupplier.pending, (state) => {
+        state.loading.createSupplier = true;
+        state.errors.createSupplier  = null;
+        state.success.createSupplier = false;
+      })
+      .addCase(createSupplier.fulfilled, (state) => {
+        state.loading.createSupplier = false;
+        state.success.createSupplier = true;
+        toast.success('Supplier created successfully');
+      })
+      .addCase(createSupplier.rejected, (state, { payload }) => {
+        state.loading.createSupplier = false;
+        state.errors.createSupplier  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.CREATE_SUPPLIER);
+      });
+
+    builder
+      .addCase(updateSupplier.pending, (state) => {
+        state.loading.updateSupplier = true;
+        state.errors.updateSupplier  = null;
+        state.success.updateSupplier = false;
+      })
+      .addCase(updateSupplier.fulfilled, (state) => {
+        state.loading.updateSupplier = false;
+        state.success.updateSupplier = true;
+        toast.success('Supplier updated successfully');
+      })
+      .addCase(updateSupplier.rejected, (state, { payload }) => {
+        state.loading.updateSupplier = false;
+        state.errors.updateSupplier  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.UPDATE_SUPPLIER);
+      });
+
+    builder
+      .addCase(deactivateSupplier.pending, (state) => {
+        state.loading.deleteSupplier = true;
+        state.errors.deleteSupplier  = null;
+        state.success.deleteSupplier = false;
+      })
+      .addCase(deactivateSupplier.fulfilled, (state) => {
+        state.loading.deleteSupplier = false;
+        state.success.deleteSupplier = true;
+        toast.success('Supplier deactivated successfully');
+      })
+      .addCase(deactivateSupplier.rejected, (state, { payload }) => {
+        state.loading.deleteSupplier = false;
+        state.errors.deleteSupplier  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.DELETE_SUPPLIER);
+      });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ▶ PURCHASE ORDERS
+    // ─────────────────────────────────────────────────────────────────────────
+    builder
+      .addCase(fetchPurchaseOrders.pending, (state) => {
+        state.loading.purchaseOrders = true;
+        state.errors.purchaseOrders  = null;
+      })
+      .addCase(fetchPurchaseOrders.fulfilled, (state, { payload }) => {
+        state.loading.purchaseOrders   = false;
+        state.purchaseOrders           = payload.purchaseOrders || [];
+        state.purchaseOrdersPagination = payload.pagination || initialState.purchaseOrdersPagination;
+      })
+      .addCase(fetchPurchaseOrders.rejected, (state, { payload }) => {
+        state.loading.purchaseOrders = false;
+        state.errors.purchaseOrders  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.FETCH_PURCHASE_ORDERS);
+      });
+
+    builder
+      .addCase(fetchPurchaseOrder.pending, (state) => {
+        state.loading.purchaseOrderDetail = true;
+        state.errors.purchaseOrderDetail  = null;
+      })
+      .addCase(fetchPurchaseOrder.fulfilled, (state, { payload }) => {
+        state.loading.purchaseOrderDetail = false;
+        state.currentPurchaseOrder        = payload;
+      })
+      .addCase(fetchPurchaseOrder.rejected, (state, { payload }) => {
+        state.loading.purchaseOrderDetail = false;
+        state.errors.purchaseOrderDetail  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.FETCH_PURCHASE_ORDER);
+      });
+
+    builder
+      .addCase(createPurchaseOrder.pending, (state) => {
+        state.loading.createPurchaseOrder = true;
+        state.errors.createPurchaseOrder  = null;
+        state.success.createPurchaseOrder = false;
+      })
+      .addCase(createPurchaseOrder.fulfilled, (state) => {
+        state.loading.createPurchaseOrder = false;
+        state.success.createPurchaseOrder = true;
+        toast.success('Purchase order created successfully');
+      })
+      .addCase(createPurchaseOrder.rejected, (state, { payload }) => {
+        state.loading.createPurchaseOrder = false;
+        state.errors.createPurchaseOrder  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.CREATE_PURCHASE_ORDER);
+      });
+
+    builder
+      .addCase(updatePurchaseOrderStatus.pending, (state) => {
+        state.loading.updatePurchaseOrder = true;
+        state.errors.updatePurchaseOrder  = null;
+        state.success.updatePurchaseOrder = false;
+      })
+      .addCase(updatePurchaseOrderStatus.fulfilled, (state) => {
+        state.loading.updatePurchaseOrder = false;
+        state.success.updatePurchaseOrder = true;
+        toast.success('Purchase order status updated');
+      })
+      .addCase(updatePurchaseOrderStatus.rejected, (state, { payload }) => {
+        state.loading.updatePurchaseOrder = false;
+        state.errors.updatePurchaseOrder  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.UPDATE_PO_STATUS);
+      });
+
+    builder
+      .addCase(receivePurchaseOrderStock.pending, (state) => {
+        state.loading.receivePurchaseOrder = true;
+        state.errors.receivePurchaseOrder  = null;
+        state.success.receivePurchaseOrder = false;
+      })
+      .addCase(receivePurchaseOrderStock.fulfilled, (state, { payload }) => {
+        state.loading.receivePurchaseOrder = false;
+        state.success.receivePurchaseOrder = true;
+        state.poReceivingResult            = payload;
+        toast.success('Stock received for Purchase Order');
+      })
+      .addCase(receivePurchaseOrderStock.rejected, (state, { payload }) => {
+        state.loading.receivePurchaseOrder = false;
+        state.errors.receivePurchaseOrder  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.RECEIVE_PO_STOCK);
+      });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ▶ HSN CODE MANAGEMENT
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Route H1 — fetchHsnCodes
-    // FIX: payload IS the full response object { success, total, metadata, data: [] }
-    //      NOT payload.data. Unpack accordingly.
     builder
       .addCase(fetchHsnCodes.pending, (state) => {
         state.loading.hsnCodes = true;
@@ -2290,7 +2437,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_HSN_CODES);
       });
 
-    // Route H2 — fetchHsnStats
     builder
       .addCase(fetchHsnStats.pending, (state) => {
         state.loading.hsnStats = true;
@@ -2306,7 +2452,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_HSN_STATS);
       });
 
-    // Route H3 — hsnBulkDelete
     builder
       .addCase(hsnBulkDelete.pending, (state) => {
         state.loading.hsnBulkDelete = true;
@@ -2324,7 +2469,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.HSN_BULK_DELETE);
       });
 
-    // Route H4 — uploadHsnFile
     builder
       .addCase(uploadHsnFile.pending, (state) => {
         state.loading.hsnUpload = true;
@@ -2342,7 +2486,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.HSN_UPLOAD);
       });
 
-    // Route H5 — fetchHsnCode
     builder
       .addCase(fetchHsnCode.pending, (state) => {
         state.loading.hsnCode = true;
@@ -2358,7 +2501,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_HSN_CODE);
       });
 
-    // Route H6 — createHsnCode
     builder
       .addCase(createHsnCode.pending, (state) => {
         state.loading.hsnCreate = true;
@@ -2368,7 +2510,6 @@ const pharmacyStoreSlice = createSlice({
       .addCase(createHsnCode.fulfilled, (state, { payload }) => {
         state.loading.hsnCreate = false;
         state.success.hsnCreate = true;
-        // Prepend so it's immediately visible without a refetch
         state.hsnCodes.unshift(payload);
         state.hsnCodesTotal += 1;
         toast.success(`HSN code ${payload?.hsnCode} created`);
@@ -2379,7 +2520,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.CREATE_HSN_CODE);
       });
 
-    // Route H7 — updateHsnCode
     builder
       .addCase(updateHsnCode.pending, (state) => {
         state.loading.hsnUpdate = true;
@@ -2402,10 +2542,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.UPDATE_HSN_CODE);
       });
 
-    // Route H8 — deleteHsnCode
-    // FIX: payload is the code string. Router soft-deletes (isActive: false).
-    //      Optimistically mark as inactive in the list; do NOT splice it out
-    //      so the UI can still show it as inactive if isActive filter is 'all'.
     builder
       .addCase(deleteHsnCode.pending, (state) => {
         state.loading.hsnDelete = true;
@@ -2429,10 +2565,9 @@ const pharmacyStoreSlice = createSlice({
       });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ▶ FINANCIALS (Routes 22–27)
+    // ▶ FINANCIALS
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Route 22 — fetchDailyEarnings
     builder
       .addCase(fetchDailyEarnings.pending, (state) => {
         state.loading.dailyEarnings = true;
@@ -2448,7 +2583,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_DAILY_EARNINGS);
       });
 
-    // Route 23 — fetchMonthlyEarnings
     builder
       .addCase(fetchMonthlyEarnings.pending, (state) => {
         state.loading.monthlyEarnings = true;
@@ -2464,7 +2598,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_MONTHLY_EARNINGS);
       });
 
-    // Route 24 — fetchTotalEarnings
     builder
       .addCase(fetchTotalEarnings.pending, (state) => {
         state.loading.totalEarnings = true;
@@ -2480,7 +2613,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_TOTAL_EARNINGS);
       });
 
-    // Route 25 — fetchEarningsHistory
     builder
       .addCase(fetchEarningsHistory.pending, (state) => {
         state.loading.earningsHistory = true;
@@ -2498,7 +2630,21 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_EARNINGS_HISTORY);
       });
 
-    // Route 26 — fetchStoreInvoice
+    builder
+      .addCase(fetchCodPending.pending, (state) => {
+        state.loading.codPending = true;
+        state.errors.codPending  = null;
+      })
+      .addCase(fetchCodPending.fulfilled, (state, { payload }) => {
+        state.loading.codPending = false;
+        state.codPending         = payload;
+      })
+      .addCase(fetchCodPending.rejected, (state, { payload }) => {
+        state.loading.codPending = false;
+        state.errors.codPending  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.FETCH_COD_PENDING);
+      });
+
     builder
       .addCase(fetchStoreInvoice.pending, (state) => {
         state.loading.storeInvoice = true;
@@ -2514,7 +2660,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_STORE_INVOICE);
       });
 
-    // Route 27 — sendStoreInvoice
     builder
       .addCase(sendStoreInvoice.pending, (state) => {
         state.loading.sendStoreInvoice = true;
@@ -2533,10 +2678,9 @@ const pharmacyStoreSlice = createSlice({
       });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ▶ PAYMENT ACCOUNTS (Routes 28–33)
+    // ▶ PAYMENT ACCOUNTS
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Route 28 — fetchPaymentAccount
     builder
       .addCase(fetchPaymentAccount.pending, (state) => {
         state.loading.paymentAccount = true;
@@ -2552,7 +2696,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_PAYMENT_ACCOUNT);
       });
 
-    // Route 29 — addBankAccount
     builder
       .addCase(addBankAccount.pending, (state) => {
         state.loading.bankAccount    = true;
@@ -2571,7 +2714,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.ADD_BANK_ACCOUNT);
       });
 
-    // Route 30 — updateBankAccount
     builder
       .addCase(updateBankAccount.pending, (state) => {
         state.loading.bankAccount       = true;
@@ -2590,7 +2732,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.UPDATE_BANK_ACCOUNT);
       });
 
-    // Route 31 — deleteBankAccount
     builder
       .addCase(deleteBankAccount.pending, (state) => {
         state.loading.bankAccount       = true;
@@ -2612,7 +2753,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.DELETE_BANK_ACCOUNT);
       });
 
-    // Route 32 — addUpiHandle
     builder
       .addCase(addUpiHandle.pending, (state) => {
         state.loading.upiHandle    = true;
@@ -2631,9 +2771,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.ADD_UPI);
       });
 
-    // Route 33 — deleteUpiHandle
-    // FIX: The router param is the subdocument _id (MongoDB ObjectId), NOT the
-    //      UPI string. The reducer must filter by _id, not by upiId string.
     builder
       .addCase(deleteUpiHandle.pending, (state) => {
         state.loading.upiHandle       = true;
@@ -2656,10 +2793,9 @@ const pharmacyStoreSlice = createSlice({
       });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ▶ SETTLEMENTS (Routes 34–36)
+    // ▶ SETTLEMENTS
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Route 34 — fetchSettlements
     builder
       .addCase(fetchSettlements.pending, (state) => {
         state.loading.settlements = true;
@@ -2675,7 +2811,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_SETTLEMENTS);
       });
 
-    // Route 35 — requestSettlement
     builder
       .addCase(requestSettlement.pending, (state) => {
         state.loading.settlementRequest = true;
@@ -2685,7 +2820,6 @@ const pharmacyStoreSlice = createSlice({
       .addCase(requestSettlement.fulfilled, (state, { payload }) => {
         state.loading.settlementRequest = false;
         state.success.settlementRequest = true;
-        // Sync pendingBalance / totalSettled into the settlements summary
         if (state.settlements) {
           state.settlements.pendingBalance = payload.pendingBalance;
           state.settlements.totalSettled   = payload.totalSettled;
@@ -2698,7 +2832,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.REQUEST_SETTLEMENT);
       });
 
-    // Route 36 — fetchSettlementHistory
     builder
       .addCase(fetchSettlementHistory.pending, (state) => {
         state.loading.settlementHistory = true;
@@ -2716,10 +2849,9 @@ const pharmacyStoreSlice = createSlice({
       });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ▶ ANALYTICS (Routes 37–40)
+    // ▶ ANALYTICS
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Route 37 — fetchAnalyticsOverview
     builder
       .addCase(fetchAnalyticsOverview.pending, (state) => {
         state.loading.analyticsOverview = true;
@@ -2735,7 +2867,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_ANALYTICS_OVERVIEW);
       });
 
-    // Route 38 — fetchRevenueAnalytics
     builder
       .addCase(fetchRevenueAnalytics.pending, (state) => {
         state.loading.analyticsRevenue = true;
@@ -2751,7 +2882,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_ANALYTICS_REVENUE);
       });
 
-    // Route 39 — fetchReturnAnalytics
     builder
       .addCase(fetchReturnAnalytics.pending, (state) => {
         state.loading.analyticsReturns = true;
@@ -2767,7 +2897,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_ANALYTICS_RETURNS);
       });
 
-    // Route 40 — fetchTopMedicines
     builder
       .addCase(fetchTopMedicines.pending, (state) => {
         state.loading.topMedicines = true;
@@ -2783,11 +2912,25 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_TOP_MEDICINES);
       });
 
+    builder
+      .addCase(fetchInventoryValue.pending, (state) => {
+        state.loading.inventoryValue = true;
+        state.errors.inventoryValue  = null;
+      })
+      .addCase(fetchInventoryValue.fulfilled, (state, { payload }) => {
+        state.loading.inventoryValue = false;
+        state.inventoryValue         = payload;
+      })
+      .addCase(fetchInventoryValue.rejected, (state, { payload }) => {
+        state.loading.inventoryValue = false;
+        state.errors.inventoryValue  = payload;
+        toast.error(payload?.message || ERROR_MESSAGES.FETCH_INVENTORY_VALUE);
+      });
+
     // ─────────────────────────────────────────────────────────────────────────
-    // ▶ PROFILE & STORE (Routes 41–48)
+    // ▶ PROFILE & STORE
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Route 41 — fetchProfile
     builder
       .addCase(fetchProfile.pending, (state) => {
         state.loading.profile = true;
@@ -2803,7 +2946,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_PROFILE);
       });
 
-    // Route 42 — updateUserProfile
     builder
       .addCase(updateUserProfile.pending, (state) => {
         state.loading.profile       = true;
@@ -2822,7 +2964,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.UPDATE_PROFILE);
       });
 
-    // Route 43 — changePassword
     builder
       .addCase(changePassword.pending, (state) => {
         state.loading.profile        = true;
@@ -2840,7 +2981,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.CHANGE_PASSWORD);
       });
 
-    // Route 44 — fetchPharmacyProfile
     builder
       .addCase(fetchPharmacyProfile.pending, (state) => {
         state.loading.pharmacyProfile = true;
@@ -2856,7 +2996,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_PHARMACY_PROFILE);
       });
 
-    // Route 45 — updatePharmacyProfile
     builder
       .addCase(updatePharmacyProfile.pending, (state) => {
         state.loading.pharmacyProfile       = true;
@@ -2875,7 +3014,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.UPDATE_PHARMACY_PROFILE);
       });
 
-    // Route 46 — fetchStore
     builder
       .addCase(fetchStore.pending, (state) => {
         state.loading.store = true;
@@ -2891,7 +3029,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_STORE);
       });
 
-    // Route 47 — updateStore
     builder
       .addCase(updateStore.pending, (state) => {
         state.loading.store       = true;
@@ -2910,7 +3047,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.UPDATE_STORE);
       });
 
-    // Route 48 — fetchInventorySummary
     builder
       .addCase(fetchInventorySummary.pending, (state) => {
         state.loading.inventorySummary = true;
@@ -2927,10 +3063,9 @@ const pharmacyStoreSlice = createSlice({
       });
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ▶ AUDIT: SESSIONS & DEVICES (Routes 49–54)
+    // ▶ AUDIT: SESSIONS & DEVICES
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Route 49 — fetchSessions
     builder
       .addCase(fetchSessions.pending, (state) => {
         state.loading.sessions = true;
@@ -2946,7 +3081,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_SESSIONS);
       });
 
-    // Route 50 — revokeSession
     builder
       .addCase(revokeSession.pending, (state) => {
         state.loading.sessions      = true;
@@ -2965,7 +3099,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.REVOKE_SESSION);
       });
 
-    // Route 51 — logoutAllDevices
     builder
       .addCase(logoutAllDevices.pending, (state) => {
         state.loading.sessions  = true;
@@ -2977,8 +3110,6 @@ const pharmacyStoreSlice = createSlice({
         state.loading.devices   = false;
         state.success.logoutAll = true;
         state.sessions          = [];
-        // NOTE: Router only clears auditSessions, not deviceTokens.
-        //       We do NOT clear state.devices here to stay accurate.
         toast.success('Logged out from all devices');
       })
       .addCase(logoutAllDevices.rejected, (state, { payload }) => {
@@ -2987,7 +3118,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.LOGOUT_ALL);
       });
 
-    // Route 52 — fetchDevices
     builder
       .addCase(fetchDevices.pending, (state) => {
         state.loading.devices = true;
@@ -3003,7 +3133,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.FETCH_DEVICES);
       });
 
-    // Route 53 — removeDevice
     builder
       .addCase(removeDevice.pending, (state) => {
         state.loading.devices      = true;
@@ -3022,7 +3151,6 @@ const pharmacyStoreSlice = createSlice({
         toast.error(payload?.message || ERROR_MESSAGES.REMOVE_DEVICE);
       });
 
-    // Route 54 — removeAllDevices
     builder
       .addCase(removeAllDevices.pending, (state) => {
         state.loading.devices           = true;
@@ -3059,6 +3187,8 @@ export const {
   clearStoreInvoice,
   clearCurrentHsnCode,
   clearExportedOrder,
+  clearCurrentSupplier,
+  clearCurrentPurchaseOrder,
 } = pharmacyStoreSlice.actions;
 
 // ═══════════════════════════════════════════════════════════════════════════════

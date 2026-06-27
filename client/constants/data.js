@@ -68,8 +68,6 @@ export const SUPER_ADMIN_DASHBOARD_LINKS = [
       { name: "Audience Analytics", href: "/super-admin/users/analytics", icon: <AreaChart size={15} />  },
       { name: "Access Control",     href: "/super-admin/permissions",     icon: <ShieldAlert size={15} />},
       { name: "Staff Directory",    href: "/super-admin/employees",       icon: <Contact2 size={15} />   },
-      { name: "Internal Comms",     href: "/super-admin/chats",           icon: <MessageSquare size={15} />},
-      { name: "Video Consults",     href: "/super-admin/meetings",        icon: <Video size={15} />      },
     ],
   },
 

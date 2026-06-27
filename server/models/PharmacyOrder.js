@@ -1,3 +1,18 @@
+/**
+ * PharmacyOrder.js  (UPDATED)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Changes from original:
+ *
+ *  1. cancellation.refundStatus  — added 'Failed' enum value
+ *  2. cancellation.refundId      — stores Razorpay refund ID (rfnd_xxx)
+ *  3. cancellation.refundMethod  — kept, now auto-set by refundService
+ *  4. cancellation.selectedRefundMethod — kept, customer sets at return time
+ *  5. Pre-save hook: when returnDecision flips to 'Accepted', auto-calls
+ *     initiateRefund() in background (non-blocking, logs errors to order).
+ *  6. delivery.status gets auto-set to 'Return_Accepted' on returnDecision=Accepted
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
 import mongoose from 'mongoose';
 
 const { Schema } = mongoose;
@@ -130,16 +145,18 @@ const pharmacyOrderSchema = new Schema(
     },
 
     // ── BILLING ───────────────────────────────────────────────────────────────
+    // IMPORTANT: totalPayable = subTotal + gst + delivery + platform - discount - wallet
+    // discountAmount and walletAmountUsed are stored here for refund computation.
 
     billing: {
       subTotal:         { type: Number, required: true, min: 0 },
-      gstAmount:        { type: Number, default: 0, min: 0 },
-      deliveryCharges:  { type: Number, default: 0, min: 0 },
-      platformFee:      { type: Number, default: 0, min: 0 },
-      discountAmount:   { type: Number, default: 0, min: 0 },
-      walletAmountUsed: { type: Number, default: 0, min: 0 },
+      gstAmount:        { type: Number, default: 0,    min: 0 },
+      deliveryCharges:  { type: Number, default: 0,    min: 0 },
+      platformFee:      { type: Number, default: 0,    min: 0 },
+      discountAmount:   { type: Number, default: 0,    min: 0 },  // coupon/promo deducted (customer never paid this)
+      walletAmountUsed: { type: Number, default: 0,    min: 0 },  // wallet/coins used at checkout
       promoCode:        { type: String, trim: true },
-      totalPayable:     { type: Number, required: true, min: 0 },
+      totalPayable:     { type: Number, required: true, min: 0 }, // actual cash collected from customer
     },
 
     // ── DELIVERY ──────────────────────────────────────────────────────────────
@@ -198,7 +215,6 @@ const pharmacyOrderSchema = new Schema(
     },
 
     // ── DELIVERY OTP (EMAIL-BASED) ─────────────────────────────────────────────
-    // OTP sent to customer email for doorstep delivery confirmation
 
     deliveryOtp: {
       code:      { type: String, select: false },
@@ -220,13 +236,12 @@ const pharmacyOrderSchema = new Schema(
       returnRequestedAt: { type: Date },
       returnRequestedBy: { type: Schema.Types.ObjectId, ref: 'User' },
 
-      // ── NEW: Return evidence media ─────────────────────────────────────────
-      // Customer must upload images/videos of medicines before return is accepted
+      // Customer must upload images/videos before return is accepted
       returnEvidence: [
         {
-          mediaType: { type: String, enum: ['image', 'video'], required: true },
-          url:       { type: String, required: true },
-          uploadedAt:{ type: Date, default: Date.now },
+          mediaType:  { type: String, enum: ['image', 'video'], required: true },
+          url:        { type: String, required: true },
+          uploadedAt: { type: Date, default: Date.now },
         },
       ],
 
@@ -241,19 +256,28 @@ const pharmacyOrderSchema = new Schema(
       pickupVerifiedAt:     { type: Date },
 
       // ── REFUND ────────────────────────────────────────────────────────────
+
+      /**
+       * refundMethod: what channel was used to send money back.
+       * Set automatically by refundService based on selectedRefundMethod.
+       */
       refundMethod: {
         type:    String,
         enum:    ['Wallet', 'Original_Source', 'Bank_Transfer', 'None'],
         default: 'None',
       },
 
-      // Customer's chosen refund destination (set at return-request time)
+      /**
+       * selectedRefundMethod: customer's choice at return-request time.
+       * COD orders: only 'Wallet' or 'Bank_Transfer' or 'Custom_Bank' allowed.
+       * Online orders: all options available.
+       */
       selectedRefundMethod: {
         type: String,
         enum: ['Wallet', 'Online', 'Bank_Transfer', 'Custom_Bank'],
       },
 
-      // Custom bank details provided by customer at return time
+      // Custom bank details provided by customer at return time (for Custom_Bank)
       bankDetails: {
         accountHolderName: { type: String },
         accountNumber:     { type: String },
@@ -262,15 +286,21 @@ const pharmacyOrderSchema = new Schema(
         branchName:        { type: String },
       },
 
+      // Razorpay refund ID (rfnd_xxx) — set by refundService after successful refund
       refundId: { type: String },
 
+      /**
+       * refundStatus lifecycle:
+       *   None → Requested (on return accepted) → In-Progress (refund initiated)
+       *   → Processed (success) | Failed (error, retryable)
+       */
       refundStatus: {
         type:    String,
         enum:    ['None', 'Requested', 'In-Progress', 'Processed', 'Failed'],
         default: 'None',
       },
 
-      refundAmount:      { type: Number, default: 0, min: 0 },
+      refundAmount:      { type: Number, default: 0, min: 0 }, // cash portion refunded
       refundInitiatedAt: { type: Date },
       refundedAt:        { type: Date },
       adminRefundNote:   { type: String },
@@ -321,7 +351,7 @@ pharmacyOrderSchema.virtual('isRefundPending').get(function () {
 
 pharmacyOrderSchema.virtual('canBeRefunded').get(function () {
   return (
-    this.cancellation?.refundStatus === 'Requested' &&
+    ['Requested', 'Failed'].includes(this.cancellation?.refundStatus) &&
     this.payment?.status !== 'Refunded'
   );
 });
@@ -339,7 +369,7 @@ pharmacyOrderSchema.virtual('canRequestReturn').get(function () {
 
 pharmacyOrderSchema.pre('save', async function () {
 
-  // 1. Append to statusHistory on every delivery status change
+  // ── A. Delivery status history ──────────────────────────────────────────────
   if (this.isModified('delivery.status')) {
     if (!Array.isArray(this.delivery.statusHistory)) {
       this.delivery.statusHistory = [];
@@ -369,7 +399,7 @@ pharmacyOrderSchema.pre('save', async function () {
     }
   }
 
-  // 2. Sync prescription.verificationStatus
+  // ── B. Prescription sync ────────────────────────────────────────────────────
   if (this.isModified('prescription.imageUrl') && this.prescription.imageUrl) {
     this.prescription.verificationStatus = 'Pending';
     this.prescription.uploadedAt         = new Date();
@@ -387,7 +417,7 @@ pharmacyOrderSchema.pre('save', async function () {
     }
   }
 
-  // 3. Cap payment transactionLog at last 50 entries
+  // ── C. Cap payment transactionLog ───────────────────────────────────────────
   if (
     this.isModified('payment.transactionLog') &&
     Array.isArray(this.payment.transactionLog) &&
@@ -396,7 +426,7 @@ pharmacyOrderSchema.pre('save', async function () {
     this.payment.transactionLog = this.payment.transactionLog.slice(-50);
   }
 
-  // 4. Auto-stamp refundInitiatedAt on first refund trigger
+  // ── D. Auto-stamp refundInitiatedAt ────────────────────────────────────────
   if (
     this.isModified('cancellation.refundStatus') &&
     this.cancellation.refundStatus === 'Requested' &&
@@ -404,19 +434,91 @@ pharmacyOrderSchema.pre('save', async function () {
   ) {
     this.cancellation.refundInitiatedAt = new Date();
   }
+
+  // ── E. AUTO-REFUND: trigger when returnDecision flips to 'Accepted' ─────────
+  //
+  // This is the key integration point.
+  // When admin sets cancellation.returnDecision = 'Accepted':
+  //   1. Auto-advance delivery status to Return_Accepted
+  //   2. Stamp returnDecisionAt
+  //   3. Set refundStatus = 'Requested' (initiateRefund() will advance it)
+  //   4. Fire initiateRefund() AFTER save completes (post-save, non-blocking)
+  //
+  // We use a flag (this.$locals._triggerRefund) to pass intent to post-save.
+  // The actual Razorpay call happens in post-save to avoid blocking this save.
+
+  if (
+    this.isModified('cancellation.returnDecision') &&
+    this.cancellation.returnDecision === 'Accepted' &&
+    !this.isNew
+  ) {
+    // Stamp decision timestamp
+    if (!this.cancellation.returnDecisionAt) {
+      this.cancellation.returnDecisionAt = new Date();
+    }
+
+    // Advance delivery status
+    if (this.delivery.status === 'Return_Requested') {
+      this.delivery.status = 'Return_Accepted';
+    }
+
+    // Prime refund status (only if not already in progress)
+    if (this.cancellation.refundStatus === 'None' || this.cancellation.refundStatus === 'Failed') {
+      this.cancellation.refundStatus      = 'Requested';
+      this.cancellation.refundInitiatedAt = new Date();
+    }
+
+    // Signal post-save hook to fire refund
+    this.$locals._triggerRefund = true;
+  }
+
+  // ── F. Return Rejected: update delivery status ──────────────────────────────
+  if (
+    this.isModified('cancellation.returnDecision') &&
+    this.cancellation.returnDecision === 'Rejected' &&
+    !this.isNew
+  ) {
+    if (!this.cancellation.returnDecisionAt) {
+      this.cancellation.returnDecisionAt = new Date();
+    }
+    if (this.delivery.status === 'Return_Requested') {
+      this.delivery.status = 'Return_Rejected';
+    }
+  }
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// §6  INDEXES
+// §6  POST-SAVE: FIRE REFUND (non-blocking)
 // ══════════════════════════════════════════════════════════════════════════════
 
-// pharmacyOrderSchema.index({ orderId: 1 }, { unique: true });
+pharmacyOrderSchema.post('save', function (doc) {
+  if (!doc.$locals?._triggerRefund) return;
+
+  // Lazy import to avoid circular dependency (refundService imports PharmacyOrder)
+  // Using dynamic import so this file can load without refundService being ready.
+  import('./refundService.js')
+    .then(({ initiateRefund }) => initiateRefund(doc._id.toString()))
+    .then((result) => {
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[PharmacyOrder] Auto-refund triggered:', result);
+      }
+    })
+    .catch((err) => {
+      // Refund failed — already stamped as 'Failed' in refundService.
+      // Alert channel (Slack/email) should be wired here in production.
+      console.error('[PharmacyOrder] Auto-refund FAILED for order', doc.orderId, err.message);
+      // TODO: send alert to finance team via your notification service
+    });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// §7  INDEXES
+// ══════════════════════════════════════════════════════════════════════════════
+
 pharmacyOrderSchema.index({ customer: 1, createdAt: -1 });
 pharmacyOrderSchema.index({ store: 1,    createdAt: -1 });
 pharmacyOrderSchema.index({ store: 1, 'delivery.status': 1, createdAt: -1 });
 pharmacyOrderSchema.index({ store: 1, isArchived: 1,        createdAt: -1 });
-// pharmacyOrderSchema.index({ 'payment.razorpayOrderId':   1 }, { sparse: true });
-// pharmacyOrderSchema.index({ 'payment.razorpayPaymentId': 1 }, { sparse: true });
 pharmacyOrderSchema.index({ store: 1, 'payment.status': 1 });
 pharmacyOrderSchema.index({ store: 1, 'cancellation.refundStatus': 1 });
 pharmacyOrderSchema.index({ store: 1, 'cancellation.isReturnRequested': 1 });
@@ -425,7 +527,7 @@ pharmacyOrderSchema.index({ store: 1, 'delivery.status': 1, 'delivery.deliveredA
 pharmacyOrderSchema.index({ orderId: 'text' });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// §7  MODEL EXPORT
+// §8  MODEL EXPORT
 // ══════════════════════════════════════════════════════════════════════════════
 
 const PharmacyOrder = mongoose.model('PharmacyOrder', pharmacyOrderSchema);

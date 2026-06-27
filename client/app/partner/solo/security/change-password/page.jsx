@@ -22,6 +22,7 @@ import {
   selectLoading,
   selectError,
 } from "@/store/slices/soloDriverSlice";
+import BackButton from "../../../../../components/BackButton";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -190,6 +191,9 @@ export default function SecurityPage() {
 
   return (
     <div className="space-y-6 pb-8">
+
+            <BackButton className=' my-2 rounded-md px-3' />
+      
 
       {/* ── Page Header ── */}
       <motion.div variants={fadeUp} initial="hidden" animate="visible">

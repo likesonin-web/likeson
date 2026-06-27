@@ -14,10 +14,12 @@ import {
   Store, User, ArrowUpRight, Loader2, X,
   ReceiptText, MapPin, Phone, Mail, Tag, Navigation
 } from 'lucide-react';
+
+// CORRECTED IMPORT: Using processPharmacyRefund instead of processOrderRefund
 import {
-  fetchPharmacyOrders, processOrderRefund,
+  fetchPharmacyOrders, processPharmacyRefund,
   selectPharmacyOrders, selectRefundState
-} from '@/store/slices/superadminSlice';
+} from '@/store/slices/superadminSlice'; // Adjust the import path if necessary based on your file structure
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const DELIVERY_STATUSES = ['Placed', 'Confirmed', 'Processing', 'Out-for-Delivery', 'Delivered', 'Cancelled', 'Returned'];
@@ -139,14 +141,12 @@ const StatCard = memo(({ title, value, icon: Icon, trend, color }) => (
 ));
 StatCard.displayName = 'StatCard';
 
-// Updated: Reduced font size and padding for DeliveryBadge
 const DeliveryBadge = memo(({ status }) => {
   const { cls, icon: Icon } = STATUS_CFG[status] ?? { cls: 'badge-info', icon: Clock };
   return <span className={`badge ${cls} gap-1 font-semibold text-[9px] px-2 py-1 h-auto min-h-0`}><Icon size={10} />{status}</span>;
 });
 DeliveryBadge.displayName = 'DeliveryBadge';
 
-// Updated: Reduced font size and padding for PaymentBadge
 const PaymentBadge = memo(({ status }) => (
   <span className={`badge ${PAYMENT_CFG[status] ?? 'badge-info'} font-semibold text-[9px] px-2 py-1 h-auto min-h-0`}>{status}</span>
 ));
@@ -200,7 +200,6 @@ const OrderDrawer = memo(({ order, onClose }) => {
           <div className="flex gap-2 flex-wrap items-center">
             <DeliveryBadge status={order.delivery?.status} />
             <PaymentBadge status={order.payment?.status} />
-            {/* Updated: Reduced font size for Payment Method Tag */}
             <span className="badge badge-outline border-base-300 font-semibold text-[9px] px-2 py-1 h-auto min-h-0 bg-base-200">{order.payment?.method}</span>
           </div>
 
@@ -213,7 +212,6 @@ const OrderDrawer = memo(({ order, onClose }) => {
               </div>
               <div>
                 <p className="font-bold text-base-content text-xs">{order.store?.storeName ?? '—'}</p>
-                {/* Updated: Reduced font size for Store Status Tag */}
                 <span className="badge badge-success badge-outline text-[9px] px-1.5 py-0.5 h-auto min-h-0 mt-1">{order.store?.status ?? 'Unknown'}</span>
               </div>
             </div>
@@ -320,7 +318,10 @@ const RefundModal = memo(({ order, onClose }) => {
 
   const handleSubmit = useCallback(async () => {
     if (!form.amount || !form.reason) return;
-    await dispatch(processOrderRefund({ orderId: order.orderId, refundData: form }));
+    
+    // CORRECTED DISPATCH: Using processPharmacyRefund from the slice
+    await dispatch(processPharmacyRefund({ orderId: order.orderId, refundData: form }));
+    
     onClose();
   }, [dispatch, form, order, onClose]);
 
@@ -597,7 +598,6 @@ export default function PharmacyOrdersPage() {
                         </div>
                       </td>
                       <td className="py-4 px-5">
-                        {/* Updated: Reduced font size for Items Count Tag */}
                         <span className="badge badge-outline border-base-300 text-[10px] px-2 py-1 h-auto min-h-0 font-semibold">{order.items?.length ?? 0}</span>
                       </td>
                       <td className="py-4 px-5 font-black text-base-content text-xs">

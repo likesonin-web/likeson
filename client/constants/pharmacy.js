@@ -39,7 +39,6 @@ export const PHARMACY_DASHBOARD_LINKS = [
     icon: <ShoppingCart />,
     links: [
       { name: "All Orders",              href: "/pharmacy-store/orders",                         icon: <ClipboardList size={18} />      },
-                 
     ],
   },
 
@@ -60,22 +59,27 @@ export const PHARMACY_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── C. HSN Code Management ───────────────────────────────────────────────
+  // ── C. Medicines Management ──────────────────────────────────────────────
+  {
+    title: "Medicines Management",
+    icon: <Pill />,
+    links: [
+      { name: "Management",   href: "/pharmacy-store/medicines-management",      icon: <ClipboardList size={18} /> },
+      { name: "New Medicine", href: "/pharmacy-store/medicines-management/new",  icon: <Plus size={18} />          },
+    ],
+  },
+
+  // ── D. HSN Code Management ───────────────────────────────────────────────
   // Routes H1–H8 | GST-compliant HSN catalogue with bulk upload support.
   {
     title: "HSN Code Management",
     icon: <Hash />,
     links: [
       { name: "All HSN Codes", href: "/pharmacy-store/hsn",             icon: <ScrollText size={18} /> },
-      { name: "HSN Stats",     href: "/pharmacy-store/hsn/stats",       icon: <BarChart3 size={18} />  },
-      { name: "Add HSN Code",  href: "/pharmacy-store/hsn/create",      icon: <Plus size={18} />       },
-      { name: "Bulk Upload",   href: "/pharmacy-store/hsn/upload",      icon: <Upload size={18} />     },
-      { name: "Edit HSN Code", href: "/pharmacy-store/hsn/edit",        icon: <PenLine size={18} />    },
-      { name: "Bulk Delete",   href: "/pharmacy-store/hsn/bulk-delete", icon: <Trash2 size={18} />     },
     ],
   },
 
-  // ── D. Financial Reports & Earnings ─────────────────────────────────────
+  // ── E. Financial Reports & Earnings ─────────────────────────────────────
   // Routes 22–27 | Daily, monthly, and lifetime revenue plus store invoicing.
   {
     title: "Financial Reports",
@@ -90,7 +94,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── E. Settlements & Payment Accounts ───────────────────────────────────
+  // ── F. Settlements & Payment Accounts ───────────────────────────────────
   // Routes 28–36 | Bank accounts, UPI handles, and payout requests.
   {
     title: "Settlements & Payments",
@@ -105,7 +109,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── F. Analytics ─────────────────────────────────────────────────────────
+  // ── G. Analytics ─────────────────────────────────────────────────────────
   // Routes 37–40 | Store performance: revenue, returns, and top medicines.
   {
     title: "Analytics",
@@ -118,7 +122,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── G. Profile & Store ───────────────────────────────────────────────────
+  // ── H. Profile & Store ───────────────────────────────────────────────────
   // Routes 41–48 | Personal profile, pharmacy-store credentials, and store config.
   {
     title: "Profile & Store",
@@ -133,7 +137,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
     ],
   },
 
-  // ── H. Sessions & Devices ───────────────────────────────────────────────
+  // ── I. Sessions & Devices ───────────────────────────────────────────────
   // Routes 49–54 | Active login sessions and registered device management.
   {
     title: "Sessions & Devices",

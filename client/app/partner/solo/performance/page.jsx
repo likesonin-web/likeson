@@ -23,6 +23,7 @@ import {
   Zap, Award, Clock, Car, AlertTriangle, CheckCircle2,
   XCircle, Wallet, MapPin, Activity, ChevronRight,
   BarChart2, Target, Flame, RefreshCw, BadgeCheck, Coins,
+  ArrowLeft,
 } from 'lucide-react';
 
 import {
@@ -43,6 +44,7 @@ import {
   selectLoading,
   selectError,
 } from '@/store/slices/soloDriverSlice';
+import BackButton from '../../../../components/BackButton';
 
 // ─── Design tokens (mirror global.css solodriverpartner theme) ────────────────
 const T = {
@@ -321,6 +323,10 @@ export default function PerformancePage() {
             backgroundSize: '32px 32px',
           }}
         />
+
+
+               <BackButton className=' my-2 rounded-md px-3' />
+         
 
         <div className="container-custom py-8 md:py-10">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">

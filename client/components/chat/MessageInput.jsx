@@ -1,456 +1,279 @@
 'use client';
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  Send, Paperclip, Smile, Mic, Image as ImageIcon,
-  FileText, X, StopCircle, Loader2,
+  Send, Paperclip, X, Pencil, Mic,
+  Film, Music, FileText, ImageIcon,
 } from 'lucide-react';
-import { useChat, useConversationUploadProgress } from '@/hooks/useChat';
-import { EmojiPicker } from './ChatWidgets';
-import { useDispatch } from 'react-redux';
-import { socketNewMessage } from '@/store/slices/chatSlice';
 
-export default function MessageInput({ conversation, replyTo, onCancelReply, currentUser }) {
-  const dispatch = useDispatch();
-  const { sendMessage, sendMedia, sendTyping } = useChat();
-  const progress = useConversationUploadProgress(conversation._id);
+const ACCEPTED = {
+  image: 'image/jpeg,image/png,image/webp,image/gif',
+  video: 'video/mp4,video/quicktime,video/webm',
+  audio: 'audio/mpeg,audio/ogg,audio/wav,audio/webm,audio/mp4',
+  file:  'application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
 
-  const [text, setText]             = useState('');
-  const [emojiOpen, setEmojiOpen]   = useState(false);
-  const [attachOpen, setAttachOpen] = useState(false);
-  const [recording, setRecording]   = useState(false);
-  const [recDuration, setRecDuration] = useState(0);
-  const [sending, setSending]       = useState(false);
-  const [uploading, setUploading]   = useState(false);
-  const [emojiPos, setEmojiPos]     = useState({ bottom: 0, left: 0 });
+export default function MessageInput({
+  disabled, disabledReason, replyTo, editingMessage, uploadProgress,
+  onSend, onSendMedia, onTyping, onCancelReply, onCancelEdit,
+}) {
+  const [text, setText] = useState('');
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
 
-  const inputRef       = useRef(null);
-  const fileRef        = useRef(null);
-  const emojiWrapRef   = useRef(null);
-  const typingTimer    = useRef(null);
-  const mediaRecorder  = useRef(null);
-  const audioChunks    = useRef([]);
-  const recTimer       = useRef(null);
-  const streamRef      = useRef(null);
+  const fileInputRef    = useRef(null);
+  const textareaRef     = useRef(null);
+  const attachMenuRef   = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef  = useRef([]);
+  const recordTimerRef  = useRef(null);
 
-  // Auto-focus on convo change
+  // BUG FIX #1 – restore edit text when editingMessage changes
   useEffect(() => {
-    inputRef.current?.focus();
-    setText('');
-    setEmojiOpen(false);
-  }, [conversation._id]);
+    if (editingMessage) setText(editingMessage.text || '');
+    else setText('');
+  }, [editingMessage?._id]); // key on _id so changing conversations clears it
 
-  // Close emoji on outside click
+  // Auto-resize textarea (max ~5 lines)
   useEffect(() => {
-    if (!emojiOpen) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
+  }, [text]);
+
+  // Close attach menu on outside click
+  useEffect(() => {
     const handler = (e) => {
-      if (emojiWrapRef.current && !emojiWrapRef.current.contains(e.target)) {
-        setEmojiOpen(false);
+      if (attachMenuRef.current && !attachMenuRef.current.contains(e.target)) {
+        setAttachMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [emojiOpen]);
+  }, []);
 
-  const handleTyping = useCallback((val) => {
-    setText(val);
-    sendTyping(conversation._id, true);
-    clearTimeout(typingTimer.current);
-    typingTimer.current = setTimeout(() => sendTyping(conversation._id, false), 2500);
-  }, [sendTyping, conversation._id]);
-
-  const handleSend = useCallback(async () => {
+  const submit = useCallback(() => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
-    setSending(true);
+    if (!trimmed) return;
+    onSend(trimmed);
     setText('');
-    // Reset textarea height
-    if (inputRef.current) {
-      inputRef.current.style.height = 'auto';
-    }
-    setEmojiOpen(false);
-    sendTyping(conversation._id, false);
-    try {
-      await sendMessage(conversation._id, {
-        type: 'text',
-        text: trimmed,
-        replyTo: replyTo?._id,
-      });
-      onCancelReply?.();
-    } catch (err) {
-      console.error('Send failed', err);
-      setText(trimmed); // restore on fail
-    } finally {
-      setSending(false);
-      inputRef.current?.focus();
-    }
-  }, [text, sending, conversation._id, replyTo, sendMessage, sendTyping, onCancelReply]);
+    // reset height
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+  }, [text, onSend]);
 
-  const handleKey = (e) => {
+  const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      submit();
     }
   };
 
-  // BUG3 FIX: Optimistic media message — show placeholder immediately, replace on server response
-  const handleFileSelect = async (e) => {
+  const openFilePicker = (accept) => {
+    if (fileInputRef.current) {
+      fileInputRef.current.accept = accept;
+      fileInputRef.current.click();
+    }
+    setAttachMenuOpen(false);
+  };
+
+  const handleFile = (e) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    setAttachOpen(false);
+    if (file) onSendMedia(file);
     e.target.value = '';
+  };
 
-    // Build optimistic message
-    const localUrl = URL.createObjectURL(file);
-    const mimeType = file.type;
-    let msgType = 'file';
-    if (mimeType.startsWith('image/')) msgType = 'image';
-    if (mimeType.startsWith('video/')) msgType = 'video';
-    if (mimeType.startsWith('audio/')) msgType = 'audio';
-
-    const optimisticMsg = {
-      _id:          `optimistic_${Date.now()}`,
-      conversation:  conversation._id,
-      sender: {
-        _id:    currentUser?._id,
-        name:   currentUser?.name,
-        avatar: currentUser?.avatar,
-      },
-      type:      msgType,
-      media: {
-        url:      localUrl,
-        fileName: file.name,
-        size:     file.size,
-        mimeType,
-      },
-      createdAt:  new Date().toISOString(),
-      _optimistic: true,
-    };
-
-    // Inject into store immediately
-    dispatch(socketNewMessage({ conversationId: conversation._id, message: optimisticMsg }));
-
-    setUploading(true);
+  // ── Audio recording ──────────────────────────────────────────────
+  const startRecording = useCallback(async () => {
     try {
-      await sendMedia(conversation._id, file);
-      // Server response will upsert via socket/thunk and replace optimistic entry
-    } catch (err) {
-      console.error('Upload failed', err);
-    } finally {
-      setUploading(false);
-      URL.revokeObjectURL(localUrl);
-    }
-  };
-
-  const handleEmojiSelect = (emoji) => {
-    setText((prev) => prev + emoji);
-    setEmojiOpen(false);
-    inputRef.current?.focus();
-  };
-
-  const openEmoji = () => {
-    setAttachOpen(false);
-    setEmojiOpen((v) => !v);
-  };
-
-  // BUG2 FIX: Use proper audio constraints + prefer opus codec + timeslice for reliable chunks
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100,
-        },
-      });
-      streamRef.current = stream;
-
-      // Pick best supported mime type
-      const mimeTypes = [
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/ogg;codecs=opus',
-        'audio/mp4',
-      ];
-      const mimeType = mimeTypes.find((t) => MediaRecorder.isTypeSupported(t)) || '';
-
-      mediaRecorder.current = new MediaRecorder(stream, mimeType ? { mimeType } : {});
-      audioChunks.current   = [];
-
-      // timeslice=250ms ensures data is collected frequently, not just on stop
-      mediaRecorder.current.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) audioChunks.current.push(e.data);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
-
-      mediaRecorder.current.onstop = async () => {
-        const actualType = mediaRecorder.current.mimeType || 'audio/webm';
-        const ext = actualType.includes('ogg') ? 'ogg' : actualType.includes('mp4') ? 'mp4' : 'webm';
-        const blob = new Blob(audioChunks.current, { type: actualType });
-
-        if (blob.size < 100) return; // too small, ignore
-
-        const duration = recDuration;
-        const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: actualType });
-
-        // Optimistic voice message
-        const localUrl = URL.createObjectURL(blob);
-        const optimisticMsg = {
-          _id:         `optimistic_voice_${Date.now()}`,
-          conversation: conversation._id,
-          sender: {
-            _id:    currentUser?._id,
-            name:   currentUser?.name,
-            avatar: currentUser?.avatar,
-          },
-          type:  'audio',
-          media: { url: localUrl, duration, mimeType: actualType },
-          createdAt: new Date().toISOString(),
-          _optimistic: true,
-        };
-        dispatch(socketNewMessage({ conversationId: conversation._id, message: optimisticMsg }));
-
-        try {
-          await sendMedia(conversation._id, file, duration);
-        } catch (err) {
-          console.error('Voice send failed', err);
-        } finally {
-          URL.revokeObjectURL(localUrl);
-        }
-
-        // Stop all mic tracks
+      recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const file = new File([blob], `voice-${Date.now()}.webm`, { type: 'audio/webm' });
+        onSendMedia(file);
+        setRecordSeconds(0);
       };
-
-      mediaRecorder.current.start(250); // collect every 250ms
+      recorder.start();
+      mediaRecorderRef.current = recorder;
       setRecording(true);
-      setRecDuration(0);
-
-      recTimer.current = setInterval(() => {
-        setRecDuration((d) => d + 1);
-      }, 1000);
-
-    } catch (err) {
-      console.error('Mic access denied:', err);
+      recordTimerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
+    } catch {
+      alert('Microphone permission denied.');
     }
-  };
+  }, [onSendMedia]);
 
-  const stopRecording = () => {
-    if (mediaRecorder.current?.state === 'recording') {
-      mediaRecorder.current.stop();
-    }
-    clearInterval(recTimer.current);
+  const stopRecording = useCallback(() => {
+    mediaRecorderRef.current?.stop();
+    clearInterval(recordTimerRef.current);
     setRecording(false);
-    setRecDuration(0);
-  };
+  }, []);
 
-  const cancelRecording = () => {
-    if (mediaRecorder.current?.state === 'recording') {
-      // Remove onstop so data is discarded
-      mediaRecorder.current.onstop = null;
-      mediaRecorder.current.stop();
+  const cancelRecording = useCallback(() => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.ondataavailable = null;
+      mediaRecorderRef.current.onstop = null;
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream?.getTracks().forEach((t) => t.stop());
     }
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    audioChunks.current = [];
-    clearInterval(recTimer.current);
+    clearInterval(recordTimerRef.current);
+    audioChunksRef.current = [];
     setRecording(false);
-    setRecDuration(0);
-  };
+    setRecordSeconds(0);
+  }, []);
 
-  const formatRecTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const fmtSecs = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-  const canSend = text.trim().length > 0 && !recording;
+  // ── Disabled state ────────────────────────────────────────────────
+  if (disabled) {
+    return (
+      <div className="px-4 py-3 border-t border-base-300 bg-base-200 text-center text-sm text-base-content/55 shrink-0">
+        {disabledReason || 'You cannot send messages in this conversation.'}
+      </div>
+    );
+  }
 
-  return (
-    <div className="msg-input-container" ref={emojiWrapRef}>
-      {/* Upload progress bar */}
-      <AnimatePresence>
-        {(uploading || (progress > 0 && progress < 100)) && (
-          <motion.div
-            initial={{ scaleX: 0, opacity: 1 }}
-            animate={{ scaleX: uploading ? 0.85 : progress / 100 }}
-            exit={{ opacity: 0 }}
-            style={{ transformOrigin: 'left' }}
-            className="msg-upload-bar"
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Reply preview */}
-      <AnimatePresence>
-        {replyTo && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="msg-reply-bar-wrap"
-          >
-            <div className="msg-reply-accent" />
-            <div className="msg-reply-preview-inner">
-              <span className="msg-reply-to-name">
-                Replying to {replyTo.sender?.name || 'message'}
-              </span>
-              <p className="msg-reply-to-text">
-                {replyTo.type === 'text' ? replyTo.text?.slice(0, 60) : `[${replyTo.type}]`}
-              </p>
-            </div>
-            <button onClick={onCancelReply} className="msg-reply-close">
-              <X size={15} />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Recording UI */}
-      <AnimatePresence>
-        {recording && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="msg-recording-bar"
-          >
-            <span className="msg-recording-dot" />
-            <span className="msg-recording-label">Recording voice message</span>
-            <span className="msg-recording-time">{formatRecTime(recDuration)}</span>
-            <button onClick={cancelRecording} className="msg-recording-cancel">
-              <X size={14} /> Cancel
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* BUG4 FIX: Emoji picker state-driven, positioned above input */}
-      <AnimatePresence>
-        {emojiOpen && (
-          <div className="msg-input-emoji-picker-abs">
-            <EmojiPicker onSelect={handleEmojiSelect} onClose={() => setEmojiOpen(false)} />
+  // ── Recording UI ─────────────────────────────────────────────────
+  if (recording) {
+    return (
+      // BUG FIX #2 – shrink-0 keeps it at bottom of flex column, no 'fixed'
+      <div className="border-t border-base-300 bg-base-100 shrink-0">
+        <div className="flex items-center gap-3 px-3 sm:px-4 py-3">
+          <button type="button" onClick={cancelRecording} className="btn btn-ghost btn-circle shrink-0 text-error" aria-label="Cancel recording">
+            <X className="w-5 h-5" />
+          </button>
+          <div className="flex-1 flex items-center gap-2">
+            <span className="inline-block w-2 h-2 rounded-full bg-error animate-pulse" />
+            <span className="text-sm font-semibold text-error">{fmtSecs(recordSeconds)}</span>
+            <span className="text-xs text-base-content/50">Recording…</span>
           </div>
-        )}
-      </AnimatePresence>
-
-      {/* Input row */}
-      <div className="msg-input-row">
-        {/* Emoji btn */}
-        <button
-          onClick={openEmoji}
-          className={`msg-input-icon-btn ${emojiOpen ? 'msg-input-icon-btn-active' : ''}`}
-          disabled={recording}
-          title="Emoji"
-        >
-          <Smile size={20} />
-        </button>
-
-        {/* Textarea */}
-        <div className="msg-input-textarea-wrap">
-          <textarea
-            ref={inputRef}
-            rows={1}
-            value={text}
-            onChange={(e) => {
-              handleTyping(e.target.value);
-              e.target.style.height = 'auto';
-              e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
-            }}
-            onKeyDown={handleKey}
-            placeholder={recording ? 'Recording…' : 'Type a message…'}
-            className="msg-input-textarea"
-            disabled={recording}
-          />
-        </div>
-
-        {/* Right side */}
-        <div className="msg-input-right">
-          {/* Attach */}
-          {!recording && (
-            <div className="msg-attach-wrap">
-              <button
-                onClick={() => { setAttachOpen((v) => !v); setEmojiOpen(false); }}
-                className={`msg-input-icon-btn ${attachOpen ? 'msg-input-icon-btn-active' : ''}`}
-                title="Attach file"
-              >
-                {uploading ? <Loader2 size={20} className="animate-spin" /> : <Paperclip size={20} />}
-              </button>
-              <AnimatePresence>
-                {attachOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.9, y: 8 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.9, y: 8 }}
-                    className="msg-attach-menu"
-                  >
-                    <button
-                      className="msg-attach-item"
-                      onClick={() => {
-                        fileRef.current.accept = 'image/*,video/*';
-                        fileRef.current.click();
-                        setAttachOpen(false);
-                      }}
-                    >
-                      <ImageIcon size={16} /> Photo / Video
-                    </button>
-                    <button
-                      className="msg-attach-item"
-                      onClick={() => {
-                        fileRef.current.accept = '.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip';
-                        fileRef.current.click();
-                        setAttachOpen(false);
-                      }}
-                    >
-                      <FileText size={16} /> Document
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              <input ref={fileRef} type="file" className="hidden" onChange={handleFileSelect} />
-            </div>
-          )}
-
-          {/* Send / Mic */}
-          <AnimatePresence mode="wait">
-            {canSend ? (
-              <motion.button
-                key="send"
-                initial={{ scale: 0.7, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.7, opacity: 0 }}
-                transition={{ duration: 0.12 }}
-                onClick={handleSend}
-                disabled={sending}
-                className="msg-send-btn"
-              >
-                {sending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-              </motion.button>
-            ) : recording ? (
-              <motion.button
-                key="stop"
-                initial={{ scale: 0.7, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.7, opacity: 0 }}
-                onClick={stopRecording}
-                className="msg-send-btn"
-                title="Send voice message"
-              >
-                <Send size={18} />
-              </motion.button>
-            ) : (
-              <motion.button
-                key="mic"
-                initial={{ scale: 0.7, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.7, opacity: 0 }}
-                transition={{ duration: 0.12 }}
-                onClick={startRecording}
-                className="msg-mic-btn"
-                title="Hold to record voice message"
-              >
-                <Mic size={18} />
-              </motion.button>
-            )}
-          </AnimatePresence>
+          <button type="button" onClick={stopRecording} className="btn btn-primary btn-circle shrink-0" aria-label="Send voice message">
+            <Send className="w-4 h-4" />
+          </button>
         </div>
       </div>
+    );
+  }
+
+  return (
+    // BUG FIX #3 – was `border-t fixed border-base-300 bg-base-100`
+    // 'fixed' with no top/left/right makes it jump to top-left corner and
+    // overlap the message list. Use shrink-0 so it stays pinned to the
+    // bottom of the parent flex column instead.
+    <div className="border-t border-base-300 bg-base-100 shrink-0">
+      {/* Reply / Edit banner */}
+      {(replyTo || editingMessage) && (
+        <div className="flex items-center justify-between gap-2 px-4 pt-2">
+          <div className="flex items-center gap-2 min-w-0 border-l-2 border-primary pl-2">
+            {editingMessage && <Pencil className="w-3.5 h-3.5 text-primary shrink-0" />}
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-primary">
+                {editingMessage ? 'Editing message' : `Replying to ${replyTo?.sender?.name || ''}`}
+              </p>
+              <p className="text-xs text-base-content/55 truncate max-w-[220px]">
+                {(editingMessage || replyTo)?.text || `[${(editingMessage || replyTo)?.type}]`}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={editingMessage ? onCancelEdit : onCancelReply}
+            className="btn btn-ghost btn-circle btn-sm"
+            aria-label="Cancel"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Upload progress */}
+      {uploadProgress > 0 && uploadProgress < 100 && (
+        <div className="px-4 pt-2">
+          <div className="w-full h-1 bg-base-300 rounded-full overflow-hidden">
+            <div className="h-full bg-primary transition-all" style={{ width: `${uploadProgress}%` }} />
+          </div>
+          <p className="text-[10px] text-base-content/40 mt-0.5 text-right">{uploadProgress}%</p>
+        </div>
+      )}
+
+      <div className="flex items-end gap-2 px-3 sm:px-4 py-3">
+        {/* Hidden file input */}
+        <input ref={fileInputRef} type="file" className="hidden" onChange={handleFile} />
+
+        {/* Attach popup */}
+        <div className="relative shrink-0" ref={attachMenuRef}>
+          <button
+            type="button"
+            onClick={() => setAttachMenuOpen((v) => !v)}
+            className={`btn btn-ghost btn-circle ${attachMenuOpen ? 'text-primary' : ''}`}
+            aria-label="Attach file"
+          >
+            <Paperclip className="w-5 h-5" />
+          </button>
+
+          {attachMenuOpen && (
+            <div className="absolute bottom-full left-0 mb-2 w-44 bg-base-100 border border-base-300 rounded-box shadow-lg overflow-hidden py-1 z-20">
+              <AttachRow icon={ImageIcon} label="Photo"    onClick={() => openFilePicker(ACCEPTED.image)} />
+              <AttachRow icon={Film}      label="Video"    onClick={() => openFilePicker(ACCEPTED.video)} />
+              <AttachRow icon={Music}     label="Audio"    onClick={() => openFilePicker(ACCEPTED.audio)} />
+              <AttachRow icon={FileText}  label="Document" onClick={() => openFilePicker(ACCEPTED.file)}  />
+            </div>
+          )}
+        </div>
+
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            onTyping?.(true);
+          }}
+          onBlur={() => onTyping?.(false)}
+          onKeyDown={handleKeyDown}
+          placeholder="Type a message"
+          className="flex-1 resize-none py-2 px-3 bg-base-200 rounded-full text-sm outline-none max-h-32 leading-relaxed"
+        />
+
+        {text.trim() ? (
+          <button
+            type="button"
+            onClick={submit}
+            className="btn btn-primary btn-circle shrink-0"
+            aria-label={editingMessage ? 'Save edit' : 'Send message'}
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={startRecording}
+            className="btn btn-ghost btn-circle shrink-0"
+            aria-label="Record voice message"
+          >
+            <Mic className="w-5 h-5" />
+          </button>
+        )}
+      </div>
     </div>
+  );
+}
+
+function AttachRow({ icon: Icon, label, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-base-200 transition-colors text-sm text-base-content"
+    >
+      <Icon className="w-4 h-4 text-primary" />
+      {label}
+    </button>
   );
 }

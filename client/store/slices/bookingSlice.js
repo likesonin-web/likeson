@@ -1,4 +1,3 @@
-
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import toast                              from 'react-hot-toast';
 import API                                from '../api';
@@ -25,9 +24,6 @@ export const BOOKING_TYPES = [
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * mkThunk — wraps API call, centralises error toast + rejectWithValue.
- */
 const mkThunk = (type, fn) =>
   createAsyncThunk(type, async (arg, api) => {
     try {
@@ -39,16 +35,8 @@ const mkThunk = (type, fn) =>
     }
   });
 
-/**
- * key — extracts thunk name from action type string.
- * e.g. "booking/fetchHospitals/pending" → "fetchHospitals"
- * Used as loading/error map key.
- */
 const key = (type) => type.split('/')[1];
 
-/**
- * downloadBlob — triggers browser file-save for binary responses.
- */
 const downloadBlob = (data, filename, mime = 'application/zip') => {
   const url  = window.URL.createObjectURL(new Blob([data], { type: mime }));
   const link = document.createElement('a');
@@ -77,7 +65,17 @@ const initialState = {
   followUpEligibility:  null,
   platformPricing:      null,
   consultationCoverage: null,
-subscriptionBenefitLabs: null,
+  allDoctors:           [],
+  allDoctorsMeta:       { total: 0, page: 1, limit: 20 },
+
+  // ── Subscription benefits ─────────────────────────────────────────────────
+  subscriptionBenefitConsultations: null,
+  subscriptionBenefitCareAssistant: null,
+  subscriptionBenefitLabs:          null,
+
+  // ── Previous patient info ─────────────────────────────────────────────────
+  previousPatientInfo: null,
+
   // ── My bookings ───────────────────────────────────────────────────────────
   myBookings:          [],
   myBookingsMeta:      { total: 0, page: 1, limit: 10 },
@@ -88,28 +86,21 @@ subscriptionBenefitLabs: null,
   // ── Payment results ───────────────────────────────────────────────────────
   verifyPaymentResult:      null,
   confirmCashPaymentResult: null,
+  deleteFailedBookingResult: null,
 
   // ── Active booking creation ───────────────────────────────────────────────
   createdBooking:       null,
   createBookingLoading: false,
   createBookingError:   null,
-  /** 'idle' | 'loading' | 'succeeded' | 'failed' */
   createBookingStatus:  'idle',
 
-  allDoctors:     [],
-allDoctorsMeta: { total: 0, page: 1, limit: 20 },
-deleteFailedBookingResult: null,
-
-  subscriptionBenefitConsultations: null,
-subscriptionBenefitCareAssistant: null,
-
-  // ── Per-thunk loading / error maps ───────────────────────────────────────
+  // ── Per-thunk loading / error maps ────────────────────────────────────────
   loading: {},
   errors:  {},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ── DISCOVERY THUNKS ─────────────────────────────────────────────────────────
+// DISCOVERY THUNKS
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const fetchHospitals = mkThunk(
@@ -145,6 +136,16 @@ export const checkDoctorAvailability = mkThunk(
       params: { scheduledAt, hospitalId },
     });
     return data.data;
+  }
+);
+
+export const fetchAllDoctors = mkThunk(
+  'booking/fetchAllDoctors',
+  async ({ specialization, consultationType, city, isOnline, page = 1, limit = 20 } = {}) => {
+    const { data } = await API.get(`${BASE}/doctors`, {
+      params: { specialization, consultationType, city, isOnline, page, limit },
+    });
+    return data;
   }
 );
 
@@ -189,12 +190,6 @@ export const fetchTransportEstimate = mkThunk(
   }
 );
 
-/**
- * checkConsultationCoverage — GET /consultation-check
- *
- * Returns: { allowed, isFree, remaining, reason, careAssistantFree, careAssistantQuota }
- * Optionally pass { consultationType } as query param.
- */
 export const checkConsultationCoverage = mkThunk(
   'booking/checkConsultationCoverage',
   async ({ consultationType } = {}) => {
@@ -207,20 +202,14 @@ export const checkConsultationCoverage = mkThunk(
 
 export const checkFollowUpEligibility = mkThunk(
   'booking/checkFollowUpEligibility',
-  async ({ doctorId, hospitalId }) => {
+  async ({ doctorId, hospitalId, patientName, patientPhone } = {}) => {
     const { data } = await API.get(`${BASE}/follow-up/check`, {
-      params: { doctorId, hospitalId },
+      params: { doctorId, hospitalId, patientName, patientPhone },
     });
     return data.data;
   }
 );
 
-/**
- * fetchPlatformPricing — GET /platform-pricing
- *
- * Returns: PlatformPricingConfig.careAssistant.pricingTiers[]
- * Used by care-assistant booking UI to show tier options.
- */
 export const fetchPlatformPricing = mkThunk(
   'booking/fetchPlatformPricing',
   async () => {
@@ -230,40 +219,66 @@ export const fetchPlatformPricing = mkThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ── BOOKING CREATION THUNKS ──────────────────────────────────────────────────
+// SUBSCRIPTION BENEFIT THUNKS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * createFullCareRide — POST /full-care-ride
- *
- * Creates booking + outbound ride (+ optional return ride).
- * Canonical polylines locked at creation via Google Maps / haversine fallback.
- * Care assistant auto-assigned. OP record created.
- *
- * Response data: {
- *   bookingId, bookingCode, status, scheduledAt,
- *   fareBreakdown, subscriptionCoverage,
- *   transportSummary, mapRoutes: { outbound, return },
- *   careAssistantAssigned, rides: { outbound, return },
- *   opNumber, razorpayOrder
- * }
- *
- * @param {{
- *   hospitalId: string,
- *   doctorId: string,
- *   scheduledAt: string,
- *   consultationType?: 'inPerson'|'video'|'homeVisit',
- *   patientInfo: object,
- *   patientLocation: { coordinates: [lng, lat], address: string, city: string, pincode?: string },
- *   destinationLocation?: { coordinates: [lng, lat], address?: string, city?: string },
- *   includeReturnHome?: boolean,
- *   slotId?: string,
- *   documents?: string[],
- *   paymentMethod?: 'Razorpay'|'Wallet'|'Cash',
- *   couponCode?: string,
- *   coinsToRedeem?: number,
- * }} payload
- */
+export const fetchSubscriptionBenefitConsultations = mkThunk(
+  'booking/fetchSubscriptionBenefitConsultations',
+  async () => {
+    try {
+      const { data } = await API.get(`${BASE}/subscription-benefits/consultations`);
+      return data.data;
+    } catch (err) {
+      if (err?.response?.status === 404) return null;
+      throw err;
+    }
+  }
+);
+
+export const fetchSubscriptionBenefitCareAssistant = mkThunk(
+  'booking/fetchSubscriptionBenefitCareAssistant',
+  async () => {
+    try {
+      const { data } = await API.get(`${BASE}/subscription-benefits/care-assistant`);
+      return data.data;
+    } catch (err) {
+      if (err?.response?.status === 404) return null;
+      throw err;
+    }
+  }
+);
+
+export const fetchSubscriptionBenefitLabs = mkThunk(
+  'booking/fetchSubscriptionBenefitLabs',
+  async () => {
+    try {
+      const { data } = await API.get(`${BASE}/subscription-benefits/labs`);
+      return data.data;
+    } catch (err) {
+      if (err?.response?.status === 404) return null;
+      throw err;
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREVIOUS PATIENT INFO THUNK
+// GET /previous-patient-info
+// Returns last booking's patientInfo for pre-filling forms.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const fetchPreviousPatientInfo = mkThunk(
+  'booking/fetchPreviousPatientInfo',
+  async () => {
+    const { data } = await API.get(`${BASE}/previous-patient-info`);
+    return data.data; // { patientInfo, fromBooking, bookingType, bookedAt } | null
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKING CREATION THUNKS
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const createFullCareRide = mkThunk(
   'booking/createFullCareRide',
   async (payload) => {
@@ -273,27 +288,6 @@ export const createFullCareRide = mkThunk(
   }
 );
 
-/**
- * createDoctorConsultation — POST /doctor-consultation
- *
- * In-person / video doctor visit. No ride created.
- *
- * Response data: { bookingId, bookingCode, opNumber, fareBreakdown,
- *                  subscriptionCoverage, razorpayOrder }
- *
- * @param {{
- *   hospitalId?: string,
- *   doctorId: string,
- *   scheduledAt: string,
- *   consultationType?: 'inPerson'|'video'|'homeVisit',
- *   patientInfo: object,
- *   slotId?: string,
- *   documents?: string[],
- *   paymentMethod?: 'Razorpay'|'Wallet'|'Cash',
- *   couponCode?: string,
- *   coinsToRedeem?: number,
- * }} payload
- */
 export const createDoctorConsultation = mkThunk(
   'booking/createDoctorConsultation',
   async (payload) => {
@@ -303,22 +297,6 @@ export const createDoctorConsultation = mkThunk(
   }
 );
 
-/**
- * createDoctorOnline — POST /doctor-online
- *
- * Video-only consultation. No ride. Meeting link sent on confirmation.
- *
- * Response data: { bookingId, bookingCode, fareBreakdown,
- *                  subscriptionCoverage, razorpayOrder, note }
- *
- * @param {{
- *   doctorId: string,
- *   scheduledAt: string,
- *   patientInfo: object,
- *   documents?: string[],
- *   paymentMethod?: 'Razorpay'|'Wallet'|'Cash',
- * }} payload
- */
 export const createDoctorOnline = mkThunk(
   'booking/createDoctorOnline',
   async (payload) => {
@@ -328,34 +306,6 @@ export const createDoctorOnline = mkThunk(
   }
 );
 
-/**
- * createPatientTransport — POST /patient-transport
- *
- * Standalone transport. Canonical routes locked at creation.
- * Waiting charges estimated; actual waiting logged in RideTracking.
- *
- * Response data: { bookingId, bookingCode, fareBreakdown, transportSummary,
- *                  mapRoutes: { outbound, return }, consultationAdded,
- *                  subscriptionCoverage, opNumber, rides, razorpayOrder }
- *
- * @param {{
- *   patientInfo: object,
- *   patientLocation: { coordinates: [lng, lat], address: string, city: string, pincode?: string },
- *   destinationLocation: { coordinates: [lng, lat], address: string, city: string },
- *   scheduledAt: string,
- *   includeReturn?: boolean,
- *   waitingMinutes?: number,
- *   vehicleClass?: string,
- *   addConsultation?: boolean,
- *   hospitalId?: string,
- *   doctorId?: string,
- *   consultationType?: string,
- *   slotId?: string,
- *   paymentMethod?: 'Razorpay'|'Wallet'|'Cash',
- *   couponCode?: string,
- *   coinsToRedeem?: number,
- * }} payload
- */
 export const createPatientTransport = mkThunk(
   'booking/createPatientTransport',
   async (payload) => {
@@ -365,21 +315,6 @@ export const createPatientTransport = mkThunk(
   }
 );
 
-/**
- * createPhysiotherapist — POST /physiotherapist
- *
- * NOTE: physio bookings never consume subscription consultation quota.
- *
- * @param {{
- *   doctorId: string,
- *   scheduledAt: string,
- *   patientInfo: object,
- *   visitType?: 'inPerson'|'homeVisit',
- *   slotId?: string,
- *   documents?: string[],
- *   paymentMethod?: 'Razorpay'|'Wallet'|'Cash',
- * }} payload
- */
 export const createPhysiotherapist = mkThunk(
   'booking/createPhysiotherapist',
   async (payload) => {
@@ -389,25 +324,6 @@ export const createPhysiotherapist = mkThunk(
   }
 );
 
-/**
- * createFollowUp — POST /follow-up
- *
- * Backend checks eligibility (same doctor + hospital, within window).
- * Follow-up always charged — does NOT consume subscription quota.
- *
- * Response data: { bookingId, bookingCode, opNumber, fareBreakdown,
- *                  followUpDetails, razorpayOrder }
- *
- * @param {{
- *   doctorId: string,
- *   hospitalId?: string,
- *   scheduledAt: string,
- *   patientInfo: object,
- *   consultationType?: string,
- *   slotId?: string,
- *   paymentMethod?: 'Razorpay'|'Wallet'|'Cash',
- * }} payload
- */
 export const createFollowUp = mkThunk(
   'booking/createFollowUp',
   async (payload) => {
@@ -417,25 +333,6 @@ export const createFollowUp = mkThunk(
   }
 );
 
-/**
- * createDiagnosticCenter — POST /diagnostic-center
- *
- * Lab tests at center (patient travels). No ride.
- * Subscription diagnostic discount applied automatically by backend.
- *
- * Response data: { bookingId, bookingCode, fareBreakdown, testNames,
- *                  packageNames, diagnosticDiscount, razorpayOrder }
- *
- * @param {{
- *   labId: string,
- *   tests?: string[],
- *   packages?: string[],
- *   scheduledAt: string,
- *   patientInfo: object,
- *   reportDeliveryMode?: string,
- *   paymentMethod?: 'Razorpay'|'Wallet'|'Cash',
- * }} payload
- */
 export const createDiagnosticCenter = mkThunk(
   'booking/createDiagnosticCenter',
   async (payload) => {
@@ -445,29 +342,6 @@ export const createDiagnosticCenter = mkThunk(
   }
 );
 
-/**
- * createDiagnosticHome — POST /diagnostic-home
- *
- * Lab tech visits patient. Canonical route: lab → patient.
- * Home collection fee waived if plan includes homeSampleCollection.
- *
- * Response data: { bookingId, bookingCode, fareBreakdown, testNames,
- *                  packageNames, homeCollectionFeeWaived,
- *                  diagnosticDiscount, mapRoute, razorpayOrder }
- *
- * NOTE: returns mapRoute (singular), NOT mapRoutes. Selector selectCreatedMapRoute.
- *
- * @param {{
- *   labId: string,
- *   tests?: string[],
- *   packages?: string[],
- *   scheduledAt: string,
- *   patientInfo: object,
- *   patientLocation: { coordinates: [lng, lat], address: string, city: string, pincode?: string },
- *   reportDeliveryMode?: string,
- *   paymentMethod?: 'Razorpay'|'Wallet'|'Cash',
- * }} payload
- */
 export const createDiagnosticHome = mkThunk(
   'booking/createDiagnosticHome',
   async (payload) => {
@@ -477,24 +351,6 @@ export const createDiagnosticHome = mkThunk(
   }
 );
 
-/**
- * createCareAssistant — POST /care-assistant
- *
- * Care assistant auto-assigned (nearest available). No ride.
- * Fee resolved from subscription tier (custom plan) or platform tiers.
- *
- * Response data: { bookingId, bookingCode, fareBreakdown, subscriptionCoverage,
- *                  careAssistantAssigned, durationHours, pricingSource,
- *                  pricingTier, razorpayOrder }
- *
- * @param {{
- *   patientInfo: object,
- *   patientLocation: { coordinates: [lng, lat], address: string, city: string },
- *   scheduledAt: string,
- *   durationHours?: number,
- *   paymentMethod?: 'Razorpay'|'Wallet'|'Cash',
- * }} payload
- */
 export const createCareAssistant = mkThunk(
   'booking/createCareAssistant',
   async (payload) => {
@@ -505,48 +361,19 @@ export const createCareAssistant = mkThunk(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ── PAYMENT THUNKS ───────────────────────────────────────────────────────────
+// PAYMENT THUNKS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * verifyRazorpayPayment — POST /verify-payment
- *
- * Verifies Razorpay signature, marks booking paid, flushes subscription usage.
- *
- * Response data: { bookingId, paymentStatus }
- *
- * @param {{
- *   bookingId: string,
- *   razorpay_order_id: string,
- *   razorpay_payment_id: string,
- *   razorpay_signature: string,
- * }} payload
- */
 export const verifyRazorpayPayment = mkThunk(
   'booking/verifyRazorpayPayment',
   async ({ bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature }) => {
     const { data } = await API.post(`${BASE}/verify-payment`, {
       bookingId, razorpay_order_id, razorpay_payment_id, razorpay_signature,
     });
-    // Return full response so handler can check data.success
-    // toast fired in UI after onSuccess callback, not here
     return { success: data.success, ...(data.data || {}) };
   }
 );
 
-/**
- * confirmCashPayment — POST /confirm-cash-payment
- *
- * ADMIN ONLY. Marks cash-payment booking as paid, flushes subscription usage.
- * Included here because the result updates booking paymentStatus in shared state.
- *
- * Response data: { bookingId }
- *
- * @param {{
- *   bookingId: string,
- *   amountCollected?: number,
- * }} payload
- */
 export const confirmCashPayment = mkThunk(
   'booking/confirmCashPayment',
   async ({ bookingId, amountCollected }) => {
@@ -559,50 +386,40 @@ export const confirmCashPayment = mkThunk(
   }
 );
 
+export const deleteFailedBooking = mkThunk(
+  'booking/deleteFailedBooking',
+  async ({ bookingId, walletApplied = 0 }) => {
+    const { data } = await API.post(`${BASE}/delete-failed-booking`, {
+      bookingId,
+      walletApplied,
+    });
+    toast.success(`Booking deleted. Wallet refunded: ₹${data.data?.walletRefunded ?? 0}`);
+    return data.data;
+  }
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
-// ── BOOKING MANAGEMENT THUNKS ────────────────────────────────────────────────
+// BOOKING MANAGEMENT THUNKS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * fetchMyBookings — GET /my-bookings
- *
- * Paginated. Filterable by status, bookingType.
- *
- * Response shape: { data: Booking[], total, page, limit }
- */
 export const fetchMyBookings = mkThunk(
   'booking/fetchMyBookings',
   async ({ status, bookingType, page = 1, limit = 10 } = {}) => {
     const { data } = await API.get(`${BASE}/my-bookings`, {
       params: { status, bookingType, page, limit },
     });
-    return data; // { data, total, page, limit }
+    return data;
   }
 );
 
-/**
- * fetchMyBookingById — GET /my-bookings/:bookingId
- *
- * Full booking detail + mapRoute (canonical polyline from RideTracking).
- *
- * mapRoute: { polyline, currentEtaMinutes, totalDistanceKm, pickupCoords, dropoffCoords }
- */
 export const fetchMyBookingById = mkThunk(
   'booking/fetchMyBookingById',
   async ({ bookingId }) => {
     const { data } = await API.get(`${BASE}/my-bookings/${bookingId}`);
-    return data.data; // { ...booking, mapRoute }
+    return data.data;
   }
 );
 
-/**
- * cancelMyBooking — POST /my-bookings/:bookingId/cancel
- *
- * Cancellable only in pending / confirmed / pending_cash status.
- * Subscription quota recovered automatically by backend.
- *
- * Response data: { refundPercent, refundAmount, status, subscriptionRecovery }
- */
 export const cancelMyBooking = mkThunk(
   'booking/cancelMyBooking',
   async ({ bookingId, reason }) => {
@@ -612,12 +429,6 @@ export const cancelMyBooking = mkThunk(
   }
 );
 
-/**
- * rateMyBooking — POST /my-bookings/:bookingId/rate
- *
- * Only for completed, un-rated bookings.
- * overallRating (1–5) required. All other fields optional.
- */
 export const rateMyBooking = mkThunk(
   'booking/rateMyBooking',
   async ({
@@ -640,11 +451,6 @@ export const rateMyBooking = mkThunk(
   }
 );
 
-/**
- * downloadOpCard — GET /my-bookings/:bookingId/op-download
- *
- * Triggers browser file download of OP zip (no state change needed).
- */
 export const downloadOpCard = mkThunk(
   'booking/downloadOpCard',
   async ({ bookingId, filename = 'op-card.zip' }) => {
@@ -653,72 +459,6 @@ export const downloadOpCard = mkThunk(
     });
     downloadBlob(data, filename, 'application/zip');
     return { bookingId };
-  }
-);
-
-export const fetchSubscriptionBenefitConsultations = mkThunk(
-  'booking/fetchSubscriptionBenefitConsultations',
-  async () => {
-    try {
-      const { data } = await API.get(`${BASE}/subscription-benefits/consultations`);
-      return data.data;
-    } catch (err) {
-      // 404 = no active subscription — not an error, return null silently
-      if (err?.response?.status === 404) return null;
-      throw err;
-    }
-  }
-);
-
-export const fetchSubscriptionBenefitCareAssistant = mkThunk(
-  'booking/fetchSubscriptionBenefitCareAssistant',
-  async () => {
-    try {
-      const { data } = await API.get(`${BASE}/subscription-benefits/care-assistant`);
-      return data.data;
-    } catch (err) {
-      if (err?.response?.status === 404) return null;
-      throw err;
-    }
-  }
-);
-
-
-// Add thunk
-export const fetchAllDoctors = mkThunk(
-  'booking/fetchAllDoctors',
-  async ({ specialization, consultationType, city, isOnline, page = 1, limit = 20 } = {}) => {
-    const { data } = await API.get(`${BASE}/doctors`, {
-      params: { specialization, consultationType, city, isOnline, page, limit },
-    });
-    return data; // { data, total, page, limit, count }
-  }
-);
-
-// ── ADD this thunk (after verifyRazorpayPayment thunk) ──────────────────────
-
-export const deleteFailedBooking = mkThunk(
-  'booking/deleteFailedBooking',
-  async ({ bookingId, walletApplied = 0 }) => {
-    const { data } = await API.post(`${BASE}/delete-failed-booking`, {
-      bookingId,
-      walletApplied,
-    });
-    toast.success(`Booking deleted. Wallet refunded: ₹${data.data?.walletRefunded ?? 0}`);
-    return data.data; // { bookingId, walletRefunded }
-  }
-);
-
-export const fetchSubscriptionBenefitLabs = mkThunk(
-  'booking/fetchSubscriptionBenefitLabs',
-  async () => {
-    try {
-      const { data } = await API.get(`${BASE}/subscription-benefits/labs`);
-      return data.data;
-    } catch (err) {
-      if (err?.response?.status === 404) return null;
-      throw err;
-    }
   }
 );
 
@@ -732,15 +472,12 @@ const bookingSlice = createSlice({
 
   reducers: {
     // ── Booking creation ─────────────────────────────────────────────────────
-
     clearCreatedBooking(state) {
       state.createdBooking       = null;
       state.createBookingLoading = false;
       state.createBookingError   = null;
       state.createBookingStatus  = 'idle';
     },
-
-    /** Alias — some components import resetCreateBooking */
     resetCreateBooking(state) {
       state.createdBooking       = null;
       state.createBookingLoading = false;
@@ -749,13 +486,11 @@ const bookingSlice = createSlice({
     },
 
     // ── Detail / list ────────────────────────────────────────────────────────
-
     clearSelectedBooking(state) {
       state.selectedBooking = null;
     },
 
     // ── Discovery ────────────────────────────────────────────────────────────
-
     clearDiscovery(state) {
       state.hospitals            = [];
       state.hospitalDoctors      = [];
@@ -767,129 +502,118 @@ const bookingSlice = createSlice({
       state.transportEstimate    = null;
       state.followUpEligibility  = null;
     },
-
     resetHospitals(state) {
       state.hospitals = [];
       delete state.loading.fetchHospitals;
       delete state.errors.fetchHospitals;
     },
-
     resetDoctorsByHospital(state) {
       state.hospitalDoctors = [];
       delete state.loading.fetchHospitalDoctors;
       delete state.errors.fetchHospitalDoctors;
     },
-    resetDeleteFailedBooking(state) {
-  state.deleteFailedBookingResult = null;
-  delete state.loading.deleteFailedBooking;
-  delete state.errors.deleteFailedBooking;
-},
-
     resetHospitalAvailability(state) {
       state.hospitalAvailability = null;
       delete state.loading.checkHospitalAvailability;
       delete state.errors.checkHospitalAvailability;
     },
-
     resetDoctorAvailability(state) {
       state.doctorAvailability = null;
       delete state.loading.checkDoctorAvailability;
       delete state.errors.checkDoctorAvailability;
     },
-
     resetTransportEstimate(state) {
       state.transportEstimate = null;
       delete state.loading.fetchTransportEstimate;
       delete state.errors.fetchTransportEstimate;
     },
-
     resetFollowUpCheck(state) {
       state.followUpEligibility = null;
       delete state.loading.checkFollowUpEligibility;
       delete state.errors.checkFollowUpEligibility;
     },
-    
-
     resetBookingOptions(state) {
       state.bookingOptions = null;
       delete state.loading.fetchBookingOptions;
       delete state.errors.fetchBookingOptions;
     },
-
     resetConsultationCoverage(state) {
       state.consultationCoverage = null;
       delete state.loading.checkConsultationCoverage;
       delete state.errors.checkConsultationCoverage;
     },
-
     resetPlatformPricing(state) {
       state.platformPricing = null;
       delete state.loading.fetchPlatformPricing;
       delete state.errors.fetchPlatformPricing;
     },
+    resetAllDoctors(state) {
+      state.allDoctors     = [];
+      state.allDoctorsMeta = { total: 0, page: 1, limit: 20 };
+      delete state.loading.fetchAllDoctors;
+      delete state.errors.fetchAllDoctors;
+    },
+
+    // ── Previous patient info ─────────────────────────────────────────────
+    resetPreviousPatientInfo(state) {
+      state.previousPatientInfo = null;
+      delete state.loading.fetchPreviousPatientInfo;
+      delete state.errors.fetchPreviousPatientInfo;
+    },
+
+    // ── Subscription benefits ─────────────────────────────────────────────
+    resetSubscriptionBenefitConsultations(state) {
+      state.subscriptionBenefitConsultations = null;
+      delete state.loading.fetchSubscriptionBenefitConsultations;
+      delete state.errors.fetchSubscriptionBenefitConsultations;
+    },
+    resetSubscriptionBenefitCareAssistant(state) {
+      state.subscriptionBenefitCareAssistant = null;
+      delete state.loading.fetchSubscriptionBenefitCareAssistant;
+      delete state.errors.fetchSubscriptionBenefitCareAssistant;
+    },
     resetSubscriptionBenefitLabs(state) {
-  state.subscriptionBenefitLabs = null;
-  delete state.loading.fetchSubscriptionBenefitLabs;
-  delete state.errors.fetchSubscriptionBenefitLabs;
-},
+      state.subscriptionBenefitLabs = null;
+      delete state.loading.fetchSubscriptionBenefitLabs;
+      delete state.errors.fetchSubscriptionBenefitLabs;
+    },
 
-    // ── Cancel / rate results ────────────────────────────────────────────────
-
+    // ── Cancel / rate ─────────────────────────────────────────────────────
     resetCancelBooking(state) {
       state.cancelBookingResult = null;
       delete state.loading.cancelMyBooking;
       delete state.errors.cancelMyBooking;
     },
-
     resetRateBooking(state) {
       state.rateBookingResult = null;
       delete state.loading.rateMyBooking;
       delete state.errors.rateMyBooking;
     },
 
-    // ── Payment results ──────────────────────────────────────────────────────
-
+    // ── Payment ───────────────────────────────────────────────────────────
     resetVerifyPayment(state) {
       state.verifyPaymentResult = null;
       delete state.loading.verifyRazorpayPayment;
       delete state.errors.verifyRazorpayPayment;
     },
-
     resetConfirmCashPayment(state) {
       state.confirmCashPaymentResult = null;
       delete state.loading.confirmCashPayment;
       delete state.errors.confirmCashPayment;
     },
+    resetDeleteFailedBooking(state) {
+      state.deleteFailedBookingResult = null;
+      delete state.loading.deleteFailedBooking;
+      delete state.errors.deleteFailedBooking;
+    },
 
-    resetSubscriptionBenefitConsultations(state) {
-  state.subscriptionBenefitConsultations = null;
-  delete state.loading.fetchSubscriptionBenefitConsultations;
-  delete state.errors.fetchSubscriptionBenefitConsultations;
-},
-
-resetSubscriptionBenefitCareAssistant(state) {
-  state.subscriptionBenefitCareAssistant = null;
-  delete state.loading.fetchSubscriptionBenefitCareAssistant;
-  delete state.errors.fetchSubscriptionBenefitCareAssistant;
-},
-
-    // ── Global error reset ───────────────────────────────────────────────────
-
+    // ── Global ────────────────────────────────────────────────────────────
     clearErrors(state) {
       state.errors = {};
     },
-
-    resetAllDoctors(state) {
-  state.allDoctors     = [];
-  state.allDoctorsMeta = { total: 0, page: 1, limit: 20 };
-  delete state.loading.fetchAllDoctors;
-  delete state.errors.fetchAllDoctors;
-},
   },
 
   extraReducers: (builder) => {
-    // ── Generic pending / rejected ─────────────────────────────────────────
-
     const pending = (state, action) => {
       state.loading[key(action.type)] = true;
       delete state.errors[key(action.type)];
@@ -900,10 +624,6 @@ resetSubscriptionBenefitCareAssistant(state) {
       state.errors[key(action.type)]  = action.payload || 'Error';
     };
 
-    /**
-     * wire — registers pending + fulfilled + rejected for a thunk.
-     * fulfilled receives (state, action) and should update state.
-     */
     const wire = (thunk, fulfilled) => {
       builder
         .addCase(thunk.pending,   pending)
@@ -914,12 +634,6 @@ resetSubscriptionBenefitCareAssistant(state) {
         .addCase(thunk.rejected, rejected);
     };
 
-    
-
-    /**
-     * wireCreate — variant for booking creation thunks.
-     * Also drives createBookingLoading / createBookingError / createBookingStatus.
-     */
     const wireCreate = (thunk) => {
       builder
         .addCase(thunk.pending, (state, action) => {
@@ -943,7 +657,7 @@ resetSubscriptionBenefitCareAssistant(state) {
         });
     };
 
-    // ── Discovery ────────────────────────────────────────────────────────────
+    // ── Discovery ─────────────────────────────────────────────────────────
 
     wire(fetchHospitals, (state, { payload }) => {
       state.hospitals = Array.isArray(payload) ? payload : [];
@@ -960,9 +674,15 @@ resetSubscriptionBenefitCareAssistant(state) {
     wire(checkDoctorAvailability, (state, { payload }) => {
       state.doctorAvailability = payload ?? null;
     });
-    wire(fetchSubscriptionBenefitLabs, (state, { payload }) => {
-  state.subscriptionBenefitLabs = payload ?? null;
-});
+
+    wire(fetchAllDoctors, (state, { payload }) => {
+      state.allDoctors     = Array.isArray(payload?.data) ? payload.data : [];
+      state.allDoctorsMeta = {
+        total: payload?.total ?? 0,
+        page:  payload?.page  ?? 1,
+        limit: payload?.limit ?? 20,
+      };
+    });
 
     wire(fetchLabs, (state, { payload }) => {
       state.labs = Array.isArray(payload) ? payload : [];
@@ -971,35 +691,6 @@ resetSubscriptionBenefitCareAssistant(state) {
     wire(fetchLabById, (state, { payload }) => {
       state.selectedLab = payload ?? null;
     });
-    wire(deleteFailedBooking, (state, { payload }) => {
-  state.deleteFailedBookingResult = payload ?? null;
-  // Remove from myBookings list
-  if (payload?.bookingId) {
-    state.myBookings = state.myBookings.filter(
-      (b) => String(b._id) !== String(payload.bookingId)
-    );
-    if (
-      state.selectedBooking &&
-      String(state.selectedBooking._id) === String(payload.bookingId)
-    ) {
-      state.selectedBooking = null;
-    }
-    if (
-      state.createdBooking &&
-      String(state.createdBooking.bookingId) === String(payload.bookingId)
-    ) {
-      state.createdBooking = null;
-    }
-  }
-});
-    wire(fetchAllDoctors, (state, { payload }) => {
-  state.allDoctors     = Array.isArray(payload?.data) ? payload.data : [];
-  state.allDoctorsMeta = {
-    total: payload?.total ?? 0,
-    page:  payload?.page  ?? 1,
-    limit: payload?.limit ?? 20,
-  };
-});
 
     wire(fetchBookingOptions, (state, { payload }) => {
       state.bookingOptions = payload ?? null;
@@ -1021,6 +712,27 @@ resetSubscriptionBenefitCareAssistant(state) {
       state.platformPricing = payload ?? null;
     });
 
+    // ── Subscription benefits ─────────────────────────────────────────────
+
+    wire(fetchSubscriptionBenefitConsultations, (state, { payload }) => {
+      state.subscriptionBenefitConsultations = payload ?? null;
+    });
+
+    wire(fetchSubscriptionBenefitCareAssistant, (state, { payload }) => {
+      state.subscriptionBenefitCareAssistant = payload ?? null;
+    });
+
+    wire(fetchSubscriptionBenefitLabs, (state, { payload }) => {
+      state.subscriptionBenefitLabs = payload ?? null;
+    });
+
+    // ── Previous patient info ─────────────────────────────────────────────
+    // GET /previous-patient-info → { patientInfo, fromBooking, bookingType, bookedAt }
+
+    wire(fetchPreviousPatientInfo, (state, { payload }) => {
+      state.previousPatientInfo = payload ?? null;
+    });
+
     // ── Booking creation ──────────────────────────────────────────────────
 
     wireCreate(createFullCareRide);
@@ -1035,14 +747,12 @@ resetSubscriptionBenefitCareAssistant(state) {
 
     // ── Payment ───────────────────────────────────────────────────────────
 
-    // FIX 1: single wire() — no duplicate builder.addCase for verifyRazorpayPayment
     wire(verifyRazorpayPayment, (state, { payload }) => {
       state.verifyPaymentResult = payload ?? null;
 
-      // Sync paymentStatus in list
       if (payload?.bookingId) {
         const idx = state.myBookings.findIndex(
-          (b) => b._id === payload.bookingId || String(b._id) === String(payload.bookingId)
+          (b) => String(b._id) === String(payload.bookingId)
         );
         if (idx !== -1) {
           state.myBookings[idx] = {
@@ -1050,28 +760,24 @@ resetSubscriptionBenefitCareAssistant(state) {
             paymentStatus: payload.paymentStatus ?? 'paid',
           };
         }
-      }
-
-      // Sync selectedBooking
-      if (
-        state.selectedBooking &&
-        String(state.selectedBooking._id) === String(payload?.bookingId)
-      ) {
-        state.selectedBooking = {
-          ...state.selectedBooking,
-          paymentStatus: payload?.paymentStatus ?? 'paid',
-        };
-      }
-
-      // Sync createdBooking (user still on payment success screen)
-      if (
-        state.createdBooking &&
-        String(state.createdBooking.bookingId) === String(payload?.bookingId)
-      ) {
-        state.createdBooking = {
-          ...state.createdBooking,
-          paymentStatus: payload?.paymentStatus ?? 'paid',
-        };
+        if (
+          state.selectedBooking &&
+          String(state.selectedBooking._id) === String(payload.bookingId)
+        ) {
+          state.selectedBooking = {
+            ...state.selectedBooking,
+            paymentStatus: payload.paymentStatus ?? 'paid',
+          };
+        }
+        if (
+          state.createdBooking &&
+          String(state.createdBooking.bookingId) === String(payload.bookingId)
+        ) {
+          state.createdBooking = {
+            ...state.createdBooking,
+            paymentStatus: payload.paymentStatus ?? 'paid',
+          };
+        }
       }
     });
 
@@ -1080,19 +786,38 @@ resetSubscriptionBenefitCareAssistant(state) {
 
       if (payload?.bookingId) {
         const idx = state.myBookings.findIndex(
-          (b) => b._id === payload.bookingId || String(b._id) === String(payload.bookingId)
+          (b) => String(b._id) === String(payload.bookingId)
         );
         if (idx !== -1) {
-          state.myBookings[idx] = {
-            ...state.myBookings[idx],
-            paymentStatus: 'paid',
-          };
+          state.myBookings[idx] = { ...state.myBookings[idx], paymentStatus: 'paid' };
         }
         if (
           state.selectedBooking &&
           String(state.selectedBooking._id) === String(payload.bookingId)
         ) {
           state.selectedBooking = { ...state.selectedBooking, paymentStatus: 'paid' };
+        }
+      }
+    });
+
+    wire(deleteFailedBooking, (state, { payload }) => {
+      state.deleteFailedBookingResult = payload ?? null;
+
+      if (payload?.bookingId) {
+        state.myBookings = state.myBookings.filter(
+          (b) => String(b._id) !== String(payload.bookingId)
+        );
+        if (
+          state.selectedBooking &&
+          String(state.selectedBooking._id) === String(payload.bookingId)
+        ) {
+          state.selectedBooking = null;
+        }
+        if (
+          state.createdBooking &&
+          String(state.createdBooking.bookingId) === String(payload.bookingId)
+        ) {
+          state.createdBooking = null;
         }
       }
     });
@@ -1116,7 +841,7 @@ resetSubscriptionBenefitCareAssistant(state) {
       state.cancelBookingResult = payload ?? null;
       if (payload?.bookingId) {
         const idx = state.myBookings.findIndex(
-          (b) => b._id === payload.bookingId || String(b._id) === String(payload.bookingId)
+          (b) => String(b._id) === String(payload.bookingId)
         );
         if (idx !== -1) {
           state.myBookings[idx] = { ...state.myBookings[idx], status: 'cancelled' };
@@ -1134,7 +859,7 @@ resetSubscriptionBenefitCareAssistant(state) {
       state.rateBookingResult = payload ?? null;
       if (payload?.bookingId) {
         const idx = state.myBookings.findIndex(
-          (b) => b._id === payload.bookingId || String(b._id) === String(payload.bookingId)
+          (b) => String(b._id) === String(payload.bookingId)
         );
         if (idx !== -1) {
           state.myBookings[idx] = { ...state.myBookings[idx], isRated: true };
@@ -1148,16 +873,7 @@ resetSubscriptionBenefitCareAssistant(state) {
       }
     });
 
-    wire(fetchSubscriptionBenefitConsultations, (state, { payload }) => {
-  state.subscriptionBenefitConsultations = payload ?? null;
-});
-
-wire(fetchSubscriptionBenefitCareAssistant, (state, { payload }) => {
-  state.subscriptionBenefitCareAssistant = payload ?? null;
-});
-
     wire(downloadOpCard, (state, { payload }) => {
-      // Side effect is browser download — no state mutation needed.
       void payload;
     });
   },
@@ -1168,12 +884,9 @@ wire(fetchSubscriptionBenefitCareAssistant, (state, { payload }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const {
-  // Booking creation
   clearCreatedBooking,
   resetCreateBooking,
-  // Detail
   clearSelectedBooking,
-  // Discovery
   clearDiscovery,
   resetHospitals,
   resetDoctorsByHospital,
@@ -1184,19 +897,17 @@ export const {
   resetBookingOptions,
   resetConsultationCoverage,
   resetPlatformPricing,
-  // Cancel / rate
+  resetAllDoctors,
+  resetPreviousPatientInfo,
+  resetSubscriptionBenefitConsultations,
+  resetSubscriptionBenefitCareAssistant,
+  resetSubscriptionBenefitLabs,
   resetCancelBooking,
   resetRateBooking,
-  // Payment
   resetVerifyPayment,
   resetConfirmCashPayment,
-  resetSubscriptionBenefitConsultations,
-resetSubscriptionBenefitCareAssistant,
-  // Global
-  clearErrors,
-  resetAllDoctors,
   resetDeleteFailedBooking,
-  resetSubscriptionBenefitLabs,
+  clearErrors,
 } = bookingSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1209,7 +920,6 @@ export const selectHospitals                = (s) => s.booking.hospitals;
 export const selectHospitalsLoading         = (s) => s.booking.loading.fetchHospitals              ?? false;
 export const selectHospitalsError           = (s) => s.booking.errors.fetchHospitals               ?? null;
 
-/** hospitalDoctors — also exported as selectDoctorsByHospital */
 export const selectHospitalDoctors          = (s) => s.booking.hospitalDoctors;
 export const selectDoctorsByHospital        = (s) => s.booking.hospitalDoctors;
 export const selectDoctorsByHospitalLoading = (s) => s.booking.loading.fetchHospitalDoctors        ?? false;
@@ -1223,11 +933,15 @@ export const selectDoctorAvailability       = (s) => s.booking.doctorAvailabilit
 export const selectDoctorAvailLoading       = (s) => s.booking.loading.checkDoctorAvailability     ?? false;
 export const selectDoctorAvailError         = (s) => s.booking.errors.checkDoctorAvailability      ?? null;
 
+export const selectAllDoctors               = (s) => s.booking.allDoctors;
+export const selectAllDoctorsMeta           = (s) => s.booking.allDoctorsMeta;
+export const selectAllDoctorsLoading        = (s) => s.booking.loading.fetchAllDoctors             ?? false;
+export const selectAllDoctorsError          = (s) => s.booking.errors.fetchAllDoctors              ?? null;
+
 export const selectLabs                     = (s) => s.booking.labs;
 export const selectLabsLoading              = (s) => s.booking.loading.fetchLabs                   ?? false;
 export const selectLabsError                = (s) => s.booking.errors.fetchLabs                    ?? null;
 
-/** selectedLab — also exported as selectLabDetail */
 export const selectSelectedLab              = (s) => s.booking.selectedLab;
 export const selectLabDetail                = (s) => s.booking.selectedLab;
 export const selectLabDetailLoading         = (s) => s.booking.loading.fetchLabById                ?? false;
@@ -1239,7 +953,6 @@ export const selectBookingOptionsError      = (s) => s.booking.errors.fetchBooki
 
 export const selectTransportEstimate        = (s) => s.booking.transportEstimate;
 export const selectTransportEstimateLoading = (s) => s.booking.loading.fetchTransportEstimate      ?? false;
-/** Short alias used by some components */
 export const selectTransportEstimLoading    = (s) => s.booking.loading.fetchTransportEstimate      ?? false;
 export const selectTransportEstimateError   = (s) => s.booking.errors.fetchTransportEstimate       ?? null;
 
@@ -1247,7 +960,6 @@ export const selectConsultationCoverage     = (s) => s.booking.consultationCover
 export const selectConsultationCoverageLoad = (s) => s.booking.loading.checkConsultationCoverage   ?? false;
 export const selectConsultationCoverageErr  = (s) => s.booking.errors.checkConsultationCoverage    ?? null;
 
-/** followUpEligibility — also exported as selectFollowUpCheck */
 export const selectFollowUpEligibility      = (s) => s.booking.followUpEligibility;
 export const selectFollowUpCheck            = (s) => s.booking.followUpEligibility;
 export const selectFollowUpCheckLoading     = (s) => s.booking.loading.checkFollowUpEligibility    ?? false;
@@ -1257,36 +969,75 @@ export const selectPlatformPricing          = (s) => s.booking.platformPricing;
 export const selectPlatformPricingLoading   = (s) => s.booking.loading.fetchPlatformPricing        ?? false;
 export const selectPlatformPricingError     = (s) => s.booking.errors.fetchPlatformPricing         ?? null;
 
+// ── Previous patient info ─────────────────────────────────────────────────────
+
+export const selectPreviousPatientInfo        = (s) => s.booking.previousPatientInfo;
+/** Convenience — pre-filled patientInfo object only */
+export const selectPreviousPatientInfoData    = (s) => s.booking.previousPatientInfo?.patientInfo ?? null;
+export const selectPreviousPatientInfoLoading = (s) => s.booking.loading.fetchPreviousPatientInfo  ?? false;
+export const selectPreviousPatientInfoError   = (s) => s.booking.errors.fetchPreviousPatientInfo   ?? null;
+
+// ── Subscription benefits ─────────────────────────────────────────────────────
+
+export const selectSubBenefitConsultations        = (s) => s.booking.subscriptionBenefitConsultations;
+export const selectSubBenefitConsultationsLoading = (s) => s.booking.loading.fetchSubscriptionBenefitConsultations ?? false;
+export const selectSubBenefitConsultationsError   = (s) => s.booking.errors.fetchSubscriptionBenefitConsultations  ?? null;
+
+export const selectSubConsultationQuota     = (s) => s.booking.subscriptionBenefitConsultations?.consultations       ?? null;
+export const selectSubConsultationUsed      = (s) => s.booking.subscriptionBenefitConsultations?.consultations?.used ?? 0;
+export const selectSubConsultationRemaining = (s) => s.booking.subscriptionBenefitConsultations?.consultations?.remaining ?? null;
+export const selectSubConsultationModes     = (s) => s.booking.subscriptionBenefitConsultations?.consultations?.modes     ?? null;
+
+export const selectSubBenefitCareAssistant        = (s) => s.booking.subscriptionBenefitCareAssistant;
+export const selectSubBenefitCareAssistantLoading = (s) => s.booking.loading.fetchSubscriptionBenefitCareAssistant ?? false;
+export const selectSubBenefitCareAssistantError   = (s) => s.booking.errors.fetchSubscriptionBenefitCareAssistant  ?? null;
+
+export const selectSubCareAssistantQuota      = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant              ?? null;
+export const selectSubCareAssistantUsed       = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant?.used        ?? 0;
+export const selectSubCareAssistantRemaining  = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant?.remaining   ?? null;
+export const selectSubCareAssistantAllTiers   = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant?.allTiers    ?? [];
+export const selectSubCareAssistantActiveTier = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant?.activeTier  ?? null;
+export const selectSubCareAssistantIncluded   = (s) => s.booking.subscriptionBenefitCareAssistant?.included                   ?? false;
+
+export const selectSubBenefitLabs              = (s) => s.booking.subscriptionBenefitLabs;
+export const selectSubBenefitLabsLoading       = (s) => s.booking.loading.fetchSubscriptionBenefitLabs ?? false;
+export const selectSubBenefitLabsError         = (s) => s.booking.errors.fetchSubscriptionBenefitLabs  ?? null;
+
+export const selectSubLabsDiscountPercent      = (s) => s.booking.subscriptionBenefitLabs?.labs?.discountPercent         ?? 0;
+export const selectSubLabsIncluded             = (s) => s.booking.subscriptionBenefitLabs?.included                      ?? false;
+export const selectSubHomeCollectionIncluded   = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.included      ?? false;
+export const selectSubHomeCollectionRemaining  = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitsRemaining ?? null;
+export const selectSubHomeCollectionUsed       = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitsUsed     ?? 0;
+export const selectSubHomeCollectionUnlimited  = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitUnlimited ?? false;
+
 // ── Booking creation ──────────────────────────────────────────────────────────
 
-export const selectCreatedBooking           = (s) => s.booking.createdBooking;
-export const selectCreateBookingData        = (s) => s.booking.createdBooking;
-export const selectCreateBookingLoading     = (s) => s.booking.createBookingLoading;
-export const selectCreateBookingError       = (s) => s.booking.createBookingError;
-// FIX 2: was in state but never exported
-export const selectCreateBookingStatus      = (s) => s.booking.createBookingStatus;
+export const selectCreatedBooking            = (s) => s.booking.createdBooking;
+export const selectCreateBookingData         = (s) => s.booking.createdBooking;
+export const selectCreateBookingLoading      = (s) => s.booking.createBookingLoading;
+export const selectCreateBookingError        = (s) => s.booking.createBookingError;
+export const selectCreateBookingStatus       = (s) => s.booking.createBookingStatus;
 
-/** Scoped sub-fields of createdBooking */
-export const selectCreatedRazorpayOrder     = (s) => s.booking.createdBooking?.razorpayOrder         ?? null;
-export const selectCreatedMapRoutes         = (s) => s.booking.createdBooking?.mapRoutes             ?? null;
-/** diagnostic-home returns mapRoute (singular) */
-export const selectCreatedMapRoute          = (s) => s.booking.createdBooking?.mapRoute              ?? null;
-export const selectCreatedFareBreakdown     = (s) => s.booking.createdBooking?.fareBreakdown         ?? null;
-export const selectCreatedCareAssistant     = (s) => s.booking.createdBooking?.careAssistantAssigned ?? null;
-export const selectCreatedOpNumber          = (s) => s.booking.createdBooking?.opNumber              ?? null;
-export const selectCreatedRides             = (s) => s.booking.createdBooking?.rides                 ?? null;
-export const selectCreatedBookingCode       = (s) => s.booking.createdBooking?.bookingCode           ?? null;
-export const selectCreatedBookingId         = (s) => s.booking.createdBooking?.bookingId             ?? null;
-export const selectCreatedSubCoverage       = (s) => s.booking.createdBooking?.subscriptionCoverage  ?? null;
-export const selectCreatedTransportSummary  = (s) => s.booking.createdBooking?.transportSummary      ?? null;
-export const selectCreatedDiagnosticDiscount = (s) => s.booking.createdBooking?.diagnosticDiscount   ?? null;
-export const selectCreatedFollowUpDetails   = (s) => s.booking.createdBooking?.followUpDetails       ?? null;
+export const selectCreatedRazorpayOrder      = (s) => s.booking.createdBooking?.razorpayOrder         ?? null;
+export const selectCreatedMapRoutes          = (s) => s.booking.createdBooking?.mapRoutes             ?? null;
+export const selectCreatedMapRoute           = (s) => s.booking.createdBooking?.mapRoute              ?? null;
+export const selectCreatedFareBreakdown      = (s) => s.booking.createdBooking?.fareBreakdown         ?? null;
+export const selectCreatedCareAssistant      = (s) => s.booking.createdBooking?.careAssistantAssigned ?? null;
+export const selectCreatedOpNumber           = (s) => s.booking.createdBooking?.opNumber              ?? null;
+export const selectCreatedRides              = (s) => s.booking.createdBooking?.rides                 ?? null;
+export const selectCreatedBookingCode        = (s) => s.booking.createdBooking?.bookingCode           ?? null;
+export const selectCreatedBookingId          = (s) => s.booking.createdBooking?.bookingId             ?? null;
+export const selectCreatedSubCoverage        = (s) => s.booking.createdBooking?.subscriptionCoverage  ?? null;
+export const selectCreatedTransportSummary   = (s) => s.booking.createdBooking?.transportSummary      ?? null;
+export const selectCreatedDiagnosticDiscount = (s) => s.booking.createdBooking?.diagnosticDiscount    ?? null;
+export const selectCreatedFollowUpDetails    = (s) => s.booking.createdBooking?.followUpDetails       ?? null;
+export const selectCreatedConsultationSession = (s) => s.booking.createdBooking?.consultationSession  ?? null;
+export const selectCreatedWalletSplit        = (s) => s.booking.createdBooking?.walletSplit           ?? null;
 
 // ── My bookings ───────────────────────────────────────────────────────────────
 
 export const selectMyBookings               = (s) => s.booking.myBookings;
 export const selectMyBookingsMeta           = (s) => s.booking.myBookingsMeta;
-// FIX 2: missing selectors added
 export const selectMyBookingsLoading        = (s) => s.booking.loading.fetchMyBookings              ?? false;
 export const selectMyBookingsError          = (s) => s.booking.errors.fetchMyBookings               ?? null;
 
@@ -1294,10 +1045,8 @@ export const selectSelectedBooking          = (s) => s.booking.selectedBooking;
 export const selectActiveBooking            = (s) => s.booking.selectedBooking;
 export const selectBookingMapRoute          = (s) => s.booking.selectedBooking?.mapRoute            ?? null;
 
-// FIX 2: added
 export const selectMyBookingByIdLoading     = (s) => s.booking.loading.fetchMyBookingById           ?? false;
 export const selectMyBookingByIdError       = (s) => s.booking.errors.fetchMyBookingById            ?? null;
-/** Alias — some components use selectActiveBookingLoading */
 export const selectActiveBookingLoading     = (s) => s.booking.loading.fetchMyBookingById           ?? false;
 export const selectActiveBookingError       = (s) => s.booking.errors.fetchMyBookingById            ?? null;
 
@@ -1314,70 +1063,22 @@ export const selectDownloadOpCardError      = (s) => s.booking.errors.downloadOp
 
 // ── Payment ───────────────────────────────────────────────────────────────────
 
-export const selectVerifyPaymentResult      = (s) => s.booking.verifyPaymentResult;
-export const selectVerifyPaymentLoading     = (s) => s.booking.loading.verifyRazorpayPayment        ?? false;
-export const selectVerifyPaymentError       = (s) => s.booking.errors.verifyRazorpayPayment         ?? null;
+export const selectVerifyPaymentResult       = (s) => s.booking.verifyPaymentResult;
+export const selectVerifyPaymentLoading      = (s) => s.booking.loading.verifyRazorpayPayment       ?? false;
+export const selectVerifyPaymentError        = (s) => s.booking.errors.verifyRazorpayPayment        ?? null;
 
 export const selectConfirmCashPaymentResult  = (s) => s.booking.confirmCashPaymentResult;
 export const selectConfirmCashPaymentLoading = (s) => s.booking.loading.confirmCashPayment          ?? false;
 export const selectConfirmCashPaymentError   = (s) => s.booking.errors.confirmCashPayment           ?? null;
 
-// ── Generic per-thunk access (factory selectors) ─────────────────────────────
+export const selectDeleteFailedBookingResult  = (s) => s.booking.deleteFailedBookingResult;
+export const selectDeleteFailedBookingLoading = (s) => s.booking.loading.deleteFailedBooking        ?? false;
+export const selectDeleteFailedBookingError   = (s) => s.booking.errors.deleteFailedBooking         ?? null;
+
+// ── Generic factory selectors ─────────────────────────────────────────────────
 
 export const selectLoading = (k) => (s) => s.booking.loading[k] ?? false;
 export const selectError   = (k) => (s) => s.booking.errors[k]  ?? null;
-
-
-export const selectSubBenefitConsultations        = (s) => s.booking.subscriptionBenefitConsultations;
-export const selectSubBenefitConsultationsLoading = (s) => s.booking.loading.fetchSubscriptionBenefitConsultations ?? false;
-export const selectSubBenefitConsultationsError   = (s) => s.booking.errors.fetchSubscriptionBenefitConsultations  ?? null;
-
-// Convenience sub-selectors
-export const selectSubConsultationQuota     = (s) => s.booking.subscriptionBenefitConsultations?.consultations ?? null;
-export const selectSubConsultationUsed      = (s) => s.booking.subscriptionBenefitConsultations?.consultations?.used ?? 0;
-export const selectSubConsultationRemaining = (s) => s.booking.subscriptionBenefitConsultations?.consultations?.remaining ?? null;
-export const selectSubConsultationModes     = (s) => s.booking.subscriptionBenefitConsultations?.consultations?.modes ?? null;
-
-export const selectSubBenefitCareAssistant        = (s) => s.booking.subscriptionBenefitCareAssistant;
-export const selectSubBenefitCareAssistantLoading = (s) => s.booking.loading.fetchSubscriptionBenefitCareAssistant ?? false;
-export const selectSubBenefitCareAssistantError   = (s) => s.booking.errors.fetchSubscriptionBenefitCareAssistant  ?? null;
-
-// Convenience sub-selectors
-export const selectSubCareAssistantQuota     = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant ?? null;
-export const selectSubCareAssistantUsed      = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant?.used ?? 0;
-export const selectSubCareAssistantRemaining = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant?.remaining ?? null;
-export const selectSubCareAssistantAllTiers  = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant?.allTiers ?? [];
-export const selectSubCareAssistantActiveTier = (s) => s.booking.subscriptionBenefitCareAssistant?.careAssistant?.activeTier ?? null;
-export const selectSubCareAssistantIncluded  = (s) => s.booking.subscriptionBenefitCareAssistant?.included ?? false;
-
-
-export const selectAllDoctors         = (s) => s.booking.allDoctors;
-export const selectAllDoctorsMeta     = (s) => s.booking.allDoctorsMeta;
-export const selectAllDoctorsLoading  = (s) => s.booking.loading.fetchAllDoctors  ?? false;
-export const selectAllDoctorsError    = (s) => s.booking.errors.fetchAllDoctors   ?? null;
-
-
-// ── deleteFailedBooking ───────────────────────────────────────────────────────
-export const selectDeleteFailedBookingResult  = (s) => s.booking.deleteFailedBookingResult;
-export const selectDeleteFailedBookingLoading = (s) => s.booking.loading.deleteFailedBooking ?? false;
-export const selectDeleteFailedBookingError   = (s) => s.booking.errors.deleteFailedBooking  ?? null;
-
-// ── consultationSession from doctor-online createdBooking ─────────────────────
-export const selectCreatedConsultationSession = (s) => s.booking.createdBooking?.consultationSession ?? null;
-
-// selectors
-export const selectSubBenefitLabs              = (s) => s.booking.subscriptionBenefitLabs;
-export const selectSubBenefitLabsLoading       = (s) => s.booking.loading.fetchSubscriptionBenefitLabs ?? false;
-export const selectSubBenefitLabsError         = (s) => s.booking.errors.fetchSubscriptionBenefitLabs  ?? null;
-
-// convenience sub-selectors
-export const selectSubLabsDiscountPercent      = (s) => s.booking.subscriptionBenefitLabs?.labs?.discountPercent ?? 0;
-export const selectSubLabsIncluded             = (s) => s.booking.subscriptionBenefitLabs?.included ?? false;
-export const selectSubHomeCollectionIncluded   = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.included ?? false;
-export const selectSubHomeCollectionRemaining  = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitsRemaining ?? null;
-export const selectSubHomeCollectionUsed       = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitsUsed ?? 0;
-export const selectSubHomeCollectionUnlimited  = (s) => s.booking.subscriptionBenefitLabs?.homeCollection?.homeVisitUnlimited ?? false;
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS

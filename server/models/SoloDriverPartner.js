@@ -5,23 +5,27 @@ const { Schema } = mongoose;
 /**
  * SoloDriverPartner Model — Likeson.in
  *
- * Self-employed driver: owns their own vehicle, no parent agency, IS the
- * settling entity (own PartnerWallet, partnerRole='solodriverpartner').
+ * Self-employed driver: owns their own vehicle, NO parent agency.
+ * This model IS the complete entity — no companion Driver doc needed.
+ * Driver model is for TransportPartner agency drivers ONLY.
  *
- * VEHICLE — lives in standalone `Vehicle` collection now (ownerType=
- * 'SoloDriverPartner', ownerId=this._id), not embedded. `vehicleStatus`
- * below is a small read cache synced by Vehicle.post-save — NOT the
- * source of truth. Use getVehicle() for the live doc.
+ * VEHICLE — lives in standalone `Vehicle` collection (ownerType=
+ * 'SoloDriverPartner', ownerId=this._id). `vehicleStatus` below is a
+ * small read cache synced by Vehicle.post-save — NOT source of truth.
+ * Use getVehicle() for the live doc.
  *
  * MONEY — no embedded earnings/settlement block. PartnerWallet (keyed off
  * `user`, partnerRole='solodriverpartner') is the only source of truth.
+ *
+ * DISPATCH — geo queries run on Vehicle collection (top-level 2dsphere).
+ * No Driver doc involved. isDispatchReady virtual checks partner-level
+ * fields only.
  *
  * §1 Sub-schemas  §2 Main schema  §3 Virtuals  §4 Pre-save  §5 Methods  §6 Indexes
  */
 
 // ── §1  Sub-Schemas ───────────────────────────────────────────────────────────
 
-/** CONFIG, not balance — mirrors TransportPartner.platformFeeOverride. Keep. */
 const partnerPlatformFeeSchema = new Schema(
   {
     type: {
@@ -92,11 +96,11 @@ const soloKycSchema = new Schema(
   { _id: false }
 );
 
-/** Record-keeping only — payout source is PartnerWallet, not this. */
 const soloBankSchema = new Schema(
   {
     accountHolderName: { type: String, trim: true },
     accountNumber:     { type: String, trim: true, select: false },
+    accountLast4:      { type: String, maxlength: 4 },
     ifscCode: {
       type:      String,
       uppercase: true,
@@ -172,8 +176,7 @@ const ratingSummarySchema = new Schema(
 
 /**
  * vehicleStatus — read cache only, synced by Vehicle.post-save hook.
- * Replaces the old embedded `vehicle` object. For full vehicle data
- * (docs, photos, GPS) always query the Vehicle collection directly.
+ * For full vehicle data (docs, photos, GPS) always query Vehicle collection.
  */
 const vehicleStatusSchema = new Schema(
   {
@@ -190,6 +193,95 @@ const vehicleStatusSchema = new Schema(
   { _id: false }
 );
 
+/**
+ * dispatchStateSchema — replaces Driver doc for dispatch purposes.
+ * Tracks online/offline and current ride directly on SoloDriverPartner.
+ */
+const dispatchStateSchema = new Schema(
+  {
+    status: {
+      type:    String,
+      enum:    ['Available', 'On-Trip', 'Offline', 'On-Break'],
+      default: 'Offline',
+    },
+    currentRide:     { type: Schema.Types.ObjectId, ref: 'Ride', default: null },
+    lastStatusAt:    { type: Date },
+    shiftType: {
+      type:    String,
+      enum:    ['Morning', 'Afternoon', 'Evening', 'Night', 'Full-Day', 'On-Call'],
+      default: 'Full-Day',
+    },
+    shiftStart:      { type: String, default: '06:00' },
+    shiftEnd:        { type: String, default: '22:00' },
+    daysAvailable:   [{ type: String, enum: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] }],
+  },
+  { _id: false }
+);
+
+/**
+ * rewardsSchema — gamification layer, NOT money.
+ * Coins separate from PartnerWallet (real-money ledger).
+ */
+const badgeSchema = new Schema(
+  {
+    badgeId: {
+      type: String,
+      enum: [
+        'FIRST_RIDE', 'RIDES_10', 'RIDES_50', 'RIDES_100', 'RIDES_500',
+        'RIDES_1000', 'TOP_RATED', 'PERFECT_WEEK', 'ZERO_CANCEL_MONTH',
+        'SAFE_DRIVER', 'NIGHT_OWL', 'LONG_HAUL', 'VERIFIED_DRIVER',
+        'LOYAL_DRIVER_1Y', 'LOYAL_DRIVER_2Y', 'EARLY_ADOPTER', 'SOLO_PARTNER',
+      ],
+      required: true,
+    },
+    name:        { type: String, required: true },
+    description: { type: String },
+    iconUrl:     { type: String },
+    earnedAt:    { type: Date, default: Date.now },
+    isActive:    { type: Boolean, default: true },
+  },
+  { _id: true }
+);
+
+const coinTxnSchema = new Schema(
+  {
+    type: {
+      type:     String,
+      enum:     ['EARN', 'REDEEM', 'EXPIRE', 'BONUS', 'ADMIN_CREDIT', 'ADMIN_DEBIT'],
+      required: true,
+    },
+    amount:      { type: Number, required: true, min: 0 },
+    balance:     { type: Number, required: true, min: 0 },
+    description: { type: String, required: true },
+    referenceId: { type: Schema.Types.ObjectId },
+    referenceModel: {
+      type:    String,
+      enum:    ['Ride', 'Redemption', null],
+      default: null,
+    },
+    expiresAt: { type: Date },
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  },
+  { timestamps: { createdAt: true, updatedAt: false } }
+);
+
+const rewardsSchema = new Schema(
+  {
+    coinBalance:      { type: Number, default: 0, min: 0 },
+    totalCoinsEarned: { type: Number, default: 0, min: 0 },
+    totalCoinsRedeem: { type: Number, default: 0, min: 0 },
+    coinTransactions: [coinTxnSchema],
+    badges:           [badgeSchema],
+    tier: {
+      type:    String,
+      enum:    ['Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond'],
+      default: 'Bronze',
+    },
+    tierUpdatedAt: { type: Date },
+  },
+  { _id: false }
+);
+
 // ── §2  Main Schema ───────────────────────────────────────────────────────────
 
 const soloDriverPartnerSchema = new Schema(
@@ -201,18 +293,6 @@ const soloDriverPartnerSchema = new Schema(
       required: [true, 'User reference is required'],
       unique:   true,
       index:    true,
-    },
-
-    /**
-     * driverProfile — companion Driver doc for dispatch (geo queries,
-     * status enum) shared with agency drivers. Created via
-     * createDriverProfile() once onboarding completes — see §5.
-     */
-    driverProfile: {
-      type:    Schema.Types.ObjectId,
-      ref:     'Driver',
-      default: null,
-      index:   true,
     },
 
     // ── Personal Details ──────────────────────────────────────────────────────
@@ -299,9 +379,9 @@ const soloDriverPartnerSchema = new Schema(
 
     // ── Service Zones & Pricing ───────────────────────────────────────────────
     serviceZones: { type: [serviceZoneSchema], default: [] },
-    pricing: { type: pricingSchema, default: () => ({}) },
+    pricing:      { type: pricingSchema, default: () => ({}) },
 
-    // ── Platform Fee Override (config — keep, not money state) ───────────────
+    // ── Platform Fee Override (config — NOT money state) ──────────────────────
     platformFeeOverride: {
       type:    partnerPlatformFeeSchema,
       default: null,
@@ -320,12 +400,14 @@ const soloDriverPartnerSchema = new Schema(
     razorpayContactId:     { type: String, select: false },
     razorpayFundAccountId: { type: String, select: false },
 
-    // ── Availability ──────────────────────────────────────────────────────────
-    isAvailable: { type: Boolean, default: false },
+    // ── Availability / Dispatch State ─────────────────────────────────────────
+    // isAvailable = master toggle. dispatch = fine-grained state machine.
+    isAvailable:       { type: Boolean, default: false },
     availabilityHours: {
       start: { type: String, default: '06:00' },
       end:   { type: String, default: '22:00' },
     },
+    dispatch: { type: dispatchStateSchema, default: () => ({}) },
 
     // ── Emergency Contact ─────────────────────────────────────────────────────
     emergencyContact: {
@@ -350,6 +432,9 @@ const soloDriverPartnerSchema = new Schema(
       onTimeArrivalRate:        { type: Number, default: 100, min: 0, max: 100 },
       lastRideAt:               { type: Date },
     },
+
+    // ── Rewards (gamification — NOT money) ───────────────────────────────────
+    rewards: { type: rewardsSchema, default: () => ({}) },
 
     // ── Partnership Status ────────────────────────────────────────────────────
     partnershipStatus: {
@@ -399,13 +484,16 @@ soloDriverPartnerSchema.virtual('hasActiveVehicle').get(function () {
   );
 });
 
+/**
+ * isDispatchReady — no Driver doc check. Vehicle geo query is the dispatch mechanism.
+ */
 soloDriverPartnerSchema.virtual('isDispatchReady').get(function () {
   return (
     this.partnershipStatus === 'active' &&
     this.isAvailable &&
     this.isOnboardingComplete &&
     this.hasActiveVehicle &&
-    !!this.driverProfile
+    this.kyc?.isVerified === true
   );
 });
 
@@ -419,9 +507,7 @@ soloDriverPartnerSchema.virtual('hasExpiringCompliance').get(function () {
     (this.kyc?.drivingLicenceExpiry  && this.kyc.drivingLicenceExpiry  < soon) ||
     (this.kyc?.psvBadgeExpiry        && this.kyc.psvBadgeExpiry        < soon) ||
     (this.medicalFitness?.expiryDate && this.medicalFitness.expiryDate < soon)
-    // Vehicle document expiries (insurance/pollution/fitness/permit) now
-    // live on the Vehicle doc — check via getVehicle().hasExpiringDocs
-    // (virtual on Vehicle model) rather than here.
+    // Vehicle doc expiries: check via getVehicle().hasExpiringDocs
   );
 });
 
@@ -477,7 +563,6 @@ soloDriverPartnerSchema.pre('save', async function () {
   }
 
   // Onboarding complete check — vehicleStatus is the synced cache
-  // (kept current by Vehicle.post-save), safe to read directly here.
   if (
     this.legalName &&
     this.phone &&
@@ -510,6 +595,20 @@ soloDriverPartnerSchema.pre('save', async function () {
       (checks.filter(Boolean).length / checks.length) * 100
     );
   }
+
+  // Tier update based on rides
+  if (this.isModified('stats.totalRidesCompleted')) {
+    const rides = this.stats.totalRidesCompleted;
+    let tier = 'Bronze';
+    if      (rides >= 1000) tier = 'Diamond';
+    else if (rides >= 500)  tier = 'Platinum';
+    else if (rides >= 200)  tier = 'Gold';
+    else if (rides >= 50)   tier = 'Silver';
+    if (this.rewards.tier !== tier) {
+      this.rewards.tier          = tier;
+      this.rewards.tierUpdatedAt = new Date();
+    }
+  }
 });
 
 // ── §5  Instance Methods ──────────────────────────────────────────────────────
@@ -537,58 +636,38 @@ soloDriverPartnerSchema.methods.getOpenLiabilities = function () {
   });
 };
 
-/**
- * createDriverProfile — was referenced in comments on the old schema but
- * never implemented. Call once onboarding completes (isOnboardingComplete
- * flips true) so the dispatch engine can geo-query this solo partner
- * identically to agency drivers via the Driver collection.
- * Idempotent — returns existing Driver if driverProfile already set.
- */
-soloDriverPartnerSchema.methods.createDriverProfile = async function () {
-  if (this.driverProfile) {
-    return mongoose.model('Driver').findById(this.driverProfile);
-  }
-  if (!this.isOnboardingComplete) {
-    throw new Error('Cannot create driver profile before onboarding is complete');
-  }
-
-  const vehicle = await this.getVehicle();
-
-  const Driver = mongoose.model('Driver');
-  const driver = await Driver.create({
-    user:        this.user,
-    soloPartner: this._id,
-    legalName:   this.legalName,
-    dateOfBirth: this.dateOfBirth,
-    gender:      this.gender,
-    photoUrl:    this.profilePhotoUrl,
-    phone:       this.phone,
-    altPhone:    this.altPhone,
-    whatsappNumber: this.whatsappNumber,
-    email:       this.email,
-    yearsOfExperience:      this.yearsOfExperience,
-    languagesSpoken:        this.languagesSpoken,
-    hasMedicalTransportExp: this.hasMedicalTransportExp,
-    hasAmbulanceExp:        this.hasAmbulanceExp,
-    kyc: {
-      aadhaarNumber:         undefined, // not re-readable (select:false) — sync via service layer if needed
-      drivingLicenceNumber:  this.kyc.drivingLicenceNumber,
-      drivingLicenceExpiry:  this.kyc.drivingLicenceExpiry,
-      drivingLicenceDocUrl:  this.kyc.drivingLicenceDocUrl,
-      psvBadgeNumber:        this.kyc.psvBadgeNumber,
-      psvBadgeExpiry:        this.kyc.psvBadgeExpiry,
-      verificationStatus:    this.kyc.verificationStatus === 'verified' ? 'Verified' : 'Pending',
-    },
-    emergencyContact: this.emergencyContact,
+soloDriverPartnerSchema.methods.earnCoins = async function (amount, description, referenceId, referenceModel) {
+  this.rewards.coinBalance      += amount;
+  this.rewards.totalCoinsEarned += amount;
+  this.rewards.coinTransactions.push({
+    type: 'EARN', amount,
+    balance:        this.rewards.coinBalance,
+    description, referenceId, referenceModel,
+    expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
   });
+  return this.save();
+};
 
-  if (vehicle) {
-    await driver.assignVehicle(vehicle._id);
+soloDriverPartnerSchema.methods.redeemCoins = async function (amount, description, referenceId) {
+  if (this.rewards.coinBalance < amount) {
+    throw new Error(`Insufficient coins. Balance: ${this.rewards.coinBalance}, Requested: ${amount}`);
   }
+  this.rewards.coinBalance      -= amount;
+  this.rewards.totalCoinsRedeem += amount;
+  this.rewards.coinTransactions.push({
+    type: 'REDEEM', amount,
+    balance:        this.rewards.coinBalance,
+    description, referenceId,
+    referenceModel: 'Redemption',
+  });
+  return this.save();
+};
 
-  this.driverProfile = driver._id;
-  await this.save();
-  return driver;
+soloDriverPartnerSchema.methods.awardBadge = async function (badgeId, name, description, iconUrl) {
+  const already = this.rewards.badges.some(b => b.badgeId === badgeId);
+  if (already) return this;
+  this.rewards.badges.push({ badgeId, name, description, iconUrl });
+  return this.save();
 };
 
 // ── §6  Indexes ───────────────────────────────────────────────────────────────
@@ -598,6 +677,7 @@ soloDriverPartnerSchema.index({ 'serviceZones.city': 1, 'serviceZones.state': 1 
 soloDriverPartnerSchema.index({ 'kyc.verificationStatus': 1 });
 soloDriverPartnerSchema.index({ 'kyc.drivingLicenceExpiry': 1 });
 soloDriverPartnerSchema.index({ 'medicalFitness.expiryDate': 1 });
+soloDriverPartnerSchema.index({ 'dispatch.status': 1 });
 
 const SoloDriverPartner = mongoose.model('SoloDriverPartner', soloDriverPartnerSchema);
 export default SoloDriverPartner;

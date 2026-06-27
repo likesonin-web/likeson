@@ -1,27 +1,4 @@
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * transportPartnerSlice.js — Likeson.in
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * Production Redux Toolkit slice covering ALL routes in TransportPartnerRoutes.js
- *
- *  §A  Transport Partner — own profile, KYC, settings, security
- *  §B  Transport Partner — vehicle management
- *  §C  Transport Partner — driver management
- *  §D  Transport Partner — bank & settlement
- *  §E  Transport Partner — service zones & pricing
- *  §G  Transport Partner — dashboard stats & activity logs
- *  §H  Driver — own profile, KYC, shift, location, status, rewards, bank, logs
- *        + photo, emergency, notifs, performance, coins, certs, kyc-doc,
- *          kyc-licence, medical-fitness, compliance, onboarding
- *  §I  Admin — partner management (list, create, update, status, kyc, notes, delete)
- *  §J  Admin — vehicle verification
- *  §K  Admin — driver management (platform-wide)
- *  §L  Admin — pricing / platform-fee overrides / settlement
- *  §M  Admin — system logs & stats
- *
- * ═══════════════════════════════════════════════════════════════════════════════
- */
+ 
 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API from '../api';

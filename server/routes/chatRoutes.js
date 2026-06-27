@@ -1,67 +1,46 @@
-/**
- * routes/chatRoutes.js
- * ─────────────────────────────────────────────────────────────────────────────
- * Complete Chat + Agora Call router — no separate controller file.
- * All logic inline via chatService / agoraService.
- *
- * Mount:  app.use('/api/chat', chatRouter);
- *
- * Role matrix (who can use what):
- *  ALL authenticated users   → DM, send message, media, reactions, read, search
- *  doctor / hospital         → create group, order-linked chat, consultation thread
- *  admin / superadmin        → any conversation, delete any message, view all
- *  blood_bank / lab_partner  → service-linked conversations
- *  pharmacy / care_assistant → order / service conversations
- *  finance                   → read-only access to order conversations
- *  transportpartner / driver / solodriverpartner → order chat with customer
- * ─────────────────────────────────────────────────────────────────────────────
- */
+ 
 
 import express from 'express';
 import multer  from 'multer';
-import crypto  from 'crypto';
 
-import { protect, authorize }  from '../middleware/authMiddleware.js';
+import { protect, authorize } from '../middleware/authMiddleware.js';
 import asyncHandler            from '../utils/asyncHandler.js';
 import chatService             from '../services/chatService.js';
-import agoraService            from '../services/chat/agoraService.js';
-import { Call }                from '../models/chat.js';
-import agoraConfig             from '../config/agora.config.js';
+import agoraService             from '../services/chat/agoraService.js';
+import { Call, Conversation, Message } from '../models/chat.js';
 
 const router = express.Router();
 
 // ─── Multer — in-memory for ImageKit upload ───────────────────────────────────
 
+const ALLOWED_MIME_TYPES = [
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+  'video/mp4', 'video/quicktime', 'video/webm',
+  'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/mp4',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+];
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits:  { fileSize: 50 * 1024 * 1024 }, // 50 MB
   fileFilter: (_req, file, cb) => {
-    const allowed = [
-      'image/jpeg', 'image/png', 'image/webp', 'image/gif',
-      'video/mp4', 'video/quicktime', 'video/webm',
-      'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/mp4',
-      'application/pdf',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    ];
-    cb(null, allowed.includes(file.mimetype));
+    if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+      // FIX: pass an Error so multer surfaces it via next(err) instead of
+      // silently dropping req.file and producing a misleading "No file uploaded".
+      return cb(Object.assign(new Error(`Unsupported file type: ${file.mimetype}`), { statusCode: 400 }));
+    }
+    cb(null, true);
   },
 });
-
-// ─── ALL_ROLES — everyone who is authenticated ────────────────────────────────
-const ALL_ROLES = [
-  'superadmin', 'admin', 'doctor', 'hospital', 'transportpartner',
-  'driver', 'solodriverpartner', 'customer', 'pharmacy', 'care_assistant',
-  'finance', 'lab_partner', 'blood_bank',
-];
 
 // ─── Shorthand middleware combos ─────────────────────────────────────────────
 const auth        = [protect];
 const adminOnly   = [protect, authorize('superadmin', 'admin')];
 const staffRoles  = [protect, authorize('superadmin', 'admin', 'doctor', 'hospital', 'pharmacy', 'lab_partner', 'blood_bank', 'care_assistant', 'finance')];
-const healthRoles = [protect, authorize('superadmin', 'admin', 'doctor', 'hospital')];
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ── A. CONVERSATIONS ─────────────────────────────────────────────────────────
@@ -69,7 +48,6 @@ const healthRoles = [protect, authorize('superadmin', 'admin', 'doctor', 'hospit
 
 /**
  * GET /api/chat/conversations
- * Returns paginated inbox for current user.
  * Query: ?page=1&limit=20&type=direct|group|order|service|support
  */
 router.get(
@@ -88,9 +66,7 @@ router.get(
 
 /**
  * POST /api/chat/conversations/direct
- * Start or retrieve a DM conversation.
  * Body: { targetUserId }
- * All roles.
  */
 router.post(
   '/conversations/direct',
@@ -106,8 +82,6 @@ router.post(
 
 /**
  * POST /api/chat/conversations/group
- * Create group conversation.
- * Roles: all (any user can create a group)
  * Body: { name, description?, memberIds[] }
  */
 router.post(
@@ -128,8 +102,7 @@ router.post(
 
 /**
  * POST /api/chat/conversations/linked
- * Create a service/order-linked conversation (internal use by order service).
- * Roles: admin, doctor, hospital, pharmacy, lab_partner, blood_bank, care_assistant
+ * Roles: admin, doctor, hospital, pharmacy, lab_partner, blood_bank, care_assistant, finance
  * Body: { type, refModel, refId, participantIds[], name? }
  */
 router.post(
@@ -137,86 +110,63 @@ router.post(
   staffRoles,
   asyncHandler(async (req, res) => {
     const { type, refModel, refId, participantIds, name } = req.body;
-    const convo = await chatService.createLinkedConversation({
-      type, refModel, refId, participantIds, name,
-    });
+    const convo = await chatService.createLinkedConversation({ type, refModel, refId, participantIds, name });
     res.status(201).json({ success: true, conversation: convo });
   }),
 );
 
 /**
  * GET /api/chat/conversations/:conversationId
- * Get a single conversation (with participants populated).
  */
 router.get(
   '/conversations/:conversationId',
   auth,
   asyncHandler(async (req, res) => {
-    const convo = await chatService.getConversationById(
-      req.params.conversationId,
-      req.user._id,
-    );
+    const convo = await chatService.getConversationById(req.params.conversationId, req.user._id);
     res.json({ success: true, conversation: convo });
   }),
 );
 
 /**
  * PATCH /api/chat/conversations/:conversationId
- * Update group name / description / avatar.
- * Only group admins.
  * Body: { name?, description?, avatar? }
  */
 router.patch(
   '/conversations/:conversationId',
   auth,
   asyncHandler(async (req, res) => {
-    const convo = await chatService.updateGroupConversation(
-      req.params.conversationId,
-      req.user._id,
-      req.body,
-    );
+    const convo = await chatService.updateGroupConversation(req.params.conversationId, req.user._id, req.body);
     res.json({ success: true, conversation: convo });
   }),
 );
 
 /**
  * POST /api/chat/conversations/:conversationId/members
- * Add members to group.
  * Body: { memberIds[] }
  */
 router.post(
   '/conversations/:conversationId/members',
   auth,
   asyncHandler(async (req, res) => {
-    const convo = await chatService.addGroupMembers(
-      req.params.conversationId,
-      req.user._id,
-      req.body.memberIds || [],
-    );
+    const convo = await chatService.addGroupMembers(req.params.conversationId, req.user._id, req.body.memberIds || []);
     res.json({ success: true, conversation: convo });
   }),
 );
 
 /**
  * DELETE /api/chat/conversations/:conversationId/members/:memberId
- * Remove member (admin) or leave group (self).
  */
 router.delete(
   '/conversations/:conversationId/members/:memberId',
   auth,
   asyncHandler(async (req, res) => {
-    const convo = await chatService.removeGroupMember(
-      req.params.conversationId,
-      req.user._id,
-      req.params.memberId,
-    );
+    const convo = await chatService.removeGroupMember(req.params.conversationId, req.user._id, req.params.memberId);
     res.json({ success: true, conversation: convo });
   }),
 );
 
 /**
  * POST /api/chat/conversations/:conversationId/block
- * Block a direct conversation (mutes messages + calls).
  */
 router.post(
   '/conversations/:conversationId/block',
@@ -229,7 +179,6 @@ router.post(
 
 /**
  * PATCH /api/chat/conversations/:conversationId/archive
- * Archive/unarchive a conversation for the current user.
  * Body: { archive: true|false }
  */
 router.patch(
@@ -237,7 +186,6 @@ router.patch(
   auth,
   asyncHandler(async (req, res) => {
     const { archive = true } = req.body;
-    const { Conversation } = await import('../models/chat.js');
     await Conversation.updateOne(
       { _id: req.params.conversationId, 'participants.user': req.user._id },
       { $set: { 'participants.$.isArchived': archive } },
@@ -248,7 +196,6 @@ router.patch(
 
 /**
  * PATCH /api/chat/conversations/:conversationId/mute
- * Mute / unmute conversation for current user.
  * Body: { mute: true|false, mutedUntil?: ISO date }
  */
 router.patch(
@@ -256,7 +203,6 @@ router.patch(
   auth,
   asyncHandler(async (req, res) => {
     const { mute = true, mutedUntil } = req.body;
-    const { Conversation } = await import('../models/chat.js');
     await Conversation.updateOne(
       { _id: req.params.conversationId, 'participants.user': req.user._id },
       {
@@ -276,7 +222,6 @@ router.patch(
 
 /**
  * GET /api/chat/conversations/:conversationId/messages
- * Paginated messages — cursor-based (before=messageId).
  * Query: ?limit=50&before=<messageId>
  */
 router.get(
@@ -284,18 +229,15 @@ router.get(
   auth,
   asyncHandler(async (req, res) => {
     const { limit = 50, before } = req.query;
-    const messages = await chatService.getMessages(
-      req.params.conversationId,
-      req.user._id,
-      { limit: parseInt(limit, 10), before },
-    );
+    const messages = await chatService.getMessages(req.params.conversationId, req.user._id, {
+      limit: parseInt(limit, 10), before,
+    });
     res.json({ success: true, messages });
   }),
 );
 
 /**
  * POST /api/chat/conversations/:conversationId/messages
- * Send a text / location / contact / sticker / order_card message.
  * Body: { type, text?, location?, cardPayload?, replyTo? }
  */
 router.post(
@@ -306,11 +248,7 @@ router.post(
     const msg = await chatService.sendMessage({
       conversationId: req.params.conversationId,
       senderId:       req.user._id,
-      type,
-      text,
-      location,
-      cardPayload,
-      replyTo,
+      type, text, location, cardPayload, replyTo,
     });
     res.status(201).json({ success: true, message: msg });
   }),
@@ -318,7 +256,6 @@ router.post(
 
 /**
  * POST /api/chat/conversations/:conversationId/messages/media
- * Upload image / video / audio / file.
  * Multipart: field name = 'file'
  */
 router.post(
@@ -343,39 +280,42 @@ router.post(
 
 /**
  * POST /api/chat/conversations/:conversationId/messages/read
- * Mark all messages in conversation as read for current user.
  */
 router.post(
   '/conversations/:conversationId/messages/read',
   auth,
   asyncHandler(async (req, res) => {
-    const result = await chatService.markMessagesRead(
-      req.params.conversationId,
-      req.user._id,
-    );
+    const result = await chatService.markMessagesRead(req.params.conversationId, req.user._id);
+    res.json({ success: true, ...result });
+  }),
+);
+
+/**
+ * POST /api/chat/conversations/:conversationId/messages/delivered
+ */
+router.post(
+  '/conversations/:conversationId/messages/delivered',
+  auth,
+  asyncHandler(async (req, res) => {
+    const result = await chatService.markMessagesDelivered(req.params.conversationId, req.user._id);
     res.json({ success: true, ...result });
   }),
 );
 
 /**
  * GET /api/chat/conversations/:conversationId/messages/pinned
- * Get all pinned messages.
  */
 router.get(
   '/conversations/:conversationId/messages/pinned',
   auth,
   asyncHandler(async (req, res) => {
-    const messages = await chatService.getPinnedMessages(
-      req.params.conversationId,
-      req.user._id,
-    );
+    const messages = await chatService.getPinnedMessages(req.params.conversationId, req.user._id);
     res.json({ success: true, messages });
   }),
 );
 
 /**
  * GET /api/chat/conversations/:conversationId/messages/search
- * Full-text search in conversation.
  * Query: ?q=search+term&limit=30
  */
 router.get(
@@ -385,19 +325,62 @@ router.get(
     const { q, limit = 30 } = req.query;
     if (!q?.trim()) return res.status(400).json({ success: false, message: 'Query required' });
 
-    const messages = await chatService.searchMessages(
-      req.params.conversationId,
-      req.user._id,
-      q,
-      { limit: parseInt(limit, 10) },
-    );
+    const messages = await chatService.searchMessages(req.params.conversationId, req.user._id, q, {
+      limit: parseInt(limit, 10),
+    });
     res.json({ success: true, messages });
   }),
 );
 
 /**
+ * GET /api/chat/conversations/:conversationId/media
+ * Query: ?page=1&limit=50&type=image|video|file
+ */
+router.get(
+  '/conversations/:conversationId/media',
+  auth,
+  asyncHandler(async (req, res) => {
+    const { page = 1, limit = 50, type } = req.query;
+    const mediaMessages = await chatService.getConversationMedia(req.params.conversationId, req.user._id, {
+      page: parseInt(page, 10), limit: parseInt(limit, 10), type,
+    });
+    res.json({ success: true, messages: mediaMessages });
+  }),
+);
+
+/**
+ * DELETE /api/chat/conversations/:conversationId/clear
+ */
+router.delete(
+  '/conversations/:conversationId/clear',
+  auth,
+  asyncHandler(async (req, res) => {
+    const result = await chatService.clearConversation(req.params.conversationId, req.user._id);
+    res.json(result);
+  }),
+);
+
+/**
+ * PATCH /api/chat/conversations/:conversationId/members/:memberId/admin
+ * Body: { isAdmin: true|false }
+ */
+router.patch(
+  '/conversations/:conversationId/members/:memberId/admin',
+  auth,
+  asyncHandler(async (req, res) => {
+    const { isAdmin } = req.body;
+    if (typeof isAdmin !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'isAdmin boolean is required' });
+    }
+    const convo = await chatService.updateGroupAdminStatus(
+      req.params.conversationId, req.user._id, req.params.memberId, isAdmin,
+    );
+    res.json({ success: true, conversation: convo });
+  }),
+);
+
+/**
  * PATCH /api/chat/messages/:messageId
- * Edit a text message (sender only).
  * Body: { text }
  */
 router.patch(
@@ -414,7 +397,6 @@ router.patch(
 
 /**
  * DELETE /api/chat/messages/:messageId
- * Delete a message.
  * Body: { scope: 'for_me' | 'for_all' }
  */
 router.delete(
@@ -429,19 +411,18 @@ router.delete(
 
 /**
  * DELETE /api/chat/messages/:messageId/admin
- * Admin hard-delete any message.
  * Roles: superadmin, admin
  */
 router.delete(
   '/messages/:messageId/admin',
   adminOnly,
   asyncHandler(async (req, res) => {
-    const { Message } = await import('../models/chat.js');
     await Message.findByIdAndUpdate(req.params.messageId, {
       deletedForAll: true,
       isDeleted:     true,
       deletedAt:     new Date(),
       text:          null,
+      media:         null,
     });
     res.json({ success: true, deleted: true });
   }),
@@ -449,7 +430,6 @@ router.delete(
 
 /**
  * POST /api/chat/messages/:messageId/react
- * Add/toggle a reaction.
  * Body: { emoji }
  */
 router.post(
@@ -466,7 +446,6 @@ router.post(
 
 /**
  * PATCH /api/chat/messages/:messageId/pin
- * Pin / unpin a message.
  * Body: { pin: true|false }
  */
 router.patch(
@@ -481,7 +460,6 @@ router.patch(
 
 /**
  * POST /api/chat/messages/:messageId/forward
- * Forward a message to another conversation.
  * Body: { targetConversationId }
  */
 router.post(
@@ -492,11 +470,7 @@ router.post(
     if (!targetConversationId) {
       return res.status(400).json({ success: false, message: 'targetConversationId required' });
     }
-    const msg = await chatService.forwardMessage(
-      req.params.messageId,
-      req.user._id,
-      targetConversationId,
-    );
+    const msg = await chatService.forwardMessage(req.params.messageId, req.user._id, targetConversationId);
     res.status(201).json({ success: true, message: msg });
   }),
 );
@@ -505,10 +479,6 @@ router.post(
 // ── C. UNREAD COUNT ──────────────────────────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /api/chat/unread
- * Total unread message count across all conversations.
- */
 router.get(
   '/unread',
   auth,
@@ -522,10 +492,6 @@ router.get(
 // ── D. BLOCK / UNBLOCK USERS ─────────────────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /api/chat/blocked-users
- * List users blocked by current user.
- */
 router.get(
   '/blocked-users',
   auth,
@@ -535,11 +501,6 @@ router.get(
   }),
 );
 
-/**
- * POST /api/chat/blocked-users
- * Block a user.
- * Body: { targetUserId }
- */
 router.post(
   '/blocked-users',
   auth,
@@ -552,10 +513,6 @@ router.post(
   }),
 );
 
-/**
- * DELETE /api/chat/blocked-users/:targetUserId
- * Unblock a user.
- */
 router.delete(
   '/blocked-users/:targetUserId',
   auth,
@@ -571,8 +528,8 @@ router.delete(
 
 /**
  * GET /api/chat/agora/rtm-token
- * Generate Agora RTM token for chat signaling / presence.
- * Used by client on app load.
+ * FIX: appId now comes from agoraService response, not a separate
+ * agora.config.js file (removed).
  */
 router.get(
   '/agora/rtm-token',
@@ -580,18 +537,17 @@ router.get(
   asyncHandler(async (req, res) => {
     const result = await agoraService.generateRtmToken(req.user._id);
     res.json({
-      success: true,
-      appId:      agoraConfig.appId,
-      uid:        req.user._id.toString(),
-      rtmToken:   result.token,
-      expiresAt:  result.expiresAt,
+      success:   true,
+      appId:     result.appId,
+      uid:       req.user._id.toString(),
+      rtmToken:  result.token,
+      expiresAt: result.expiresAt,
     });
   }),
 );
 
 /**
  * POST /api/chat/calls
- * Initiate a call from REST (fallback for when socket not available).
  * Body: { conversationId, type: 'audio'|'video' }
  */
 router.post(
@@ -601,9 +557,13 @@ router.post(
     const { conversationId, type = 'audio' } = req.body;
     if (!conversationId) return res.status(400).json({ success: false, message: 'conversationId required' });
 
-    const { Conversation } = await import('../models/chat.js');
     const convo = await Conversation.findById(conversationId).select('participants');
     if (!convo) return res.status(404).json({ success: false, message: 'Conversation not found' });
+
+    const isMember = convo.participants.some(
+      (p) => p.user.toString() === req.user._id.toString() && !p.isDeleted,
+    );
+    if (!isMember) return res.status(403).json({ success: false, message: 'Not a member of this conversation' });
 
     const invitedIds = convo.participants
       .filter((p) => p.user.toString() !== req.user._id.toString() && !p.isDeleted)
@@ -630,7 +590,6 @@ router.post(
 
 /**
  * POST /api/chat/calls/:callId/join
- * Join a call (REST fallback).
  */
 router.post(
   '/calls/:callId/join',
@@ -651,7 +610,6 @@ router.post(
 
 /**
  * POST /api/chat/calls/:callId/end
- * End a call (REST fallback).
  * Body: { status: 'ended'|'declined'|'cancelled' }
  */
 router.post(
@@ -666,7 +624,6 @@ router.post(
 
 /**
  * POST /api/chat/calls/:callId/token/refresh
- * Refresh Agora RTC token near expiry.
  */
 router.post(
   '/calls/:callId/token/refresh',
@@ -679,7 +636,6 @@ router.post(
 
 /**
  * GET /api/chat/calls/:callId
- * Get call details.
  */
 router.get(
   '/calls/:callId',
@@ -691,10 +647,7 @@ router.get(
 
     if (!call) return res.status(404).json({ success: false, message: 'Call not found' });
 
-    // Must be a participant
-    const isParticipant = call.participants.some(
-      (p) => p.user._id.toString() === req.user._id.toString()
-    );
+    const isParticipant = call.participants.some((p) => p.user._id.toString() === req.user._id.toString());
     if (!isParticipant && !['superadmin', 'admin'].includes(req.user.role)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
@@ -705,7 +658,6 @@ router.get(
 
 /**
  * GET /api/chat/calls
- * Get current user's call history.
  * Query: ?limit=20&page=1&status=ended|missed|declined
  */
 router.get(
@@ -714,9 +666,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { limit = 20, page = 1, status } = req.query;
     const skip   = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-    const filter = {
-      'participants.user': req.user._id,
-    };
+    const filter = { 'participants.user': req.user._id };
     if (status) filter.status = status;
 
     const [calls, total] = await Promise.all([
@@ -730,23 +680,12 @@ router.get(
       Call.countDocuments(filter),
     ]);
 
-    res.json({
-      success: true,
-      calls,
-      total,
-      page:  parseInt(page, 10),
-      pages: Math.ceil(total / parseInt(limit, 10)),
-    });
+    res.json({ success: true, calls, total, page: parseInt(page, 10), pages: Math.ceil(total / parseInt(limit, 10)) });
   }),
 );
 
 // ─── Admin: all calls ─────────────────────────────────────────────────────────
 
-/**
- * GET /api/chat/admin/calls
- * All calls — admin only.
- * Query: ?status=&limit=&page=
- */
 router.get(
   '/admin/calls',
   adminOnly,
@@ -770,17 +709,11 @@ router.get(
 
 // ─── Admin: all conversations ─────────────────────────────────────────────────
 
-/**
- * GET /api/chat/admin/conversations
- * Admin view — any conversation.
- * Query: ?type=&refModel=&refId=&limit=&page=
- */
 router.get(
   '/admin/conversations',
   adminOnly,
   asyncHandler(async (req, res) => {
     const { type, refModel, refId, limit = 50, page = 1 } = req.query;
-    const { Conversation } = await import('../models/chat.js');
     const skip   = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const filter = {};
     if (type)     filter.type     = type;
@@ -800,21 +733,12 @@ router.get(
   }),
 );
 
-/**
- * GET /api/chat/admin/conversations/:conversationId/messages
- * Admin read any conversation's messages.
- */
 router.get(
   '/admin/conversations/:conversationId/messages',
   adminOnly,
   asyncHandler(async (req, res) => {
     const { limit = 100, before } = req.query;
-    const { Message } = await import('../models/chat.js');
-
-    const filter = {
-      conversation:  req.params.conversationId,
-      deletedForAll: false,
-    };
+    const filter = { conversation: req.params.conversationId, deletedForAll: false };
     if (before) {
       const pivot = await Message.findById(before).select('createdAt');
       if (pivot) filter.createdAt = { $lt: pivot.createdAt };
@@ -836,10 +760,8 @@ router.get(
 
 /**
  * POST /api/chat/agora/webhook
- * Agora posts channel events here.
  * Signature verification via HMAC-SHA1 (header: Agora-Signature).
- * NOTE: Must be mounted BEFORE express.json() for raw body access.
- *       If express.json() is global, use express.raw() override here.
+ * IMPORTANT: requires raw body — see file header note on express.json() ordering.
  */
 router.post(
   '/agora/webhook',
@@ -868,25 +790,19 @@ router.post(
 // ── G. PRESENCE ──────────────────────────────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /api/chat/presence/:userId
- * Check if a user is online.
- */
 router.get(
   '/presence/:userId',
   auth,
   asyncHandler(async (req, res) => {
     const isOnline = await chatService.isUserOnline(req.params.userId);
-    const user     = await import('../models/User.js').then((m) =>
-      m.default.findById(req.params.userId).select('lastseen').lean()
-    );
+    const User     = (await import('../models/User.js')).default;
+    const user     = await User.findById(req.params.userId).select('lastseen').lean();
     res.json({ success: true, userId: req.params.userId, isOnline, lastseen: user?.lastseen });
   }),
 );
 
 /**
- * GET /api/chat/presence/bulk
- * Check online status of multiple users.
+ * POST /api/chat/presence/bulk
  * Body: { userIds: [] }
  */
 router.post(
@@ -895,10 +811,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const { userIds = [] } = req.body;
     const results = await Promise.all(
-      userIds.map(async (id) => ({
-        userId:   id,
-        isOnline: await chatService.isUserOnline(id),
-      }))
+      userIds.map(async (id) => ({ userId: id, isOnline: await chatService.isUserOnline(id) })),
     );
     res.json({ success: true, presence: results });
   }),
@@ -908,19 +821,13 @@ router.post(
 // ── H. ROLE-SPECIFIC CONVERSATION LOOKUPS ────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /api/chat/order/:orderId/conversation
- * Get the conversation linked to a specific order.
- * Roles: customer + fulfillment roles.
- */
 router.get(
   '/order/:orderId/conversation',
   [protect, authorize('superadmin', 'admin', 'customer', 'pharmacy', 'driver', 'solodriverpartner', 'transportpartner', 'care_assistant')],
   asyncHandler(async (req, res) => {
-    const { Conversation } = await import('../models/chat.js');
     const convo = await Conversation.findOne({
-      refModel:  'Order',
-      refId:     req.params.orderId,
+      refModel: 'Order',
+      refId:    req.params.orderId,
       'participants.user': req.user._id,
     })
       .populate('participants.user', 'name avatar role')
@@ -931,19 +838,13 @@ router.get(
   }),
 );
 
-/**
- * GET /api/chat/booking/:bookingId/conversation
- * Get the consultation chat for a booking.
- * Roles: customer, doctor, hospital, care_assistant.
- */
 router.get(
   '/booking/:bookingId/conversation',
   [protect, authorize('superadmin', 'admin', 'customer', 'doctor', 'hospital', 'care_assistant')],
   asyncHandler(async (req, res) => {
-    const { Conversation } = await import('../models/chat.js');
     const convo = await Conversation.findOne({
-      refModel:  'Booking',
-      refId:     req.params.bookingId,
+      refModel: 'Booking',
+      refId:    req.params.bookingId,
       'participants.user': req.user._id,
     })
       .populate('participants.user', 'name avatar role')
@@ -954,18 +855,13 @@ router.get(
   }),
 );
 
-/**
- * GET /api/chat/blood-request/:requestId/conversation
- * Blood request chat — blood_bank + customer + admin.
- */
 router.get(
   '/blood-request/:requestId/conversation',
   [protect, authorize('superadmin', 'admin', 'customer', 'blood_bank')],
   asyncHandler(async (req, res) => {
-    const { Conversation } = await import('../models/chat.js');
     const convo = await Conversation.findOne({
-      refModel:  'BloodRequest',
-      refId:     req.params.requestId,
+      refModel: 'BloodRequest',
+      refId:    req.params.requestId,
       'participants.user': req.user._id,
     })
       .populate('participants.user', 'name avatar role')
@@ -976,18 +872,13 @@ router.get(
   }),
 );
 
-/**
- * GET /api/chat/lab-test/:testId/conversation
- * Lab test conversation — lab_partner + customer.
- */
 router.get(
   '/lab-test/:testId/conversation',
   [protect, authorize('superadmin', 'admin', 'customer', 'lab_partner')],
   asyncHandler(async (req, res) => {
-    const { Conversation } = await import('../models/chat.js');
     const convo = await Conversation.findOne({
-      refModel:  'LabTest',
-      refId:     req.params.testId,
+      refModel: 'LabTest',
+      refId:    req.params.testId,
       'participants.user': req.user._id,
     })
       .populate('participants.user', 'name avatar role')
@@ -1002,15 +893,10 @@ router.get(
 // ── I. FINANCE READ-ONLY ACCESS ──────────────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /api/chat/finance/order/:orderId/conversation
- * Finance team read-only view of order conversation.
- */
 router.get(
   '/finance/order/:orderId/conversation',
   [protect, authorize('superadmin', 'admin', 'finance')],
   asyncHandler(async (req, res) => {
-    const { Conversation } = await import('../models/chat.js');
     const convo = await Conversation.findOne({ refModel: 'Order', refId: req.params.orderId })
       .populate('participants.user', 'name avatar role')
       .lean();
@@ -1020,79 +906,18 @@ router.get(
   }),
 );
 
-/**
- * GET /api/chat/conversations/:conversationId/media
- * Get all media/files for a conversation (Gallery View).
- * Query: ?page=1&limit=50&type=image|video|file
- */
-router.get(
-  '/conversations/:conversationId/media',
-  auth,
-  asyncHandler(async (req, res) => {
-    const { page = 1, limit = 50, type } = req.query;
-    const mediaMessages = await chatService.getConversationMedia(
-      req.params.conversationId,
-      req.user._id,
-      { page: parseInt(page, 10), limit: parseInt(limit, 10), type }
-    );
-    res.json({ success: true, messages: mediaMessages });
-  }),
-);
+// ═════════════════════════════════════════════════════════════════════════════
+// ── MULTER ERROR HANDLER (must be last, after all routes using `upload`) ─────
+// FIX: previously absent — rejected uploads (size limit, bad mimetype) fell
+// through to the generic Express error handler with no clean shape. Now
+// caught explicitly and returned as 400 with the real reason.
+// ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * DELETE /api/chat/conversations/:conversationId/clear
- * Clear all chat history in a conversation for the current user.
- */
-router.delete(
-  '/conversations/:conversationId/clear',
-  auth,
-  asyncHandler(async (req, res) => {
-    const result = await chatService.clearConversation(
-      req.params.conversationId,
-      req.user._id
-    );
-    res.json(result);
-  }),
-);
-
-/**
- * PATCH /api/chat/conversations/:conversationId/members/:memberId/admin
- * Promote or demote a group member to/from Admin.
- * Body: { isAdmin: true|false }
- */
-router.patch(
-  '/conversations/:conversationId/members/:memberId/admin',
-  auth,
-  asyncHandler(async (req, res) => {
-    const { isAdmin } = req.body;
-    if (typeof isAdmin !== 'boolean') {
-      return res.status(400).json({ success: false, message: 'isAdmin boolean is required' });
-    }
-
-    const convo = await chatService.updateGroupAdminStatus(
-      req.params.conversationId,
-      req.user._id,
-      req.params.memberId,
-      isAdmin
-    );
-    res.json({ success: true, conversation: convo });
-  }),
-);
-
-/**
- * POST /api/chat/conversations/:conversationId/messages/delivered
- * Mark messages as delivered for the current user (e.g., when app opens but chat isn't focused).
- */
-router.post(
-  '/conversations/:conversationId/messages/delivered',
-  auth,
-  asyncHandler(async (req, res) => {
-    const result = await chatService.markMessagesDelivered(
-      req.params.conversationId,
-      req.user._id
-    );
-    res.json({ success: true, ...result });
-  }),
-);
+router.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError || err?.statusCode === 400) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+  next(err);
+});
 
 export default router;

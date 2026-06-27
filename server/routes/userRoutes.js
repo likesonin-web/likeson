@@ -1639,16 +1639,41 @@ router.post(
 router.get(
   '/admin/users',
   protect,
-  authorize('superadmin', 'admin'),
-  cache(60),
+  // 1. Removed authorize() so all authenticated users can hit this endpoint.
+  // 2. Updated the cache key to factor in the user's role, preventing cross-role cache leaks.
+  cache(60, (req) => `admin:users:${req.user.role}:${req.originalUrl}`),
   asyncHandler(async (req, res) => {
     const page  = Math.max(parseInt(req.query.page)  || 1, 1);
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
     const skip  = (page - 1) * limit;
     const filter = {};
 
-    if (req.query.role)                  filter.role      = req.query.role;
+    // Check if the requesting user has elevated privileges
+    const isPrivileged = ['superadmin', 'admin'].includes(req.user.role);
+
+    if (isPrivileged) {
+      // Admins & Superadmins can view and filter any role
+      if (req.query.role) filter.role = req.query.role;
+    } else {
+      // Regular users can ONLY see Admins & Superadmins
+      const allowedRoles = ['superadmin', 'admin'];
+      
+      if (req.query.role) {
+        // If a regular user specifically filters by a role, verify it is allowed
+        if (allowedRoles.includes(req.query.role)) {
+          filter.role = req.query.role;
+        } else {
+          // If they try to fetch a restricted role (like 'doctor' or 'customer'), return empty
+          return res.json({ data: [], total: 0, pages: 0, currentPage: page });
+        }
+      } else {
+        // Default behavior for regular users: lock the filter to only show admins
+        filter.role = { $in: allowedRoles };
+      }
+    }
+
     if (req.query.isBlocked !== undefined) filter.isBlocked = req.query.isBlocked === 'true';
+    
     if (req.query.search) {
       filter.$or = [
         { name:  { $regex: req.query.search, $options: 'i' } },
@@ -1912,6 +1937,139 @@ router.delete(
       success: true,
       message: `All sessions cleared for ${user.name}. User has been signed out everywhere.`,
     });
+  })
+);
+
+
+// GET /cookie-consent  → get current user's consent state
+router.get(
+  '/cookie-consent',
+  protect,
+  asyncHandler(async (req, res) => {
+    const consent = await CookieConsent.findOne({ user: req.user._id }).lean();
+    return res.json({
+      success: true,
+      data: consent ?? {
+        consentGiven: false,
+        preferences: {
+          necessary: true,
+          analytics: false,
+          marketing: false,
+          functional: false,
+        },
+      },
+    });
+  })
+);
+
+// POST /cookie-consent  → accept all or custom
+// body: { acceptAll: true }
+//   OR
+// body: { preferences: { analytics: true, marketing: false, functional: true } }
+router.post(
+  '/cookie-consent',
+  protect,
+  [
+    body('acceptAll').optional().isBoolean(),
+    body('preferences.analytics').optional().isBoolean(),
+    body('preferences.marketing').optional().isBoolean(),
+    body('preferences.functional').optional().isBoolean(),
+    validate,
+  ],
+  asyncHandler(async (req, res) => {
+    const { acceptAll, preferences } = req.body;
+
+    const prefs = acceptAll
+      ? { necessary: true, analytics: true, marketing: true, functional: true }
+      : {
+          necessary:  true, // always true
+          analytics:  preferences?.analytics  ?? false,
+          marketing:  preferences?.marketing  ?? false,
+          functional: preferences?.functional ?? false,
+        };
+
+    const consent = await CookieConsent.findOneAndUpdate(
+      { user: req.user._id },
+      {
+        user:         req.user._id,
+        preferences:  prefs,
+        consentGiven: true,
+        consentAt:    new Date(),
+        updatedAt:    new Date(),
+        ipAddress:    req.deviceInfo?.ipAddress,
+        userAgent:    req.deviceInfo?.userAgent,
+        version:      '1.0',
+      },
+      { upsert: true, new: true, runValidators: true }
+    );
+
+    log.info('Cookie consent saved', { userId: req.user._id, acceptAll: !!acceptAll });
+    return res.json({ success: true, message: 'Cookie preferences saved.', data: consent });
+  })
+);
+
+// PATCH /cookie-consent  → update specific categories
+router.patch(
+  '/cookie-consent',
+  protect,
+  [
+    body('preferences').isObject().withMessage('preferences object required'),
+    validate,
+  ],
+  asyncHandler(async (req, res) => {
+    const { preferences } = req.body;
+
+    const allowed = ['analytics', 'marketing', 'functional'];
+    const updates = {};
+    for (const key of allowed) {
+      if (typeof preferences[key] === 'boolean') {
+        updates[`preferences.${key}`] = preferences[key];
+      }
+    }
+
+    if (!Object.keys(updates).length)
+      return res.status(400).json({ message: 'No valid preferences provided.' });
+
+    const consent = await CookieConsent.findOneAndUpdate(
+      { user: req.user._id },
+      { $set: { ...updates, updatedAt: new Date(), ipAddress: req.deviceInfo?.ipAddress } },
+      { new: true, upsert: true }
+    );
+
+    return res.json({ success: true, message: 'Preferences updated.', data: consent });
+  })
+);
+
+// DELETE /cookie-consent  → withdraw consent (GDPR right to withdraw)
+router.delete(
+  '/cookie-consent',
+  protect,
+  asyncHandler(async (req, res) => {
+    await CookieConsent.findOneAndUpdate(
+      { user: req.user._id },
+      {
+        $set: {
+          consentGiven: false,
+          preferences:  { necessary: true, analytics: false, marketing: false, functional: false },
+          updatedAt:    new Date(),
+        },
+      }
+    );
+    log.info('Cookie consent withdrawn', { userId: req.user._id });
+    return res.json({ success: true, message: 'Cookie consent withdrawn.' });
+  })
+);
+
+// ADMIN: GET /admin/user/:id/cookie-consent
+router.get(
+  '/admin/user/:id/cookie-consent',
+  protect,
+  authorize('superadmin', 'admin'),
+  [param('id').isMongoId(), validate],
+  asyncHandler(async (req, res) => {
+    const consent = await CookieConsent.findOne({ user: req.params.id }).lean();
+    if (!consent) return res.status(404).json({ message: 'No consent record found.' });
+    return res.json({ success: true, data: consent });
   })
 );
 
