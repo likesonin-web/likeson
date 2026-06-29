@@ -31,14 +31,14 @@ import {
   socketRideCancelled, socketNavigationTargetChanged, socketRideAssigned,
   socketCaAtJoinPoint, socketCaJoinedRide, socketJpWaypointCompleted,
   socketCareAssistantTracking, socketHospitalEtaUpdate,
-  selectRideStops, selectCurrentStopId,
-  fetchRideStops,
+  selectStops, selectCurrentStopId, selectParticipants,
+  fetchRideStops, fetchRideParticipants,
 } from '@/store/slices/rideRequestSlice';
 
 import { fetchMyBookingById, selectSelectedBooking } from '@/store/slices/bookingSlice';
 import {
-  fetchCareTrackingSnapshot, fetchRideParticipants,
-  selectCareTrackingSnapshot, selectRideParticipants,
+  fetchCareTrackingSnapshot,
+  selectCareTrackingSnapshot,
   triggerBookingSos, fetchBookingSosEvents, selectBookingSosEvents,
 } from '@/store/slices/operationsSlice';
 
@@ -1031,9 +1031,9 @@ export default function CustomerRideLiveTracking() {
   const socketLive     = useSelector(selectSocketLive);
   const liveData       = useSelector(selectLiveData);
   const booking        = useSelector(selectSelectedBooking);
-  const careSnapshot   = useSelector(selectCareTrackingSnapshot);
-  const participants   = useSelector(selectRideParticipants);
-  const rideStops      = useSelector(selectRideStops);
+const careSnapshot   = useSelector(selectCareTrackingSnapshot);
+  const participants   = useSelector(selectParticipants);
+  const rideStops      = useSelector(selectStops);
   const currentStopId  = useSelector(selectCurrentStopId);
   const sosEvents      = useSelector(selectBookingSosEvents);
 

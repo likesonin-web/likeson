@@ -5,20 +5,17 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, SlidersHorizontal, X, ChevronDown,
-  Pill, Package, Tag, AlertCircle, CheckCircle2,
-  Filter, Grid3x3, List, Star, ShieldCheck, Beaker,
-  ArrowUpDown, Eye, RefreshCw, TrendingUp,
-  ChevronLeft, ChevronRight as ChevronRightIcon, Layers,
-  FlaskConical, Syringe, Wind, Droplets, Info,
-  Heart, Share2, ShoppingCart, Zap, ShieldAlert,
-  Thermometer, Activity, Scale, Clock, ArrowRight
+  Pill, Package, AlertCircle, ShieldCheck, Beaker,
+  ArrowUpDown, Eye, ChevronLeft, ChevronRight as ChevronRightIcon, Layers,
+  FlaskConical, Syringe, Wind, Droplets, Heart, ArrowRight, ShieldAlert,
+  Thermometer, Scale, Grid3x3, List, Filter
 } from 'lucide-react';
 import Container from '../../components/ui/Container';
 import Ads from '../../components/Ads';
 import {
   fetchMedicines,
   clearMedicineError,
-  selectAllMedicines,
+  selectMedicines,
   selectMedicineLoading,
   selectMedicinePagination,
   selectMedicineError,
@@ -49,7 +46,6 @@ const CATEGORY_ICONS = {
   Powder:    Layers,
 };
 
-/** Default filter state — defined before component so resetFilters is referentially stable */
 const DEFAULT_FILTERS = {
   categories:        [],
   schedules:         [],
@@ -97,13 +93,8 @@ const ScheduleBadge = ({ schedule }) => {
 
 // ─── Helper: Stock Status ─────────────────────────────────────────────────────
 
-/**
- * Uses `isDiscontinued` (correct model field).
- * Also derives live stock from inventory array when present.
- */
 const MedicineStatus = ({ medicine }) => {
   const isDiscontinued = medicine.isDiscontinued;
-  // Total stock across all store inventories for this medicine
   const totalStock = (medicine.inventory || []).reduce(
     (sum, inv) => sum + (inv.stockQuantity || 0),
     0
@@ -143,19 +134,12 @@ const SkeletonCard = ({ viewMode }) => (
 const MedicineCard = ({ medicine, viewMode, onViewDetail }) => {
   const [isHovered, setIsHovered] = useState(false);
 
-  // Correct field: images array with isPrimary flag
   const primaryImage = medicine.images?.find(img => img.isPrimary)?.url
     ?? medicine.images?.[0]?.url
     ?? null;
 
   const CategoryIcon = CATEGORY_ICONS[medicine.category] ?? Pill;
   const isListView   = viewMode === 'list';
-
-  // Aggregate total stock units across all store inventories
-  const totalStock = useMemo(
-    () => (medicine.inventory || []).reduce((sum, inv) => sum + (inv.stockQuantity || 0), 0),
-    [medicine.inventory]
-  );
 
   return (
     <motion.div
@@ -308,7 +292,6 @@ const MedicineCard = ({ medicine, viewMode, onViewDetail }) => {
   );
 };
 
-// Memoize to prevent re-renders when parent state changes unrelated to this card
 const MemoMedicineCard = MemoizedMedicineCard(MedicineCard);
 
 function MemoizedMedicineCard(Component) {
@@ -319,7 +302,6 @@ function MemoizedMedicineCard(Component) {
 }
 
 // ─── Filter Sidebar Content ───────────────────────────────────────────────────
-// Extracted to avoid duplication between desktop sticky sidebar and mobile drawer
 
 const FilterContent = ({ filters, updateFilters, resetFilters, activeFiltersCount }) => (
   <div className="space-y-8">
@@ -436,8 +418,7 @@ const FilterContent = ({ filters, updateFilters, resetFilters, activeFiltersCoun
 export default function MedicinePage({ router }) {
   const dispatch = useDispatch();
 
-  // Granular selectors avoid full-state re-renders
-  const medicines  = useSelector(selectAllMedicines);
+  const medicines  = useSelector(selectMedicines);
   const loading    = useSelector(selectMedicineLoading);
   const pagination = useSelector(selectMedicinePagination);
   const error      = useSelector(selectMedicineError);
@@ -469,19 +450,16 @@ export default function MedicinePage({ router }) {
     dispatch(clearMedicineError());
   }, [dispatch]);
 
-  // ── Centralised fetch — called whenever search/filter/sort/page changes ──
+  // ── Centralised fetch ──
   const fetchContent = useCallback(
     (q, f, s, p) => {
       const params = {
         page:    p,
         limit:   12,
         search:  q || undefined,
-        // Multi-category: join with comma; backend splits on ','
         category:            f.categories.length  ? f.categories.join(',')  : undefined,
         schedule:            f.schedules.length   ? f.schedules.join(',')   : undefined,
-        // isPrescriptionRequired is the correct model field name
         isPrescriptionRequired: f.prescriptionOnly  ? true  : undefined,
-        // isDiscontinued is the correct model field name
         isDiscontinued:      f.hideDiscontinued   ? false  : undefined,
         sort: s,
       };
@@ -490,7 +468,7 @@ export default function MedicinePage({ router }) {
     [dispatch]
   );
 
-  // Debounce: 400ms for search; immediate for filter/sort/page
+  // Debounce
   useEffect(() => {
     const timer = setTimeout(
       () => fetchContent(search, filters, sort, currentPage),
@@ -518,7 +496,7 @@ export default function MedicinePage({ router }) {
     else window.location.href = path;
   }, [router]);
 
-  // ── Active filter count (excluding default/empty states) ──
+  // ── Active filter count ──
   const activeFiltersCount = useMemo(() => {
     let count = filters.categories.length + filters.schedules.length;
     if (filters.prescriptionOnly)  count++;
@@ -526,7 +504,7 @@ export default function MedicinePage({ router }) {
     return count;
   }, [filters]);
 
-  // ── Pagination window: show ±1 around current, always show first/last ──
+  // ── Pagination window ──
   const pageNumbers = useMemo(() => {
     const total = pagination.totalPages ?? 1;
     return [...Array(total)].map((_, i) => i + 1).filter(p =>
@@ -721,7 +699,7 @@ export default function MedicinePage({ router }) {
                   {loading ? (
                     <span className="inline-block w-32 h-3 bg-base-300 animate-pulse rounded" />
                   ) : (
-                    <>Found <span className="text-base-content font-bold">{pagination.totalItems ?? medicines.length}</span> products</>
+                    <span>Found <span className="text-base-content font-bold">{pagination.total ?? medicines.length}</span> products</span>
                   )}
                 </p>
               </div>
@@ -773,7 +751,7 @@ export default function MedicinePage({ router }) {
               ) : (
                 /* Medicine Grid / List */
                 <motion.div
-                  key={viewMode} // re-trigger animation on view toggle
+                  key={viewMode}
                   variants={containerVariants}
                   initial="hidden"
                   animate="visible"
@@ -784,7 +762,7 @@ export default function MedicinePage({ router }) {
                   }
                 >
                   {medicines.map(med => (
-                    <MedicineCard
+                    <MemoMedicineCard
                       key={med._id}
                       medicine={med}
                       viewMode={viewMode}
@@ -911,7 +889,7 @@ export default function MedicinePage({ router }) {
                     onClick={() => setIsSidebarOpen(false)}
                     className="w-full h-12 bg-primary text-primary-content rounded-md font-bold text-xs uppercase tracking-widest shadow-sm shadow-primary/20 hover:brightness-110 transition-all"
                   >
-                    View {pagination.totalItems ?? ''} Results
+                    View {pagination.total ?? ''} Results
                   </button>
                   <button
                     onClick={() => { resetFilters(); setIsSidebarOpen(false); }}
