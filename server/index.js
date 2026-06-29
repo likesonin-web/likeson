@@ -261,51 +261,137 @@ app.use((err, req, res, next) => {
 // ─────────────────────────────────────────────
 async function startServer() {
   try {
+    // ─────────────────────────────────────────────
+    // 1. Connect MongoDB
+    // ─────────────────────────────────────────────
     await connectDB();
+    console.log("✅ MongoDB Connected");
 
-    // ── Redis pub/sub clients for Socket.IO adapter ───────────────────────
-    // Separate clients required — one pub, one sub.
-    // FIXED: Strict check for "redis://" or "rediss://" 
-    const redisUrl = process.env.REDIS_URL.startsWith("redis://") || process.env.REDIS_URL.startsWith("rediss://")
-      ? process.env.REDIS_URL
-      : `redis://${process.env.REDIS_URL}`;
+    // ─────────────────────────────────────────────
+    // 2. Validate Redis URL
+    // ─────────────────────────────────────────────
+    const redisUrl = process.env.REDIS_URL;
 
-    const pubClient = createClient({ url: redisUrl });
+    if (!redisUrl) {
+      throw new Error("REDIS_URL environment variable is missing.");
+    }
+
+    console.log(
+      "🔌 Redis URL:",
+      redisUrl.replace(/:(.*?)@/, ":********@")
+    );
+
+    // ─────────────────────────────────────────────
+    // 3. Create Redis Pub/Sub Clients
+    // ─────────────────────────────────────────────
+    const pubClient = createClient({
+      url: redisUrl,
+      socket: {
+        connectTimeout: 10000,
+
+        reconnectStrategy(retries) {
+          if (retries > 10) {
+            console.error("❌ Redis reconnect limit reached.");
+            return new Error("Redis reconnect limit reached");
+          }
+
+          return Math.min(retries * 200, 3000);
+        },
+      },
+    });
+
     const subClient = pubClient.duplicate();
 
-    await Promise.all([pubClient.connect(), subClient.connect()]);
+    // ─────────────────────────────────────────────
+    // 4. Redis Events
+    // ─────────────────────────────────────────────
+    const registerEvents = (client, name) => {
+      client.on("connect", () => {
+        console.log(`🔌 ${name} connecting...`);
+      });
 
-    // ── Socket.IO server ──────────────────────────────────────────────────
+      client.on("ready", () => {
+        console.log(`✅ ${name} ready`);
+      });
+
+      client.on("reconnecting", () => {
+        console.log(`🔄 ${name} reconnecting...`);
+      });
+
+      client.on("end", () => {
+        console.log(`⚠️ ${name} disconnected`);
+      });
+
+      client.on("error", (err) => {
+        console.error(`❌ ${name} Error:`, err);
+      });
+    };
+
+    registerEvents(pubClient, "Redis Pub");
+    registerEvents(subClient, "Redis Sub");
+
+    // ─────────────────────────────────────────────
+    // 5. Connect Redis
+    // ─────────────────────────────────────────────
+    console.log("Connecting Redis Pub...");
+    await pubClient.connect();
+
+    console.log("Connecting Redis Sub...");
+    await subClient.connect();
+
+    const pubPing = await pubClient.ping();
+    const subPing = await subClient.ping();
+
+    console.log("🏓 Pub Ping:", pubPing);
+    console.log("🏓 Sub Ping:", subPing);
+
+    console.log("✅ Redis authentication successful.");
+
+    // ─────────────────────────────────────────────
+    // 6. Socket.IO
+    // ─────────────────────────────────────────────
     const io = new Server(server, {
       cors: {
         origin: allowedOrigins,
-        methods: ["GET", "POST"],
         credentials: true,
+        methods: ["GET", "POST"],
       },
-      transports: ['websocket', 'polling'],
+      transports: ["websocket", "polling"],
     });
 
-    // Apply Redis adapter — enables horizontal scaling across multiple nodes
+    // Redis Adapter
     io.adapter(createAdapter(pubClient, subClient));
 
-    // ── Register socket namespaces ────────────────────────────────────────
+    // ─────────────────────────────────────────────
+    // 7. Register Namespaces
+    // ─────────────────────────────────────────────
     initBookingSocket(io);
 
     const consultationNs = registerConsultationSocket(io);
     setConsultationNamespace(consultationNs);
 
-    initSupportSocket(io);   // → mounts on /support namespace
+    initSupportSocket(io);
 
-    // ── Attach io to app (req.io bridge middleware reads this) ────────────
     app.set("io", io);
 
+    // ─────────────────────────────────────────────
+    // 8. Start Server
+    // ─────────────────────────────────────────────
     server.listen(PORT, "0.0.0.0", () => {
+      console.log("====================================");
       console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🌍 Mode: ${NODE_ENV}`);
-      console.log(`🎫 Support socket active on /support namespace`);
+      console.log(`🌍 Environment : ${NODE_ENV}`);
+      console.log(`🎫 Support Socket : Enabled`);
+      console.log(`📡 Booking Socket : Enabled`);
+      console.log(`🩺 Consultation Socket : Enabled`);
+      console.log(`🔴 Redis Adapter : Connected`);
+      console.log("====================================");
     });
   } catch (error) {
-    console.error("Startup failed:", error);
+    console.error("====================================");
+    console.error("❌ SERVER STARTUP FAILED");
+    console.error(error);
+    console.error("====================================");
     process.exit(1);
   }
 }
