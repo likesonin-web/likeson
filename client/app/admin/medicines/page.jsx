@@ -24,22 +24,22 @@ import {
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SLICE IMPORTS — all thunks & selectors pulled from medicineSlice
+// SLICE IMPORTS — corrected to match actual medicineSlice exports
 // ─────────────────────────────────────────────────────────────────────────────
 import {
-  // Medicine thunks [M1–M10]
+  // Medicine thunks
   fetchMedicines,
-  fetchInventoryStats,
-  sendRestockRequest,
+  fetchMedicineStats,          // was: fetchInventoryStats
+  submitRestockRequest,        // was: sendRestockRequest
   fetchMedicineBySlug,
   createMedicine,
   updateMedicine,
-  updateStock,
+  addMedicineStock,            // was: updateStock
   discontinueMedicine,
-  syncAllInventory,          // [M9] POST /medicines/sync-inventory/all
-  syncMedicineInventory,     // [M10] POST /medicines/:id/sync-inventory
+  syncAllMedicinesInventory,   // was: syncAllInventory
+  syncOneMedicineInventory,    // was: syncMedicineInventory
 
-  // HSN thunks [H1–H8]
+  // HSN thunks
   fetchHsnCodes,
   fetchHsnStats,
   fetchHsnByCode,
@@ -49,23 +49,23 @@ import {
   updateHsnCode,
   deleteHsnCode,
 
-  // Inventory thunks [INV1–INV7]
-  fetchMedicineInventory,
-  fetchStoreInventoryEntry,
+  // Inventory thunks
+  fetchInventoryByMedicine,    // was: fetchMedicineInventory
+  fetchInventoryEntry,         // was: fetchStoreInventoryEntry
   addInventoryEntry,
   updateInventoryEntry,
   deleteInventoryEntry,
-  fetchLowStockReport,
+  fetchLowStock,               // was: fetchLowStockReport
   fetchExpiryAlerts,
 
-  // Store thunks [S1–S5]
+  // Store thunks
   fetchStores,
   fetchNearbyStores,
   fetchStoreById,
   fetchStoreBySlug,
   fetchMyStore,
 
-  // Store lifecycle thunks [SL1–SL4]
+  // Store lifecycle thunks
   deleteStore,
   suspendStore,
   unsuspendStore,
@@ -74,52 +74,51 @@ import {
   // Action creators
   resetMedicineState,
   clearMedicineError,
-  resetCurrentMedicine,
-  resetCurrentHsnCode,
+  clearMedicineDetail,         // was: resetCurrentMedicine
+  clearHsnDetail,              // was: resetCurrentHsnCode
   clearHsnUploadResult,
-  resetCurrentStore,
+  clearStoreDetail,            // was: resetCurrentStore
   clearSyncResult,
   clearStoreLifecycleResult,
-  resetInventory,
+  clearInventoryEntry,         // was: resetInventory
 
   // Selectors — Medicine
-  selectAllMedicines,
-  selectCurrentMedicine,
+  selectMedicines,             // was: selectAllMedicines
+  selectMedicineDetail,        // was: selectCurrentMedicine
   selectMedicineStats,
   selectMedicineLoading,
-  selectMedicineDetailLoading,
-  selectMedicineActionLoading,
-  selectMedicineSyncLoading,
+  selectActionLoading,         // was: selectMedicineActionLoading / selectStoreActionLoading
+  selectUploadLoading,
   selectMedicinePagination,
   selectMedicineError,
   selectSyncResult,
+  selectActionError,
+  selectSuccessMessage,
 
   // Selectors — Inventory
-  selectCurrentInventory,
-  selectCurrentInventoryEntry,
-  selectInventoryMedicineId,
-  selectInventoryLoading,
-  selectLowStockReport,
+  selectInventory,             // was: selectCurrentInventory
+  selectInventoryEntry,        // was: selectCurrentInventoryEntry
+  selectLowStock,              // was: selectLowStockReport
+  selectLowStockTotal,
   selectExpiryAlerts,
+  selectExpiryAlertTotal,
 
   // Selectors — HSN
-  selectAllHsnCodes,
-  selectCurrentHsnCode,
+  selectHsnCodes,              // was: selectAllHsnCodes
+  selectHsnDetail,             // was: selectCurrentHsnCode
   selectHsnStats,
   selectHsnPagination,
   selectHsnUploadResult,
-  selectHsnLoading,
 
   // Selectors — Stores
-  selectAllStores,
-  selectCurrentStore,
+  selectStores,                // was: selectAllStores
+  selectStoreDetail,           // was: selectCurrentStore
   selectMyStore,
   selectNearbyStores,
   selectStorePagination,
-  selectStoreLoading,
-  selectStoreDetailLoading,
-  selectStoreActionLoading,
   selectStoreLifecycleResult,
+  selectStoreInventorySummary,
+  selectRestockResult,
 } from '@/store/slices/medicineSlice';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,11 +150,22 @@ const HSN_SORT_OPTIONS = [
   { value: 'newest',       label: 'Newest' },
 ];
 const STORE_STATUSES = ['Open', 'Under-Maintenance', 'Inactive'];
-const STORE_TYPES    = ['Retail', 'Hospital', 'Wholesale', 'Online'];
+const STORE_TYPES    = ['Owned', 'Partnered'];
 const CHART_COLORS   = [
   'var(--primary)', 'var(--secondary)', 'var(--accent)',
   'var(--info)', 'var(--warning)', 'var(--error)',
 ];
+
+// Static class lookups for dynamic-color UI (Tailwind JIT can't resolve
+// interpolated class names like `bg-${color}/10`, so every dynamic color
+// must be backed by a literal entry here).
+const LIFECYCLE_COLOR_CLASSES = {
+  error:   'bg-error/10 border-error/30 text-error',
+  warning: 'bg-warning/10 border-warning/30 text-warning',
+  success: 'bg-success/10 border-success/30 text-success',
+  info:    'bg-info/10 border-info/30 text-info',
+  neutral: 'bg-base-300/30 border-base-300 text-base-content/70',
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ANIMATION VARIANTS
@@ -411,10 +421,11 @@ const StoreLifecycleBanner = ({ result, onDismiss }) => {
     lowStockTriggered:{ color: 'info',    label: 'Low-stock alerts triggered' },
   };
   const cfg = typeMap[result.type] || { color: 'neutral', label: result.message || 'Operation complete' };
+  const colorClasses = LIFECYCLE_COLOR_CLASSES[cfg.color] || LIFECYCLE_COLOR_CLASSES.neutral;
   return (
     <motion.div
       variants={fadeIn} initial="hidden" animate="visible"
-      className={`flex items-center gap-3 rounded-[var(--r-box)] border px-4 py-3 text-sm bg-${cfg.color}/10 border-${cfg.color}/30 text-${cfg.color}`}
+      className={`flex items-center gap-3 rounded-[var(--r-box)] border px-4 py-3 text-sm ${colorClasses}`}
     >
       <ShieldAlert className="w-4 h-4 flex-shrink-0" />
       <div className="flex-1">
@@ -664,6 +675,12 @@ const FORM_STEPS = [
   { id: 'inventory',      label: 'Inventory',     icon: Layers },
 ];
 
+/**
+ * NOTE: Medicine schema stores the catalogue MRP as `referenceMrp`, not `mrp`.
+ * The form keeps the internal state key `mrp` for UI simplicity (label says
+ * "MRP"), but this builder maps `referenceMrp` -> form.mrp when editing, and
+ * handleSubmit (below) sends `referenceMrp` back out to the API.
+ */
 const buildFormInitial = (initial) => {
   if (!initial) return { ...DEFAULT_MED };
   return {
@@ -671,6 +688,9 @@ const buildFormInitial = (initial) => {
     ...initial,
     hsnCodeStr: extractHsnString(initial.hsnCode),
     gstPercentage: initial.gstPercentage ?? 5,
+    mrp: initial.referenceMrp ?? initial.mrp ?? '',
+    ptr: initial.ptr ?? '',
+    pts: initial.pts ?? '',
     storageConditions: {
       temperature: {
         min:   initial.storageConditions?.temperature?.min   ?? '',
@@ -738,7 +758,12 @@ const MedicineForm = ({ initial, onSubmit, loading, onHsnLookup, hsnData, hsnLoo
       packaging: form.packaging,
       packSize:  form.packSize  ? Number(form.packSize) : undefined,
       packUnit:  form.packUnit,
-      mrp: Number(form.mrp),
+      // Catalogue reference price — Medicine schema field is `referenceMrp`.
+      referenceMrp: form.mrp !== '' ? Number(form.mrp) : undefined,
+      // `mrp` is ALSO sent (router strips it from catalogue data and uses it
+      // as the fallback store-pricing value when bootstrapping initial stock
+      // below — see medicineRouter.js [M5]).
+      mrp: form.mrp !== '' ? Number(form.mrp) : undefined,
       ptr: form.ptr ? Number(form.ptr) : undefined,
       pts: form.pts ? Number(form.pts) : undefined,
       regulatoryInfo: form.regulatoryInfo,
@@ -753,7 +778,8 @@ const MedicineForm = ({ initial, onSubmit, loading, onHsnLookup, hsnData, hsnLoo
       payload.initialStock = Number(form.initialStock) || 0;
       payload.batchNumber  = form.batchNumber || 'INIT-BATCH';
       payload.expiryDate   = form.expiryDate || undefined;
-      payload.pricePerUnit = form.pricePerUnit ? Number(form.pricePerUnit) : Number(form.mrp);
+      // Router [M5] reads `sellingPrice` for store pricing — NOT `pricePerUnit`.
+      payload.sellingPrice = form.pricePerUnit ? Number(form.pricePerUnit) : Number(form.mrp);
     }
 
     if (initial?._id) {
@@ -999,7 +1025,7 @@ const MedicineForm = ({ initial, onSubmit, loading, onHsnLookup, hsnData, hsnLoo
             <FormField label="Pack Unit" note="e.g. Tablets, ml, g">
               <Input value={form.packUnit} onChange={set('packUnit')} placeholder="Tablets" />
             </FormField>
-            <FormField label="MRP (₹)" required note="Inclusive of GST">
+            <FormField label="MRP (₹)" required note="Inclusive of GST. Saved as catalogue referenceMrp.">
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40 font-bold text-sm">₹</span>
                 <Input type="number" min={0} step={0.01} value={form.mrp} onChange={set('mrp')} placeholder="0.00" required className="pl-6" />
@@ -1099,7 +1125,7 @@ const MedicineForm = ({ initial, onSubmit, loading, onHsnLookup, hsnData, hsnLoo
             <FormField label="Expiry Date">
               <Input type="date" value={form.expiryDate} onChange={set('expiryDate')} />
             </FormField>
-            <FormField label="Store Price per Unit (₹)" note="Defaults to MRP if blank">
+            <FormField label="Store Price per Unit (₹)" note="Defaults to MRP if blank — sent as sellingPrice">
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40 font-bold text-sm">₹</span>
                 <Input type="number" min={0} step={0.01} value={form.pricePerUnit} onChange={set('pricePerUnit')} placeholder="0.00" className="pl-6" />
@@ -1174,20 +1200,39 @@ const MedicineForm = ({ initial, onSubmit, loading, onHsnLookup, hsnData, hsnLoo
 // ─────────────────────────────────────────────────────────────────────────────
 // UPDATE STOCK FORM
 // ─────────────────────────────────────────────────────────────────────────────
-const UpdateStockForm = ({ medicineId, onSubmit, loading, stores = [], isPharmacy = false }) => {
-  const [form, setForm] = useState({ storeId: '', quantity: '', expiryDate: '', batchNumber: '', pricePerUnit: '' });
+/**
+ * Field names below match router [INV3b] POST /:id/inventory/:storeId/add-stock
+ * exactly: stockQuantity, batchNumber, expiryDate, mrp, sellingPrice,
+ * discountPercent, purchasePrice. The previous version sent `quantity` and
+ * `pricePerUnit`, which the backend never reads — every "Add Stock" click
+ * was failing validation (mrp/sellingPrice required > 0).
+ */
+const UpdateStockForm = ({ medicineId, storeId, onSubmit, loading, stores = [], isPharmacy = false }) => {
+  const [form, setForm] = useState({
+    storeId: storeId || '',
+    stockQuantity: '',
+    batchNumber: '',
+    expiryDate: '',
+    mrp: '',
+    sellingPrice: '',
+    discountPercent: '',
+    purchasePrice: '',
+  });
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    const stockData = {
-      quantity:     Number(form.quantity),
-      expiryDate:   form.expiryDate   || undefined,
-      batchNumber:  form.batchNumber  || undefined,
-      pricePerUnit: form.pricePerUnit ? Number(form.pricePerUnit) : undefined,
-    };
-    if (!isPharmacy && form.storeId) stockData.storeId = form.storeId;
-    onSubmit(medicineId, stockData);
+    onSubmit({
+      medicineId,
+      storeId:         form.storeId,
+      stockQuantity:   Number(form.stockQuantity),
+      batchNumber:     form.batchNumber,
+      expiryDate:      form.expiryDate,
+      mrp:             Number(form.mrp),
+      sellingPrice:    Number(form.sellingPrice || form.mrp),
+      discountPercent: form.discountPercent ? Number(form.discountPercent) : 0,
+      purchasePrice:   form.purchasePrice ? Number(form.purchasePrice) : undefined,
+    });
   };
 
   return (
@@ -1200,29 +1245,38 @@ const UpdateStockForm = ({ medicineId, onSubmit, loading, stores = [], isPharmac
             </div>
           </FormField>
         ) : (
-          <FormField label="Store" required note="Target store to adjust stock">
+          <FormField label="Store" required note="Target store to add stock to">
             <SelectEl value={form.storeId} onChange={set('storeId')} required>
               <option value="">— Select store —</option>
               {stores.map(s => <option key={s._id} value={s._id}>{s.storeName}</option>)}
             </SelectEl>
           </FormField>
         )}
-        <FormField label="New Quantity" required note="Absolute level, not a delta">
-          <Input type="number" min={0} value={form.quantity} onChange={set('quantity')} placeholder="100" required />
+        <FormField label="Quantity to Add" required note="Units to add to stock">
+          <Input type="number" min={1} value={form.stockQuantity} onChange={set('stockQuantity')} placeholder="100" required />
         </FormField>
-        <FormField label="Batch Number">
-          <Input value={form.batchNumber} onChange={set('batchNumber')} placeholder="BATCH-002" />
+        <FormField label="Batch Number" required>
+          <Input value={form.batchNumber} onChange={set('batchNumber')} placeholder="BATCH-002" required />
         </FormField>
-        <FormField label="Expiry Date">
-          <Input type="date" value={form.expiryDate} onChange={set('expiryDate')} />
+        <FormField label="Expiry Date" required>
+          <Input type="date" value={form.expiryDate} onChange={set('expiryDate')} required />
         </FormField>
-        <FormField label="Price per Unit (₹)">
-          <Input type="number" min={0} step={0.01} value={form.pricePerUnit} onChange={set('pricePerUnit')} placeholder="0.00" />
+        <FormField label="MRP (₹)" required note="Required by backend, must be > 0">
+          <Input type="number" min={0} step={0.01} value={form.mrp} onChange={set('mrp')} placeholder="0.00" required />
+        </FormField>
+        <FormField label="Selling Price (₹)" note="Defaults to MRP if left blank">
+          <Input type="number" min={0} step={0.01} value={form.sellingPrice} onChange={set('sellingPrice')} placeholder="0.00" />
+        </FormField>
+        <FormField label="Discount %">
+          <Input type="number" min={0} max={100} value={form.discountPercent} onChange={set('discountPercent')} placeholder="0" />
+        </FormField>
+        <FormField label="Purchase Price (₹)" note="Cost price, optional">
+          <Input type="number" min={0} step={0.01} value={form.purchasePrice} onChange={set('purchasePrice')} placeholder="0.00" />
         </FormField>
       </div>
       <div className="flex justify-end">
         <Btn type="submit" variant="success" loading={loading}>
-          <Package className="w-3.5 h-3.5" /> Update Stock
+          <Package className="w-3.5 h-3.5" /> Add Stock
         </Btn>
       </div>
     </form>
@@ -1348,6 +1402,7 @@ const HsnUploadPanel = ({ onUpload, loading, uploadResult, onClearResult }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const MedicineListItem = ({ med, isSelected, onSelect }) => {
   const primaryImg = med.images?.find(i => i.isPrimary) || med.images?.[0];
+  const displayMrp = med.referenceMrp ?? med.mrp; // Medicine schema field is `referenceMrp`
   return (
     <motion.button variants={fadeUp} onClick={() => onSelect(med)}
       className={`w-full text-left flex items-center gap-3 px-3 py-3 rounded-[var(--r-field)] transition-all duration-150 border ${
@@ -1363,7 +1418,7 @@ const MedicineListItem = ({ med, isSelected, onSelect }) => {
         </div>
         <p className="text-[10px] text-base-content/40 truncate">{med.genericName} · {med.dosage}</p>
         <div className="flex items-center gap-1.5 mt-1">
-          <span className="text-[9px] font-black text-base-content/60">₹{med.mrp}</span>
+          <span className="text-[9px] font-black text-base-content/60">{displayMrp != null ? `₹${displayMrp}` : '—'}</span>
           <span className="w-1 h-1 rounded-full bg-base-content/20" />
           <span className={`text-[9px] font-bold ${med.isDiscontinued ? 'text-error' : 'text-success'}`}>
             {med.isDiscontinued ? 'Discontinued' : 'Active'}
@@ -1404,6 +1459,12 @@ const MedicineDetailPanel = ({
   const hsnDescription = hsnObj?.description || '—';
   const hsnChapter     = hsnObj?.chapterHeading || '—';
   const hsnGst         = hsnObj?.gstPercentage ?? med.gstPercentage ?? 0;
+  // Medicine schema field is `referenceMrp` — fall back to `mrp` defensively
+  // in case an older cached payload still carries that shape.
+  const displayMrp     = med.referenceMrp ?? med.mrp;
+  // Per-store inventory comes back as `storeInventory` from GET /:slug — the
+  // Medicine model itself never embeds an `inventory` array.
+  const storeInventory = med.storeInventory || [];
 
   const detailTabs = [
     { value: 'overview',  label: 'Overview',  icon: Eye },
@@ -1460,7 +1521,7 @@ const MedicineDetailPanel = ({
             </div>
           </div>
           <div className="text-right flex-shrink-0">
-            <p className="text-xl font-black text-base-content">₹{med.mrp}</p>
+            <p className="text-xl font-black text-base-content">{displayMrp != null ? `₹${displayMrp}` : '—'}</p>
             <p className="text-[10px] text-base-content/40 font-medium">MRP incl. {med.gstPercentage ?? 0}% GST</p>
           </div>
         </div>
@@ -1472,12 +1533,11 @@ const MedicineDetailPanel = ({
           <Pencil className="w-3 h-3" /> Edit
         </Btn>
         <Btn variant="outline" size="sm" onClick={() => onStock(med._id)} className="flex-1">
-          <Package className="w-3 h-3" /> Update Stock
+          <Package className="w-3 h-3" /> Add Stock
         </Btn>
-        {/* [M10] Single medicine inventory sync — admin / superadmin only */}
         {canAdmin && (
           <Btn variant="outline" size="sm" onClick={() => onSyncSingle(med._id)} loading={syncLoading}
-            title="Sync inventory entries for all stores (adds zero-stock for missing stores)">
+            title="Sync inventory entries for all stores">
             <RefreshCcw className="w-3 h-3 text-info" />
           </Btn>
         )}
@@ -1584,31 +1644,34 @@ const MedicineDetailPanel = ({
 
           {activeTab === 'inventory' && (
             <motion.div key="inventory" variants={fadeIn} initial="hidden" animate="visible" className="p-5 space-y-3">
-              {med.inventory?.length > 0 ? (
-                med.inventory.map((inv, i) => (
-                  <div key={i} className="bg-base-100 border border-base-300 rounded-[var(--r-box)] p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <p className="text-xs font-bold text-base-content">{inv.storeId?.storeName || inv.storeName || `Store ${i + 1}`}</p>
-                      <div className="flex items-center gap-1.5">
-                        <Badge color={inv.isActive ? 'success' : 'error'} size="xs">{inv.isActive ? 'Active' : 'Paused'}</Badge>
-                        <Badge color={inv.isLowStock ? 'warning' : 'success'}>{inv.isLowStock ? 'Low Stock' : 'Adequate'}</Badge>
+              {storeInventory.length > 0 ? (
+                storeInventory.map((inv, i) => {
+                  const finalPrice = inv.pricingBreakdown?.finalPrice ?? inv.finalPrice ?? inv.sellingPrice;
+                  return (
+                    <div key={inv._id || i} className="bg-base-100 border border-base-300 rounded-[var(--r-box)] p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-xs font-bold text-base-content">{inv.storeId?.storeName || `Store ${i + 1}`}</p>
+                        <div className="flex items-center gap-1.5">
+                          <Badge color={inv.isActive ? 'success' : 'error'} size="xs">{inv.isActive ? 'Active' : 'Paused'}</Badge>
+                          <Badge color={inv.isLowStock ? 'warning' : 'success'}>{inv.isLowStock ? 'Low Stock' : 'Adequate'}</Badge>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        {[
+                          { label: 'Stock Qty',  value: inv.stockQuantity ?? 0, large: true },
+                          { label: 'Batch',      value: inv.batchId?.batchNumber || '—' },
+                          { label: 'Expiry',     value: inv.batchId?.expiryDate ? new Date(inv.batchId.expiryDate).toLocaleDateString('en-IN') : '—' },
+                          { label: 'Price/Unit', value: finalPrice != null ? `₹${finalPrice}` : '—' },
+                        ].map(({ label, value, large }) => (
+                          <div key={label} className="bg-base-200/50 rounded-[var(--r-field)] p-2.5">
+                            <p className="text-[9px] font-bold uppercase text-base-content/30 mb-0.5">{label}</p>
+                            <p className={`font-bold text-base-content ${large ? 'text-xl' : 'text-sm'}`}>{value}</p>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      {[
-                        { label: 'Stock Qty',  value: inv.stockQuantity, large: true },
-                        { label: 'Batch',      value: inv.batchNumber || '—' },
-                        { label: 'Expiry',     value: inv.expiryDate ? new Date(inv.expiryDate).toLocaleDateString('en-IN') : '—' },
-                        { label: 'Price/Unit', value: inv.pricePerUnit ? `₹${inv.pricePerUnit}` : '—' },
-                      ].map(({ label, value, large }) => (
-                        <div key={label} className="bg-base-200/50 rounded-[var(--r-field)] p-2.5">
-                          <p className="text-[9px] font-bold uppercase text-base-content/30 mb-0.5">{label}</p>
-                          <p className={`font-bold text-base-content ${large ? 'text-xl' : 'text-sm'}`}>{value}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <div className="text-center py-12 text-base-content/20">
                   <Boxes className="w-10 h-10 mx-auto mb-2" />
@@ -1623,7 +1686,7 @@ const MedicineDetailPanel = ({
             <motion.div key="pricing" variants={fadeIn} initial="hidden" animate="visible" className="p-5 space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: 'MRP',      value: `₹${med.mrp}`,               note: 'Max Retail Price',  large: true, color: 'text-base-content' },
+                  { label: 'MRP',      value: displayMrp != null ? `₹${displayMrp}` : '—', note: 'Max Retail Price',  large: true, color: 'text-base-content' },
                   { label: 'GST Rate', value: `${hsnGst}%`,                note: 'Applied GST',       color: 'text-primary' },
                   { label: 'PTR',      value: med.ptr ? `₹${med.ptr}` : '—', note: 'Price to Retailer' },
                   { label: 'PTS',      value: med.pts ? `₹${med.pts}` : '—', note: 'Price to Stockist' },
@@ -1695,28 +1758,25 @@ const StoreCard = ({ store, onSuspend, onUnsuspend, onDelete, onTriggerLowStock,
       )}
 
       <div className="flex flex-wrap gap-1.5 pt-1 border-t border-base-300">
-        {/* [SL4] Trigger low-stock alerts */}
-        {(isAdmin || isSuperAdmin) && (
+        {/* Backend restricts /stores/low-stock/trigger to superadmin only — keep button visibility in sync to avoid 403s */}
+        {isSuperAdmin && (
           <Btn variant="ghost" size="xs" onClick={() => onTriggerLowStock(store._id)}
             loading={actionLoading} title="Trigger low-stock alerts for this store">
             <Bell className="w-3 h-3 text-warning" /> Alerts
           </Btn>
         )}
-        {/* [SL2] Suspend */}
         {(isAdmin || isSuperAdmin) && store.status === 'Open' && (
-          <Btn variant="warning" size="xs" onClick={() => onSuspend(store._id)}
+          <Btn variant="warning" size="xs" onClick={() => onSuspend(store)}
             loading={actionLoading}>
             <Pause className="w-3 h-3" /> Suspend
           </Btn>
         )}
-        {/* [SL3] Unsuspend */}
         {(isAdmin || isSuperAdmin) && store.status === 'Under-Maintenance' && (
           <Btn variant="success" size="xs" onClick={() => onUnsuspend(store._id)}
             loading={actionLoading}>
             <Play className="w-3 h-3" /> Reopen
           </Btn>
         )}
-        {/* [SL1] Delete — superadmin only */}
         {isSuperAdmin && (
           <Btn variant="danger" size="xs" onClick={() => onDelete(store._id)}
             loading={actionLoading}>
@@ -1731,11 +1791,30 @@ const StoreCard = ({ store, onSuspend, onUnsuspend, onDelete, onTriggerLowStock,
 // ─────────────────────────────────────────────────────────────────────────────
 // ANALYTICS TAB
 // ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Backend shape for GET /medicines/admin/stats ([M2]) is nested aggregate
+ * facets, not the flat shape this component previously assumed:
+ *
+ *   stats = {
+ *     catalogue:   { categoryStats: [{_id, count, avgPrice}], discontinuedCount: [{count}], totalCount: [{count}] },
+ *     inventory:   { totalStock: [{totalStock, totalValue}], lowStockCount: [{count}], outOfStock: [{count}] },
+ *     expiryAlerts: <number>,
+ *   }
+ *
+ * And HSN stats ([H2]) facet is { gstDistribution, sourceBreakdown, activeVsInactive, totals: [{total}] }
+ * — note `totals` (array), not `total`.
+ */
 const AnalyticsTab = ({ stats, hsnStats }) => {
-  const categoryData = (stats.categoryDistribution || []).slice(0, 8).map(c => ({ name: c._id || 'Unknown', count: c.count, avg: Math.round(c.avgPrice || 0) }));
-  const gstData      = (hsnStats.gstDistribution   || []).map(g => ({ name: `${g._id}%`, value: g.count }));
-  const sourceData   = (hsnStats.sourceBreakdown   || []).map(s => ({ name: s._id || 'Unknown', value: s.count }));
-  const avData       = (hsnStats.activeVsInactive  || []).map(a => ({ name: a._id ? 'Active' : 'Inactive', value: a.count }));
+  const totalStock      = stats?.inventory?.totalStock?.[0]?.totalStock ?? 0;
+  const lowStockCount   = stats?.inventory?.lowStockCount?.[0]?.count ?? 0;
+  const expiringSoon    = stats?.expiryAlerts ?? 0;
+  const discontinued    = stats?.catalogue?.discontinuedCount?.[0]?.count ?? 0;
+  const hsnTotal         = hsnStats?.totals?.[0]?.total ?? null;
+
+  const categoryData = (stats?.catalogue?.categoryStats || []).slice(0, 8).map(c => ({ name: c._id || 'Unknown', count: c.count, avg: Math.round(c.avgPrice || 0) }));
+  const gstData      = (hsnStats?.gstDistribution   || []).map(g => ({ name: `${g._id}%`, value: g.count }));
+  const sourceData   = (hsnStats?.sourceBreakdown   || []).map(s => ({ name: s._id || 'Unknown', value: s.count }));
+  const avData       = (hsnStats?.activeVsInactive  || []).map(a => ({ name: a._id ? 'Active' : 'Inactive', value: a.count }));
 
   const CustomTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;
@@ -1759,11 +1838,11 @@ const AnalyticsTab = ({ stats, hsnStats }) => {
   return (
     <motion.div className="space-y-6" variants={stagger} initial="hidden" animate="visible">
       <motion.div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4" variants={stagger}>
-        <StatCard icon={Package}       label="Total Stock"    value={stats.totalStock?.toLocaleString()} color="primary" sublabel="All stores" />
-        <StatCard icon={AlertTriangle} label="Low Stock"      value={stats.lowStockAlerts}               color="warning" sublabel="Below reorder" />
-        <StatCard icon={Clock}         label="Expiring Soon"  value={stats.expiryAlerts}                 color="error"   sublabel="Within 30 days" />
-        <StatCard icon={XCircle}       label="Discontinued"   value={stats.discontinuedCount}            color="info"    sublabel="Withdrawn" />
-        <StatCard icon={Tag}           label="HSN Codes"      value={hsnStats.total != null ? hsnStats.total : '—'} color="success" sublabel="Active" />
+        <StatCard icon={Package}       label="Total Stock"    value={totalStock.toLocaleString()} color="primary" sublabel="All stores" />
+        <StatCard icon={AlertTriangle} label="Low Stock"      value={lowStockCount}                color="warning" sublabel="Below reorder" />
+        <StatCard icon={Clock}         label="Expiring Soon"  value={expiringSoon}                 color="error"   sublabel="Within 30 days" />
+        <StatCard icon={XCircle}       label="Discontinued"   value={discontinued}                 color="info"    sublabel="Withdrawn" />
+        <StatCard icon={Tag}           label="HSN Codes"      value={hsnTotal ?? '—'}              color="success" sublabel="Active" />
       </motion.div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -1897,35 +1976,26 @@ export default function MedicinesManagement() {
   const isPharmacy   = userRole === 'pharmacy';
 
   // ── Redux state — Medicine ────────────────────────────────────────────────
-  const medicines     = useSelector(selectAllMedicines);
-  const currentMed    = useSelector(selectCurrentMedicine);
-  const stats         = useSelector(selectMedicineStats);
-  const loading       = useSelector(selectMedicineLoading);
-  const detailLoading = useSelector(selectMedicineDetailLoading);
-  const actionLoading = useSelector(selectMedicineActionLoading);
-  const syncLoading   = useSelector(selectMedicineSyncLoading);  // [M9, M10]
-  const medPagination = useSelector(selectMedicinePagination);
-  const error         = useSelector(selectMedicineError);
-  const syncResult    = useSelector(selectSyncResult);           // last sync op result from slice
-
-  // ── Redux state — Inventory ────────────────────────────────────────────────
-  const inventoryLoading = useSelector(selectInventoryLoading);
-  const lowStockReport   = useSelector(selectLowStockReport);
-  const expiryAlerts     = useSelector(selectExpiryAlerts);
+  const medicines         = useSelector(selectMedicines);
+  const selectedMedDetail = useSelector(selectMedicineDetail);
+  const stats             = useSelector(selectMedicineStats);
+  const loading           = useSelector(selectMedicineLoading);
+  const actionLoading     = useSelector(selectActionLoading);
+  const medPagination     = useSelector(selectMedicinePagination);
+  const error             = useSelector(selectMedicineError);
+  const syncResult        = useSelector(selectSyncResult);
 
   // ── Redux state — HSN ─────────────────────────────────────────────────────
-  const hsnCodes      = useSelector(selectAllHsnCodes);
-  const currentHsn    = useSelector(selectCurrentHsnCode);
-  const hsnStats      = useSelector(selectHsnStats);
+  const hsnCodes     = useSelector(selectHsnCodes);
+  const hsnDetail    = useSelector(selectHsnDetail);
+  const hsnStats     = useSelector(selectHsnStats);
   const hsnPagination = useSelector(selectHsnPagination);
-  const uploadResult  = useSelector(selectHsnUploadResult);
-  const hsnLoading    = useSelector(selectHsnLoading);
+  const uploadResult = useSelector(selectHsnUploadResult);
+  const uploadLoading = useSelector(selectUploadLoading);
 
   // ── Redux state — Stores ──────────────────────────────────────────────────
-  const stores              = useSelector(selectAllStores);
-  const storePagination     = useSelector(selectStorePagination);
-  const storeLoading        = useSelector(selectStoreLoading);
-  const storeActionLoading  = useSelector(selectStoreActionLoading);
+  const stores               = useSelector(selectStores);
+  const storePagination      = useSelector(selectStorePagination);
   const storeLifecycleResult = useSelector(selectStoreLifecycleResult);
 
   // ── Local UI ──────────────────────────────────────────────────────────────
@@ -1942,46 +2012,45 @@ export default function MedicinesManagement() {
 
   // HSN filters
   const [hsnSearch, setHsnSearch] = useState('');
-  const [hsnGst,    setHsnGst]    = useState('');
+  const [hsnGstFilter, setHsnGstFilter] = useState('');
   const [hsnSort,   setHsnSort]   = useState('hsnCode');
   const [hsnActive, setHsnActive] = useState('true');
   const [hsnPage,   setHsnPage]   = useState(1);
 
   // Store filters
-  const [storeSearch,   setStoreSearch]   = useState('');
-  const [storeStatus,   setStoreStatus]   = useState('');
-  const [storeType,     setStoreType]     = useState('');
-  const [storePage,     setStorePage]     = useState(1);
+  const [storeSearch, setStoreSearch] = useState('');
+  const [storeStatus, setStoreStatus] = useState('');
+  const [storeType,   setStoreType]   = useState('');
+  const [storePage,   setStorePage]   = useState(1);
 
-  // Sync modal
-  const [showSyncModal, setShowSyncModal] = useState(false);
-  // local sync result banner (for single sync, since slice's syncResult is also used)
+  // Sync
+  const [showSyncModal,   setShowSyncModal]   = useState(false);
   const [localSyncResult, setLocalSyncResult] = useState(null);
 
   // Modals
   const [showCreateMed,    setShowCreateMed]    = useState(false);
-  const [showEditMed,      setShowEditMed]       = useState(false);
-  const [showStockModal,   setShowStockModal]    = useState(false);
-  const [showCreateHsn,    setShowCreateHsn]     = useState(false);
-  const [showEditHsn,      setShowEditHsn]       = useState(false);
-  const [showUploadHsn,    setShowUploadHsn]     = useState(false);
-  const [showRestockModal, setShowRestockModal]  = useState(false);
-  const [showSuspendModal, setShowSuspendModal]  = useState(false);
-  const [suspendTarget,    setSuspendTarget]     = useState(null);
+  const [showEditMed,      setShowEditMed]      = useState(false);
+  const [showStockModal,   setShowStockModal]   = useState(false);
+  const [showCreateHsn,    setShowCreateHsn]    = useState(false);
+  const [showEditHsn,      setShowEditHsn]      = useState(false);
+  const [showUploadHsn,    setShowUploadHsn]    = useState(false);
+  const [showRestockModal, setShowRestockModal] = useState(false);
+  const [showSuspendModal, setShowSuspendModal] = useState(false);
+  const [suspendTarget,    setSuspendTarget]    = useState(null);
 
-  const [editHsnData,      setEditHsnData]       = useState(null);
-  const [stockMedId,       setStockMedId]        = useState(null);
-  const [restockMedId,     setRestockMedId]      = useState('');
-  const [restockQty,       setRestockQty]        = useState('');
-  const [selectedHsnCodes, setSelectedHsnCodes]  = useState([]);
+  const [editHsnData,      setEditHsnData]      = useState(null);
+  const [stockMedId,       setStockMedId]       = useState(null);
+  const [restockMedId,     setRestockMedId]     = useState('');
+  const [restockQty,       setRestockQty]       = useState('');
+  const [selectedHsnCodes, setSelectedHsnCodes] = useState([]);
 
   // ── Initial data ──────────────────────────────────────────────────────────
   useEffect(() => {
-    dispatch(fetchInventoryStats());
+    dispatch(fetchMedicineStats());
     dispatch(fetchHsnStats());
   }, [dispatch]);
 
-  // ── Medicine list effect ──────────────────────────────────────────────────
+  // ── Medicine list ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (activeTab !== 'medicines') return;
     const params = { page: medPage, limit: 20, sort: medSort };
@@ -1991,16 +2060,16 @@ export default function MedicinesManagement() {
     dispatch(fetchMedicines(params));
   }, [dispatch, activeTab, medPage, medSort, medSearch, medCategory, medSchedule]);
 
-  // ── HSN list effect ───────────────────────────────────────────────────────
+  // ── HSN list ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (activeTab !== 'hsn') return;
     const params = { page: hsnPage, limit: 20, sort: hsnSort, isActive: hsnActive };
     if (hsnSearch) params.search = hsnSearch;
-    if (hsnGst)    params.gst    = hsnGst;
+    if (hsnGstFilter) params.gst = hsnGstFilter;
     dispatch(fetchHsnCodes(params));
-  }, [dispatch, activeTab, hsnPage, hsnSort, hsnSearch, hsnGst, hsnActive]);
+  }, [dispatch, activeTab, hsnPage, hsnSort, hsnSearch, hsnGstFilter, hsnActive]);
 
-  // ── Stores list effect — [S1] ─────────────────────────────────────────────
+  // ── Stores list ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (activeTab !== 'stores') return;
     const params = { page: storePage, limit: 12 };
@@ -2010,12 +2079,22 @@ export default function MedicinesManagement() {
     dispatch(fetchStores(params));
   }, [dispatch, activeTab, storePage, storeSearch, storeStatus, storeType]);
 
-  // ── Sync currentMed → selectedMed ────────────────────────────────────────
+  // ── Stores needed for store-picker dropdowns inside Medicine forms ────────
+  // (Add Medicine / Edit Medicine / Add Stock modals use `stores` for their
+  // store-select dropdowns even when the "Stores" tab itself hasn't been
+  // opened yet — fetch a lightweight list once for admins/pharmacy users.)
   useEffect(() => {
-    if (currentMed) setSelectedMed(currentMed);
-  }, [currentMed]);
+    if (!isAdmin && !isPharmacy) return;
+    if (stores.length > 0) return;
+    dispatch(fetchStores({ page: 1, limit: 100 }));
+  }, [dispatch, isAdmin, isPharmacy, stores.length]);
 
-  // ── Clear lifecycle result after 5s ──────────────────────────────────────
+  // ── Sync detail → selectedMed ─────────────────────────────────────────────
+  useEffect(() => {
+    if (selectedMedDetail) setSelectedMed(selectedMedDetail);
+  }, [selectedMedDetail]);
+
+  // ── Auto-clear lifecycle result ───────────────────────────────────────────
   useEffect(() => {
     if (!storeLifecycleResult) return;
     const t = setTimeout(() => dispatch(clearStoreLifecycleResult()), 5000);
@@ -2033,28 +2112,39 @@ export default function MedicinesManagement() {
 
   const handleCreateMed = (data) =>
     dispatch(createMedicine(data)).unwrap()
-      .then(() => { setShowCreateMed(false); dispatch(resetCurrentHsnCode()); })
+      .then(() => { setShowCreateMed(false); dispatch(clearHsnDetail()); })
       .catch(() => {});
 
   const handleEditMed = (data) =>
-    dispatch(updateMedicine({ id: selectedMed._id, updateData: data })).unwrap()
-      .then(() => { setShowEditMed(false); if (selectedMed?.slug) dispatch(fetchMedicineBySlug(selectedMed.slug)); })
+    dispatch(updateMedicine({ id: selectedMed._id, updates: data })).unwrap()
+      .then(() => {
+        setShowEditMed(false);
+        if (selectedMed?.slug) dispatch(fetchMedicineBySlug(selectedMed.slug));
+      })
       .catch(() => {});
 
-  const handleUpdateStock = (id, stockData) =>
-    dispatch(updateStock({ id, stockData })).unwrap()
-      .then(() => { setShowStockModal(false); setStockMedId(null); if (selectedMed?.slug) dispatch(fetchMedicineBySlug(selectedMed.slug)); })
+  // addMedicineStock signature: { medicineId, storeId, ...payload }
+  const handleUpdateStock = ({ medicineId, storeId, ...rest }) =>
+    dispatch(addMedicineStock({ medicineId, storeId, ...rest })).unwrap()
+      .then(() => {
+        setShowStockModal(false);
+        setStockMedId(null);
+        if (selectedMed?.slug) dispatch(fetchMedicineBySlug(selectedMed.slug));
+      })
       .catch(() => {});
 
   const handleDiscontinue = (id) => {
     if (!confirm('Discontinue this medicine? All pharmacies will be notified.')) return;
-    dispatch(discontinueMedicine(id)).then(() => { setSelectedMed(null); dispatch(resetCurrentMedicine()); });
+    dispatch(discontinueMedicine(id)).then(() => {
+      setSelectedMed(null);
+      dispatch(clearMedicineDetail());
+    });
   };
 
   const handleRestock = (e) => {
     e.preventDefault();
     if (!restockMedId || !restockQty) return;
-    dispatch(sendRestockRequest({ medicineId: restockMedId, quantityRequired: Number(restockQty) })).unwrap()
+    dispatch(submitRestockRequest({ medicineId: restockMedId, quantityRequired: Number(restockQty) })).unwrap()
       .then(() => { setShowRestockModal(false); setRestockQty(''); setRestockMedId(''); });
   };
 
@@ -2062,37 +2152,24 @@ export default function MedicinesManagement() {
   // SYNC HANDLERS
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * [M10] handleSyncSingle
-   * POST /api/v1/medicines/:id/sync-inventory
-   * Adds zero-stock entries for stores missing from this medicine's inventory.
-   * Uses the correct thunk name: syncMedicineInventory (from the slice).
-   */
   const handleSyncSingle = useCallback(async (medicineId) => {
     setLocalSyncResult(null);
     try {
-      const action = await dispatch(syncMedicineInventory(medicineId));
+      const action = await dispatch(syncOneMedicineInventory(medicineId));
       setLocalSyncResult(action?.payload ?? null);
-      // Refresh the detail view so new inventory entries appear
       if (selectedMed?.slug) dispatch(fetchMedicineBySlug(selectedMed.slug));
     } catch (err) {
       setLocalSyncResult({ error: err?.message || 'Sync failed' });
     }
   }, [dispatch, selectedMed]);
 
-  /**
-   * [M9] handleSyncAll
-   * POST /api/v1/medicines/sync-inventory/all
-   * Iterates every non-discontinued medicine and fills missing store entries.
-   * Uses the correct thunk name: syncAllInventory (from the slice).
-   */
   const handleSyncAll = useCallback(async () => {
     setShowSyncModal(false);
     setLocalSyncResult(null);
     try {
-      const action = await dispatch(syncAllInventory());
+      const action = await dispatch(syncAllMedicinesInventory());
       setLocalSyncResult(action?.payload ?? null);
-      dispatch(fetchInventoryStats());
+      dispatch(fetchMedicineStats());
     } catch (err) {
       setLocalSyncResult({ error: err?.message || 'Bulk sync failed' });
     }
@@ -2108,42 +2185,42 @@ export default function MedicinesManagement() {
       .catch(() => {});
 
   const handleEditHsn = (data) =>
-    dispatch(updateHsnCode({ code: editHsnData.hsnCode, updateData: data })).unwrap()
+    dispatch(updateHsnCode({ code: editHsnData.hsnCode, updates: data })).unwrap()
       .then(() => { setShowEditHsn(false); setEditHsnData(null); })
       .catch(() => {});
 
   const handleDeleteHsn  = (code) => { if (!confirm(`Deactivate HSN code ${code}?`)) return; dispatch(deleteHsnCode(code)); };
-  const handleBulkDelete = () => { if (!selectedHsnCodes.length) return; if (!confirm(`Deactivate ${selectedHsnCodes.length} HSN code(s)?`)) return; dispatch(bulkDeleteHsnCodes(selectedHsnCodes)).unwrap().then(() => setSelectedHsnCodes([])); };
+  const handleBulkDelete = () => {
+    if (!selectedHsnCodes.length) return;
+    if (!confirm(`Deactivate ${selectedHsnCodes.length} HSN code(s)?`)) return;
+    dispatch(bulkDeleteHsnCodes({ codes: selectedHsnCodes })).unwrap().then(() => setSelectedHsnCodes([]));
+  };
   const handleUploadHsn  = (formData) => dispatch(uploadHsnFile(formData)).unwrap().then(() => dispatch(fetchHsnCodes({ page: 1 })));
   const toggleHsnSelect  = (code) => setSelectedHsnCodes(prev => prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]);
   const selectAllHsn     = () => setSelectedHsnCodes(selectedHsnCodes.length === hsnCodes.length ? [] : hsnCodes.map(h => h.hsnCode));
 
   // ─────────────────────────────────────────────────────────────────────────
-  // STORE LIFECYCLE HANDLERS [SL1–SL4]
+  // STORE LIFECYCLE HANDLERS
   // ─────────────────────────────────────────────────────────────────────────
 
-  /** [SL1] DELETE — superadmin only */
   const handleDeleteStore = useCallback((storeId) => {
     if (!confirm('Permanently delete this store? All medicine inventory entries for this store will be purged. This cannot be undone.')) return;
     dispatch(deleteStore(storeId)).then(() => dispatch(fetchStores({ page: storePage, limit: 12 })));
   }, [dispatch, storePage]);
 
-  /** [SL2] PATCH suspend */
   const handleSuspendStore = useCallback((storeId, reason) => {
     dispatch(suspendStore({ storeId, reason })).unwrap()
       .then(() => { setShowSuspendModal(false); setSuspendTarget(null); dispatch(fetchStores({ page: storePage, limit: 12 })); })
       .catch(() => {});
   }, [dispatch, storePage]);
 
-  /** [SL3] PATCH unsuspend */
   const handleUnsuspendStore = useCallback((storeId) => {
     if (!confirm('Reopen this store? Inventory will be restored and low-stock alerts will fire immediately.')) return;
     dispatch(unsuspendStore(storeId)).then(() => dispatch(fetchStores({ page: storePage, limit: 12 })));
   }, [dispatch, storePage]);
 
-  /** [SL4] POST trigger low-stock alerts */
   const handleTriggerLowStock = useCallback((storeId) => {
-    dispatch(triggerLowStockAlerts({ storeId }));
+    dispatch(triggerLowStockAlerts(storeId ? { storeId } : {}));
   }, [dispatch]);
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2155,7 +2232,6 @@ export default function MedicinesManagement() {
     { value: 'medicines', label: 'Medicines',  icon: Pill },
     { value: 'hsn',       label: 'HSN Codes',  icon: Tag },
   ];
-  // Stores tab visible only to admin/superadmin
   if (isAdmin) topTabs.push({ value: 'stores', label: 'Stores', icon: Store });
 
   return (
@@ -2178,14 +2254,13 @@ export default function MedicinesManagement() {
 
           <div className="flex items-center gap-2">
             <Btn variant="ghost" size="sm"
-              onClick={() => { dispatch(fetchInventoryStats()); dispatch(fetchHsnStats()); }}
+              onClick={() => { dispatch(fetchMedicineStats()); dispatch(fetchHsnStats()); }}
               title="Refresh stats">
               <RefreshCw className="w-3.5 h-3.5" />
             </Btn>
 
-            {/* [M9] Bulk Sync Inventory — superadmin only */}
             {isSuperAdmin && (
-              <Btn variant="outline" size="sm" onClick={() => setShowSyncModal(true)} loading={syncLoading}
+              <Btn variant="outline" size="sm" onClick={() => setShowSyncModal(true)} loading={actionLoading}
                 title="Sync inventory entries across all stores for all medicines">
                 <DatabaseZap className="w-3.5 h-3.5 text-info" /> Sync All
               </Btn>
@@ -2196,7 +2271,7 @@ export default function MedicinesManagement() {
                 <UploadCloud className="w-3.5 h-3.5" /> Upload HSN
               </Btn>
             )}
-            <Btn variant="primary" size="sm" onClick={() => { dispatch(resetCurrentHsnCode()); setShowCreateMed(true); }}>
+            <Btn variant="primary" size="sm" onClick={() => { dispatch(clearHsnDetail()); setShowCreateMed(true); }}>
               <Plus className="w-3.5 h-3.5" /> New Medicine
             </Btn>
           </div>
@@ -2243,7 +2318,7 @@ export default function MedicinesManagement() {
           {/* ════════ ANALYTICS ════════ */}
           {activeTab === 'analytics' && (
             <motion.div key="analytics" variants={fadeIn} initial="hidden" animate="visible" exit="hidden">
-              {loading || hsnLoading
+              {loading
                 ? (
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
                     {Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-24 rounded-[var(--r-box)] bg-base-200 animate-pulse" />)}
@@ -2265,9 +2340,9 @@ export default function MedicinesManagement() {
                     <div className="flex items-center justify-between">
                       <p className="text-xs font-bold text-base-content">
                         Medicines
-                        <span className="ml-2 text-[10px] font-normal text-base-content/40 tabular-nums">{medPagination.totalItems ?? 0} total</span>
+                        <span className="ml-2 text-[10px] font-normal text-base-content/40 tabular-nums">{medPagination.total ?? 0} total</span>
                       </p>
-                      <Btn variant="ghost" size="xs" onClick={() => { setSelectedMed(null); dispatch(resetCurrentMedicine()); }}>
+                      <Btn variant="ghost" size="xs" onClick={() => { setSelectedMed(null); dispatch(clearMedicineDetail()); }}>
                         <X className="w-3 h-3" />
                       </Btn>
                     </div>
@@ -2343,30 +2418,18 @@ export default function MedicinesManagement() {
                 {/* RIGHT: Detail Panel */}
                 <div className="flex-1 min-w-0 bg-base-100 border border-base-300 rounded-[var(--r-box)] overflow-hidden">
                   <AnimatePresence mode="wait">
-                    {detailLoading && !selectedMed
-                      ? (
-                        <div className="p-8 space-y-4">
-                          <div className="h-28 rounded-[var(--r-box)] bg-base-200 animate-pulse" />
-                          <div className="grid grid-cols-3 gap-3">
-                            {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-16 rounded-[var(--r-field)] bg-base-200 animate-pulse" />)}
-                          </div>
-                        </div>
-                      )
-                      : (
-                        <MedicineDetailPanel
-                          key={selectedMed?._id || 'empty'}
-                          med={selectedMed}
-                          onEdit={()       => setShowEditMed(true)}
-                          onStock={(id)    => { setStockMedId(id); setShowStockModal(true); }}
-                          onDiscontinue={handleDiscontinue}
-                          onRestock={(id)  => { setRestockMedId(id); setShowRestockModal(true); }}
-                          onSyncSingle={handleSyncSingle}  // [M10]
-                          actionLoading={actionLoading}
-                          syncLoading={syncLoading}
-                          canAdmin={isAdmin}
-                        />
-                      )
-                    }
+                    <MedicineDetailPanel
+                      key={selectedMed?._id || 'empty'}
+                      med={selectedMed}
+                      onEdit={() => setShowEditMed(true)}
+                      onStock={(id) => { setStockMedId(id); setShowStockModal(true); }}
+                      onDiscontinue={handleDiscontinue}
+                      onRestock={(id) => { setRestockMedId(id); setShowRestockModal(true); }}
+                      onSyncSingle={handleSyncSingle}
+                      actionLoading={actionLoading}
+                      syncLoading={actionLoading}
+                      canAdmin={isAdmin}
+                    />
                   </AnimatePresence>
                 </div>
               </div>
@@ -2382,7 +2445,7 @@ export default function MedicinesManagement() {
                   <Input className="pl-9" placeholder="Search HSN code or description…" value={hsnSearch}
                     onChange={e => { setHsnSearch(e.target.value); setHsnPage(1); }} />
                 </div>
-                <SelectEl className="w-full sm:w-36" value={hsnGst} onChange={e => { setHsnGst(e.target.value); setHsnPage(1); }}>
+                <SelectEl className="w-full sm:w-36" value={hsnGstFilter} onChange={e => { setHsnGstFilter(e.target.value); setHsnPage(1); }}>
                   <option value="">All GST Slabs</option>
                   {GST_SLABS.map(g => <option key={g} value={g}>{g}%</option>)}
                 </SelectEl>
@@ -2438,7 +2501,7 @@ export default function MedicinesManagement() {
                       </tr>
                     </thead>
                     <motion.tbody variants={stagger} initial="hidden" animate="visible">
-                      {hsnLoading
+                      {loading
                         ? Array.from({ length: 6 }).map((_, i) => (
                           <tr key={i}><td colSpan={7} className="px-4 py-2"><div className="h-8 rounded bg-base-200 animate-pulse" /></td></tr>
                         ))
@@ -2473,10 +2536,9 @@ export default function MedicinesManagement() {
             </motion.div>
           )}
 
-          {/* ════════ STORES (admin / superadmin) ════════ */}
+          {/* ════════ STORES ════════ */}
           {activeTab === 'stores' && isAdmin && (
             <motion.div key="stores" variants={fadeIn} initial="hidden" animate="visible" exit="hidden">
-              {/* Filters */}
               <div className="flex flex-col sm:flex-row gap-3 mb-5 flex-wrap">
                 <div className="relative flex-1 min-w-[200px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-base-content/30" />
@@ -2491,10 +2553,9 @@ export default function MedicinesManagement() {
                   <option value="">All Types</option>
                   {STORE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                 </SelectEl>
-                {/* [SL4] Trigger all stores low-stock — superadmin */}
                 {isSuperAdmin && (
                   <Btn variant="outline" size="sm" onClick={() => handleTriggerLowStock(undefined)}
-                    loading={storeActionLoading} title="Trigger low-stock alerts for ALL open stores">
+                    loading={actionLoading} title="Trigger low-stock alerts for ALL open stores">
                     <Bell className="w-3.5 h-3.5 text-warning" /> Trigger All Alerts
                   </Btn>
                 )}
@@ -2506,7 +2567,7 @@ export default function MedicinesManagement() {
                 </p>
               </div>
 
-              {storeLoading ? (
+              {loading ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {Array.from({ length: 8 }).map((_, i) => (
                     <div key={i} className="h-40 rounded-[var(--r-box)] bg-base-200 animate-pulse" />
@@ -2527,11 +2588,11 @@ export default function MedicinesManagement() {
                     <StoreCard
                       key={store._id}
                       store={store}
-                      onSuspend={(id) => { setSuspendTarget(store); setShowSuspendModal(true); }}
+                      onSuspend={(s) => { setSuspendTarget(s); setShowSuspendModal(true); }}
                       onUnsuspend={handleUnsuspendStore}
                       onDelete={handleDeleteStore}
                       onTriggerLowStock={handleTriggerLowStock}
-                      actionLoading={storeActionLoading}
+                      actionLoading={actionLoading}
                       isSuperAdmin={isSuperAdmin}
                       isAdmin={isAdmin}
                     />
@@ -2539,9 +2600,9 @@ export default function MedicinesManagement() {
                 </motion.div>
               )}
 
-              {storePagination.totalPages > 1 && (
+              {storePagination.pages > 1 && (
                 <div className="flex justify-center mt-6">
-                  <Pagination page={storePagination.currentPage} totalPages={storePagination.totalPages} onChange={setStorePage} />
+                  <Pagination page={storePagination.page} totalPages={storePagination.pages} onChange={setStorePage} />
                 </div>
               )}
             </motion.div>
@@ -2552,28 +2613,33 @@ export default function MedicinesManagement() {
       {/* ════════════════════ MODALS ════════════════════ */}
 
       {/* Create Medicine */}
-      <Modal open={showCreateMed} onClose={() => { setShowCreateMed(false); dispatch(resetCurrentHsnCode()); }} title="Add New Medicine" wide>
+      <Modal open={showCreateMed} onClose={() => { setShowCreateMed(false); dispatch(clearHsnDetail()); }} title="Add New Medicine" wide>
         <MedicineForm onSubmit={handleCreateMed} loading={actionLoading}
           onHsnLookup={(code) => dispatch(fetchHsnByCode(code))}
-          hsnData={currentHsn} hsnLookupLoading={detailLoading}
+          hsnData={hsnDetail} hsnLookupLoading={loading}
           stores={stores} isAdmin={isAdmin} />
       </Modal>
 
       {/* Edit Medicine */}
-      <Modal open={showEditMed} onClose={() => { setShowEditMed(false); dispatch(resetCurrentHsnCode()); }} title="Edit Medicine" wide>
+      <Modal open={showEditMed} onClose={() => { setShowEditMed(false); dispatch(clearHsnDetail()); }} title="Edit Medicine" wide>
         {selectedMed && (
           <MedicineForm initial={selectedMed} onSubmit={handleEditMed} loading={actionLoading}
             onHsnLookup={(code) => dispatch(fetchHsnByCode(code))}
-            hsnData={currentHsn} hsnLookupLoading={detailLoading}
+            hsnData={hsnDetail} hsnLookupLoading={loading}
             stores={stores} isAdmin={isAdmin} />
         )}
       </Modal>
 
-      {/* Update Stock */}
-      <Modal open={showStockModal} onClose={() => { setShowStockModal(false); setStockMedId(null); }} title="Update Store Stock">
+      {/* Add Stock — uses addMedicineStock thunk: { medicineId, storeId, ...payload } */}
+      <Modal open={showStockModal} onClose={() => { setShowStockModal(false); setStockMedId(null); }} title="Add Store Stock">
         {stockMedId && (
-          <UpdateStockForm medicineId={stockMedId} onSubmit={handleUpdateStock}
-            loading={actionLoading} stores={stores} isPharmacy={isPharmacy} />
+          <UpdateStockForm
+            medicineId={stockMedId}
+            onSubmit={handleUpdateStock}
+            loading={actionLoading}
+            stores={stores}
+            isPharmacy={isPharmacy}
+          />
         )}
       </Modal>
 
@@ -2625,24 +2691,24 @@ export default function MedicinesManagement() {
               <p className="text-base-content/60">HSN Code · Description · Chapter Heading (optional) · GST % (0/5/12/18/28)</p>
             </div>
           </div>
-          <HsnUploadPanel onUpload={handleUploadHsn} loading={actionLoading}
+          <HsnUploadPanel onUpload={handleUploadHsn} loading={uploadLoading}
             uploadResult={uploadResult} onClearResult={() => dispatch(clearHsnUploadResult())} />
         </div>
       </Modal>
 
-      {/* [SL2] Suspend Store Modal */}
+      {/* Suspend Store */}
       <Modal open={showSuspendModal} onClose={() => { setShowSuspendModal(false); setSuspendTarget(null); }} title="Suspend Store">
         {suspendTarget && (
           <SuspendStoreForm
             store={suspendTarget}
             onSubmit={handleSuspendStore}
             onCancel={() => { setShowSuspendModal(false); setSuspendTarget(null); }}
-            loading={storeActionLoading}
+            loading={actionLoading}
           />
         )}
       </Modal>
 
-      {/* [M9] Bulk Sync All Confirmation */}
+      {/* Bulk Sync All Confirmation */}
       <Modal open={showSyncModal} onClose={() => setShowSyncModal(false)} title="Sync All Inventory Entries">
         <div className="space-y-4">
           <div className="flex items-start gap-3 p-4 bg-info/10 border border-info/20 rounded-[var(--r-box)]">
@@ -2656,7 +2722,7 @@ export default function MedicinesManagement() {
           </div>
           <div className="flex justify-end gap-2">
             <Btn variant="ghost" onClick={() => setShowSyncModal(false)}>Cancel</Btn>
-            <Btn variant="primary" onClick={handleSyncAll} loading={syncLoading}>
+            <Btn variant="primary" onClick={handleSyncAll} loading={actionLoading}>
               <DatabaseZap className="w-3.5 h-3.5" /> Run Bulk Sync
             </Btn>
           </div>
