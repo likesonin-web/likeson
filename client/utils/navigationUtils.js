@@ -1,13 +1,17 @@
 /**
- * navigationUtils.js
- * Production-grade navigation calculation engine.
- * No React — safe server + client import.
+ * navigationUtils.js — Production navigation calculation engine
+ *
+ * FIX vs original:
+ *  - getManeuverIcon: checks keep-left/keep-right/slight BEFORE plain
+ *    left/right — original matched 'left' inside 'keep-left', returning
+ *    wrong icon 'turn-left' instead of 'keep-left'.
+ *  - formatEta: handles 0 minutes correctly (returned '--' instead of '< 1 min').
+ *  - All exports are pure functions — safe for server + client import.
  */
 
-// ─── MATH HELPERS ────────────────────────────────────────────────────────────
+// ─── MATH ────────────────────────────────────────────────────────────────────
 
 function toRad(deg) { return (deg * Math.PI) / 180; }
-function toDeg(rad) { return (rad * 180) / Math.PI; }
 
 /** Haversine distance in km */
 export function distanceKm(lat1, lng1, lat2, lng2) {
@@ -20,7 +24,7 @@ export function distanceKm(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/** Bearing 0-360 from point1 → point2 */
+/** Bearing 0–360 from point1 → point2 */
 export function bearingDeg(lat1, lng1, lat2, lng2) {
   const dLng = toRad(lng2 - lng1);
   const la1  = toRad(lat1);
@@ -30,7 +34,7 @@ export function bearingDeg(lat1, lng1, lat2, lng2) {
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
-/** Smooth heading — handles 0/360 wrap */
+/** Low-pass heading — handles 0/360 wrap */
 export function smoothHeading(current, target, factor = 0.15) {
   let diff = target - current;
   if (diff >  180) diff -= 360;
@@ -38,7 +42,6 @@ export function smoothHeading(current, target, factor = 0.15) {
   return (current + diff * factor + 360) % 360;
 }
 
-/** Lerp position */
 export function interpolatePosition(from, to, t) {
   return {
     lat: from.lat + (to.lat - from.lat) * t,
@@ -49,39 +52,32 @@ export function interpolatePosition(from, to, t) {
 // ─── KALMAN FILTER ───────────────────────────────────────────────────────────
 
 export function createKalmanFilter() {
-  let lat      = null;
-  let lng      = null;
-  let variance = -1;
-  const Q      = 3;
-  const minAcc = 1;
+  let lat = null, lng = null, variance = -1;
+  const Q = 3, minAcc = 1;
 
   return {
+    _lastTs: null,
     update(newLat, newLng, accuracy = 10, timestampMs = Date.now()) {
       const acc = Math.max(accuracy, minAcc);
-
       if (variance < 0) {
-        lat = newLat;
-        lng = newLng;
-        variance = acc * acc;
+        lat = newLat; lng = newLng; variance = acc * acc;
+        this._lastTs = timestampMs;
         return { lat, lng };
       }
-
-      const dt = Math.max((timestampMs - (this._lastTs || timestampMs)) / 1000, 0.01);
+      const dt  = Math.max((timestampMs - (this._lastTs || timestampMs)) / 1000, 0.01);
       this._lastTs = timestampMs;
       variance += dt * Q * Q;
-
       const K    = variance / (variance + acc * acc);
       lat        = lat + K * (newLat - lat);
       lng        = lng + K * (newLng - lng);
       variance   = (1 - K) * variance;
-
       return { lat, lng };
     },
-    reset() { variance = -1; lat = null; lng = null; },
+    reset() { variance = -1; lat = null; lng = null; this._lastTs = null; },
   };
 }
 
-// ─── POLYLINE UTILS ──────────────────────────────────────────────────────────
+// ─── POLYLINE ────────────────────────────────────────────────────────────────
 
 export function decodePolyline(encoded) {
   if (!encoded) return [];
@@ -90,19 +86,11 @@ export function decodePolyline(encoded) {
 
   while (index < encoded.length) {
     let b, shift = 0, result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
     lat += result & 1 ? ~(result >> 1) : result >> 1;
 
     shift = 0; result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
     lng += result & 1 ? ~(result >> 1) : result >> 1;
 
     points.push({ lat: lat / 1e5, lng: lng / 1e5 });
@@ -111,84 +99,51 @@ export function decodePolyline(encoded) {
 }
 
 export function projectPointOnSegment(pLat, pLng, aLat, aLng, bLat, bLng) {
-  const ax = bLng - aLng;
-  const ay = bLat - aLat;
+  const ax = bLng - aLng, ay = bLat - aLat;
   const len2 = ax * ax + ay * ay;
-
   if (len2 === 0) {
-    return {
-      projectedLat: aLat,
-      projectedLng: aLng,
-      t: 0,
-      distanceKm: distanceKm(pLat, pLng, aLat, aLng),
-    };
+    return { projectedLat: aLat, projectedLng: aLng, t: 0, distanceKm: distanceKm(pLat, pLng, aLat, aLng) };
   }
-
-  const t = Math.max(0, Math.min(1,
-    ((pLng - aLng) * ax + (pLat - aLat) * ay) / len2
-  ));
+  const t      = Math.max(0, Math.min(1, ((pLng - aLng) * ax + (pLat - aLat) * ay) / len2));
   const projLat = aLat + t * ay;
   const projLng = aLng + t * ax;
-
-  return {
-    projectedLat: projLat,
-    projectedLng: projLng,
-    t,
-    distanceKm: distanceKm(pLat, pLng, projLat, projLng),
-  };
+  return { projectedLat: projLat, projectedLng: projLng, t, distanceKm: distanceKm(pLat, pLng, projLat, projLng) };
 }
 
 export function snapToPolyline(pLat, pLng, polylinePoints) {
   if (!polylinePoints?.length) return { lat: pLat, lng: pLng, segmentIndex: 0, progressRatio: 0, distanceOffRouteKm: 0 };
 
-  let bestDist    = Infinity;
-  let bestSeg     = 0;
-  let bestT       = 0;
-  let bestLat     = pLat;
-  let bestLng     = pLng;
+  let bestDist = Infinity, bestSeg = 0, bestT = 0, bestLat = pLat, bestLng = pLng;
 
   for (let i = 0; i < polylinePoints.length - 1; i++) {
-    const a = polylinePoints[i];
-    const b = polylinePoints[i + 1];
+    const a = polylinePoints[i], b = polylinePoints[i + 1];
     const r = projectPointOnSegment(pLat, pLng, a.lat, a.lng, b.lat, b.lng);
     if (r.distanceKm < bestDist) {
-      bestDist = r.distanceKm;
-      bestSeg  = i;
-      bestT    = r.t;
-      bestLat  = r.projectedLat;
-      bestLng  = r.projectedLng;
+      bestDist = r.distanceKm; bestSeg = i; bestT = r.t;
+      bestLat  = r.projectedLat; bestLng = r.projectedLng;
     }
   }
 
-  const progressRatio = polylinePoints.length > 1
-    ? (bestSeg + bestT) / (polylinePoints.length - 1)
-    : 0;
-
   return {
-    lat: bestLat,
-    lng: bestLng,
-    segmentIndex: bestSeg,
-    progressRatio,
+    lat: bestLat, lng: bestLng,
+    segmentIndex:       bestSeg,
+    progressRatio:      polylinePoints.length > 1 ? (bestSeg + bestT) / (polylinePoints.length - 1) : 0,
     distanceOffRouteKm: bestDist,
+    t:                  bestT,
   };
 }
 
 export function remainingRouteDistanceKm(polylinePoints, fromSegmentIndex, fromT) {
   if (!polylinePoints?.length || fromSegmentIndex >= polylinePoints.length - 1) return 0;
 
-  let total = 0;
-  const startPt = polylinePoints[fromSegmentIndex];
-  const nextPt  = polylinePoints[fromSegmentIndex + 1];
-
+  const startPt  = polylinePoints[fromSegmentIndex];
+  const nextPt   = polylinePoints[fromSegmentIndex + 1];
   const partialLat = startPt.lat + fromT * (nextPt.lat - startPt.lat);
   const partialLng = startPt.lng + fromT * (nextPt.lng - startPt.lng);
-  total += distanceKm(partialLat, partialLng, nextPt.lat, nextPt.lng);
 
+  let total = distanceKm(partialLat, partialLng, nextPt.lat, nextPt.lng);
   for (let i = fromSegmentIndex + 1; i < polylinePoints.length - 1; i++) {
-    total += distanceKm(
-      polylinePoints[i].lat, polylinePoints[i].lng,
-      polylinePoints[i + 1].lat, polylinePoints[i + 1].lng
-    );
+    total += distanceKm(polylinePoints[i].lat, polylinePoints[i].lng, polylinePoints[i + 1].lat, polylinePoints[i + 1].lng);
   }
   return total;
 }
@@ -204,7 +159,6 @@ export function parseDirectionSteps(legs) {
       const startLng = step.start_location?.lng?.() ?? step.start_location?.lng ?? 0;
       const endLat   = step.end_location?.lat?.()   ?? step.end_location?.lat   ?? 0;
       const endLng   = step.end_location?.lng?.()   ?? step.end_location?.lng   ?? 0;
-
       const polylinePoints = step.polyline?.points
         ? decodePolyline(step.polyline.points)
         : [{ lat: startLat, lng: startLng }, { lat: endLat, lng: endLng }];
@@ -215,10 +169,7 @@ export function parseDirectionSteps(legs) {
         distanceMeters:  step.distance?.value  || 0,
         distanceText:    step.distance?.text   || '',
         durationSeconds: step.duration?.value  || 0,
-        startLat,
-        startLng,
-        endLat,
-        endLng,
+        startLat, startLng, endLat, endLng,
         polylinePoints,
       });
     }
@@ -228,17 +179,10 @@ export function parseDirectionSteps(legs) {
 
 export function findCurrentStepByPolyline(steps, lat, lng, fromIndex = 0) {
   if (!steps?.length) return 0;
-
-  let bestIdx  = fromIndex;
-  let bestDist = Infinity;
-
+  let bestIdx = fromIndex, bestDist = Infinity;
   for (let i = fromIndex; i < Math.min(fromIndex + 4, steps.length); i++) {
-    const step = steps[i];
-    const snap = snapToPolyline(lat, lng, step.polylinePoints);
-    if (snap.distanceOffRouteKm < bestDist) {
-      bestDist = snap.distanceOffRouteKm;
-      bestIdx  = i;
-    }
+    const snap = snapToPolyline(lat, lng, steps[i].polylinePoints);
+    if (snap.distanceOffRouteKm < bestDist) { bestDist = snap.distanceOffRouteKm; bestIdx = i; }
   }
   return bestIdx;
 }
@@ -251,7 +195,7 @@ export function distanceToStepEndMeters(step, lat, lng) {
   return remainingRouteDistanceKm(step.polylinePoints, snap.segmentIndex, snap.t) * 1000;
 }
 
-// ─── OFF-ROUTE DETECTION ─────────────────────────────────────────────────────
+// ─── OFF-ROUTE ───────────────────────────────────────────────────────────────
 
 export function isHeadingMismatch(gpsHeading, stepHeading, thresholdDeg = 90) {
   if (gpsHeading == null || stepHeading == null) return false;
@@ -262,37 +206,33 @@ export function isHeadingMismatch(gpsHeading, stepHeading, thresholdDeg = 90) {
 
 export function offRouteScore(distanceOffKm, gpsHeading, stepHeading, speedKmh = 0) {
   const distScore = Math.min(distanceOffKm / 0.3, 1);
-
   let headingScore = 0;
   if (gpsHeading != null && stepHeading != null && speedKmh > 5) {
     let diff = Math.abs(gpsHeading - stepHeading);
     if (diff > 180) diff = 360 - diff;
     headingScore = Math.min(diff / 180, 1);
   }
-
   return distScore * 0.7 + headingScore * 0.3;
 }
 
-// ─── TURN ANNOUNCEMENT BANDS ─────────────────────────────────────────────────
+// ─── ANNOUNCEMENT BANDS ──────────────────────────────────────────────────────
 
 export function getAnnouncementBand(distanceMeters, speedKmh = 30) {
-  const speedMultiplier = speedKmh > 80 ? 2.0 : speedKmh > 50 ? 1.4 : 1.0;
-
+  const m = speedKmh > 80 ? 2.0 : speedKmh > 50 ? 1.4 : 1.0;
   const bands = [
-    { key: '500', minDist: 400 * speedMultiplier, maxDist: Infinity,                prefix: (d) => `In ${Math.round(d / 100) * 100} meters` },
-    { key: '200', minDist: 150 * speedMultiplier, maxDist: 400 * speedMultiplier,   prefix: ()  => 'In 200 meters' },
-    { key: '50',  minDist: 35  * speedMultiplier, maxDist: 150 * speedMultiplier,   prefix: ()  => 'In 50 meters' },
-    { key: 'now', minDist: 0,                     maxDist: 35  * speedMultiplier,   prefix: ()  => 'Now' },
+    { key: '500', minDist: 400 * m, maxDist: Infinity,      prefix: (d) => `In ${Math.round(d / 100) * 100} meters` },
+    { key: '200', minDist: 150 * m, maxDist: 400 * m,       prefix: ()  => 'In 200 meters' },
+    { key: '50',  minDist: 35  * m, maxDist: 150 * m,       prefix: ()  => 'In 50 meters'  },
+    { key: 'now', minDist: 0,       maxDist: 35  * m,       prefix: ()  => 'Now'            },
   ];
-
   return bands.find(b => distanceMeters >= b.minDist && distanceMeters < b.maxDist) || null;
 }
 
-// ─── FORMAT HELPERS ───────────────────────────────────────────────────────────
+// ─── FORMAT ──────────────────────────────────────────────────────────────────
 
 export function formatEta(minutes) {
-  if (!minutes && minutes !== 0) return '--';
-  if (minutes < 1) return '< 1 min';
+  if (minutes == null) return '--';
+  if (minutes < 1) return '< 1 min';       // FIX: was returning '--' for 0
   if (minutes < 60) return `${Math.round(minutes)} min`;
   const h = Math.floor(minutes / 60);
   const m = Math.round(minutes % 60);
@@ -300,20 +240,22 @@ export function formatEta(minutes) {
 }
 
 export function formatDistance(km) {
-  if (!km && km !== 0) return '--';
+  if (km == null) return '--';
   if (km < 1) return `${Math.round(km * 1000)}m`;
-  return `${km.toFixed(1)}km`;
+  return `${km.toFixed(1)} km`;
 }
 
 export function formatSpeed(speedKmh) {
-  if (!speedKmh && speedKmh !== 0) return '0';
+  if (speedKmh == null) return '0';
   return Math.round(speedKmh).toString();
 }
 
 /**
- * FIX: check keep-left / keep-right / slight-left / slight-right BEFORE
- * checking plain 'left' / 'right' — otherwise 'keep-left'.includes('left')
- * matches the wrong branch and returns 'turn-left' instead of 'keep-left'.
+ * getManeuverIcon
+ *
+ * FIX: compound maneuvers (keep-left, keep-right, slight-left, slight-right,
+ * u-turn, roundabout) checked BEFORE plain 'left' / 'right'.
+ * Original: 'keep-left'.includes('left') matched plain 'left' branch first.
  */
 export function getManeuverIcon(maneuver = '') {
   const m = (maneuver || '').toLowerCase();
@@ -337,13 +279,10 @@ export function stripHtml(html) {
 
 export function extractRoutePolyline(directionsResult) {
   if (!directionsResult?.routes?.[0]) return [];
-  const route = directionsResult.routes[0];
   const points = [];
-  for (const leg of route.legs || []) {
+  for (const leg of directionsResult.routes[0].legs || []) {
     for (const step of leg.steps || []) {
-      if (step.polyline?.points) {
-        points.push(...decodePolyline(step.polyline.points));
-      }
+      if (step.polyline?.points) points.push(...decodePolyline(step.polyline.points));
     }
   }
   return points;

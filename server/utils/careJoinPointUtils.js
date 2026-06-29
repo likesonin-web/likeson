@@ -1,22 +1,19 @@
 /**
  * careJoinPointUtils.js — Likeson.in
  *
- * Utilities for:
- *   1. Decoding Google encoded polyline → array of [lng, lat] coords
- *   2. Snapping a point to nearest segment on a polyline
- *   3. Resolving CA join point on full_care_ride route
- *   4. Splitting route into driver-leg and CA-leg
+ * Utilities for resolving Care Assistant join points on full_care_ride.
+ *
+ *  
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. POLYLINE DECODER
-//    Google encoded polyline → [[lng, lat], ...]
+// 1. DECODE GOOGLE ENCODED POLYLINE
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * decodePolyline
  * @param {string} encoded — Google encoded polyline string
- * @returns {Array<[number, number]>} array of [lng, lat]
+ * @returns {Array<[number, number]>} array of [lng, lat] (GeoJSON order)
  */
 export const decodePolyline = (encoded) => {
   if (!encoded) return [];
@@ -30,28 +27,24 @@ export const decodePolyline = (encoded) => {
     let result = 0;
     let byte;
 
-    // decode latitude
     do {
       byte = encoded.charCodeAt(index++) - 63;
       result |= (byte & 0x1f) << shift;
       shift += 5;
     } while (byte >= 0x20);
-    const deltaLat = result & 1 ? ~(result >> 1) : result >> 1;
-    lat += deltaLat;
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
 
     shift = 0;
     result = 0;
 
-    // decode longitude
     do {
       byte = encoded.charCodeAt(index++) - 63;
       result |= (byte & 0x1f) << shift;
       shift += 5;
     } while (byte >= 0x20);
-    const deltaLng = result & 1 ? ~(result >> 1) : result >> 1;
-    lng += deltaLng;
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
 
-    // Google polyline is [lat, lng] → store as [lng, lat] (GeoJSON order)
+    // GeoJSON order: [lng, lat]
     coords.push([lng / 1e5, lat / 1e5]);
   }
 
@@ -59,7 +52,7 @@ export const decodePolyline = (encoded) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. HAVERSINE (local, no import needed in util)
+// 2. HAVERSINE
 // ─────────────────────────────────────────────────────────────────────────────
 
 const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
@@ -76,55 +69,52 @@ const haversineKm = ([lng1, lat1], [lng2, lat2]) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. SNAP POINT TO NEAREST SEGMENT ON POLYLINE
-//
-//    For each segment A→B, find closest point P on segment to target T.
-//    Use parametric projection: t = dot(AT, AB) / dot(AB, AB), clamp [0,1].
-//    Return closest projected point + distance + segment index.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * snapToPolyline
  * @param {[number,number]} target   — [lng, lat] of CA current location
  * @param {Array<[number,number]>} polylineCoords — decoded polyline
- * @returns {{ snapPoint: [number,number], distanceKm: number, segmentIndex: number }}
+ * @returns {{ snapPoint, distanceKm, segmentIndex } | null}
  */
 export const snapToPolyline = (target, polylineCoords) => {
   if (!polylineCoords || polylineCoords.length === 0) return null;
-  if (polylineCoords.length === 1) {
+
+  // FIX: filter out any NaN coords that could come from bad polyline decode
+  const validCoords = polylineCoords.filter(
+    c => Array.isArray(c) && c.length === 2 && !isNaN(c[0]) && !isNaN(c[1])
+  );
+  if (validCoords.length === 0) return null;
+
+  if (validCoords.length === 1) {
     return {
-      snapPoint:    polylineCoords[0],
-      distanceKm:   haversineKm(target, polylineCoords[0]),
+      snapPoint:    validCoords[0],
+      distanceKm:   haversineKm(target, validCoords[0]),
       segmentIndex: 0,
     };
   }
 
-  let bestDist     = Infinity;
-  let bestPoint    = null;
-  let bestSegIdx   = 0;
+  let bestDist   = Infinity;
+  let bestPoint  = null;
+  let bestSegIdx = 0;
 
-  for (let i = 0; i < polylineCoords.length - 1; i++) {
-    const A = polylineCoords[i];
-    const B = polylineCoords[i + 1];
-    const T = target;
+  for (let i = 0; i < validCoords.length - 1; i++) {
+    const A = validCoords[i];
+    const B = validCoords[i + 1];
 
-    // vectors in degrees (good enough for short segments)
     const ABx = B[0] - A[0];
     const ABy = B[1] - A[1];
-    const ATx = T[0] - A[0];
-    const ATy = T[1] - A[1];
+    const ATx = target[0] - A[0];
+    const ATy = target[1] - A[1];
 
     const dot_AB_AB = ABx * ABx + ABy * ABy;
     let t = 0;
-
     if (dot_AB_AB > 0) {
-      t = (ATx * ABx + ATy * ABy) / dot_AB_AB;
-      t = Math.max(0, Math.min(1, t)); // clamp to [0,1]
+      t = Math.max(0, Math.min(1, (ATx * ABx + ATy * ABy) / dot_AB_AB));
     }
 
-    const projX = A[0] + t * ABx;
-    const projY = A[1] + t * ABy;
-    const proj  = [projX, projY];
-    const dist  = haversineKm(T, proj);
+    const proj = [A[0] + t * ABx, A[1] + t * ABy];
+    const dist = haversineKm(target, proj);
 
     if (dist < bestDist) {
       bestDist   = dist;
@@ -133,50 +123,30 @@ export const snapToPolyline = (target, polylineCoords) => {
     }
   }
 
-  return {
-    snapPoint:    bestPoint,
-    distanceKm:   bestDist,
-    segmentIndex: bestSegIdx,
-  };
+  return { snapPoint: bestPoint, distanceKm: bestDist, segmentIndex: bestSegIdx };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. RESOLVE CA JOIN POINT FOR full_care_ride
-//
-//    Route has 3 key coords: driverCoords, pickupCoords, dropoffCoords
-//    Full polyline covers: driver → pickup → dropoff
-//
-//    Steps:
-//      a) Decode full polyline (or build from 3 coords if no polyline)
-//      b) Snap CA location to nearest point on full polyline
-//      c) Determine which "zone" the snap falls in:
-//           - Before pickup  → join point is on driver→pickup leg
-//           - After pickup   → join point is on pickup→dropoff leg
-//      d) Return:
-//           - joinPoint coords (snapped)
-//           - caRoute: CA current location → joinPoint (CA travels here independently)
-//           - driverWaypoint: inserted into driver's route at joinPoint
-//           - zone: 'before_pickup' | 'at_pickup' | 'after_pickup'
+// 4. RESOLVE CA JOIN POINT
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * resolveCaJoinPoint
  *
- * @param {object} params
- * @param {[number,number]} params.caCoords         — CA current [lng, lat]
- * @param {[number,number]} params.driverCoords     — Driver current [lng, lat]
- * @param {[number,number]} params.pickupCoords     — Patient pickup [lng, lat]
- * @param {[number,number]} params.dropoffCoords    — Hospital/dropoff [lng, lat]
- * @param {string|null}     params.encodedPolyline  — Full route polyline or null
+ * FIX: zone 'at_pickup' now included in return but callers should treat
+ * 'at_pickup' same as 'after_pickup' for RideStop sequence decisions.
+ * Use `joinResult.stopSequence` (added to return) instead of raw zone
+ * string when deciding stop insertion order.
  *
  * @returns {{
  *   joinPoint: [number,number],
  *   joinPointAddress: string,
  *   distCaToJoinKm: number,
  *   zone: 'before_pickup'|'at_pickup'|'after_pickup',
+ *   stopSequence: 1|2,        // 1 = insert before patient pickup, 2 = after
  *   segmentIndex: number,
- *   caRoute: { from: [number,number], to: [number,number], distKm: number },
- *   waypointForDriver: { type: string, coordinates: [number,number], label: string }
+ *   caRoute: { from, to, distKm },
+ *   waypointForDriver: object  // kept for backward compat, not for schema write
  * }}
  */
 export const resolveCaJoinPoint = ({
@@ -186,57 +156,45 @@ export const resolveCaJoinPoint = ({
   dropoffCoords,
   encodedPolyline = null,
 }) => {
-  // Build polyline coords: decode if available, else use 3 fixed points
-  let polyCoords;
+  // Build polyline: decode if available, else synthesize 3-point fallback
+  let polyCoords = null;
 
   if (encodedPolyline) {
-    polyCoords = decodePolyline(encodedPolyline);
+    const decoded = decodePolyline(encodedPolyline);
+    if (decoded.length >= 2) polyCoords = decoded;
   }
 
-  // Fallback: synthesize from 3 key points if polyline missing or too short
-  if (!polyCoords || polyCoords.length < 3) {
+  // Synthesize from 3 key points when polyline missing or unusable
+  if (!polyCoords) {
     polyCoords = [driverCoords, pickupCoords, dropoffCoords];
   }
 
-  // Snap CA to nearest point on full polyline
   const snap = snapToPolyline(caCoords, polyCoords);
 
   if (!snap) {
     // Ultimate fallback: nearest of 3 fixed points
-    const dists = [
-      { point: driverCoords,  dist: haversineKm(caCoords, driverCoords),  zone: 'before_pickup' },
-      { point: pickupCoords,  dist: haversineKm(caCoords, pickupCoords),  zone: 'at_pickup'     },
-      { point: dropoffCoords, dist: haversineKm(caCoords, dropoffCoords), zone: 'after_pickup'  },
+    const candidates = [
+      { point: driverCoords,  dist: haversineKm(caCoords, driverCoords),  zone: 'before_pickup', stopSequence: 1 },
+      { point: pickupCoords,  dist: haversineKm(caCoords, pickupCoords),  zone: 'at_pickup',     stopSequence: 2 },
+      { point: dropoffCoords, dist: haversineKm(caCoords, dropoffCoords), zone: 'after_pickup',  stopSequence: 2 },
     ];
-    dists.sort((a, b) => a.dist - b.dist);
-    const best = dists[0];
-    return {
-      joinPoint:         best.point,
-      joinPointAddress:  '',
-      distCaToJoinKm:    +best.dist.toFixed(2),
-      zone:              best.zone,
-      segmentIndex:      0,
-      caRoute: {
-        from:   caCoords,
-        to:     best.point,
-        distKm: +best.dist.toFixed(2),
-      },
-      waypointForDriver: {
-        type:        'care_assistant_join',
-        coordinates: best.point,
-        label:       'Care Assistant Join Point',
-        pickupFirst: false,
-        isCompleted: false,
-        meta:        { zone: best.zone },
-      },
-    };
+    candidates.sort((a, b) => a.dist - b.dist);
+    const best = candidates[0];
+
+    return _buildResult({
+      joinPoint:     best.point,
+      distCaToJoin:  best.dist,
+      zone:          best.zone,
+      stopSequence:  best.stopSequence,
+      segmentIndex:  0,
+      caCoords,
+    });
   }
 
   const { snapPoint, distanceKm: distCaToJoin, segmentIndex } = snap;
 
-  // Determine zone: find which segment index pickup falls on
-  // pickup is the transition point between leg1 (driver→pickup) and leg2 (pickup→dropoff)
-  // Find the polyline index nearest to pickupCoords
+  // Find which polyline index is closest to pickupCoords
+  // Everything before that index = before_pickup leg
   let pickupPolyIdx = 0;
   let minPickupDist = Infinity;
   for (let i = 0; i < polyCoords.length; i++) {
@@ -248,68 +206,123 @@ export const resolveCaJoinPoint = ({
   }
 
   let zone;
+  let stopSequence;
   if (segmentIndex < pickupPolyIdx) {
-    zone = 'before_pickup';
+    zone         = 'before_pickup';
+    stopSequence = 1; // insert CA join stop BEFORE patient pickup
   } else if (segmentIndex === pickupPolyIdx) {
-    zone = 'at_pickup';
+    zone         = 'at_pickup';
+    stopSequence = 2; // treat same as after pickup for sequencing
   } else {
-    zone = 'after_pickup';
+    zone         = 'after_pickup';
+    stopSequence = 2; // insert CA join stop AFTER patient pickup
   }
 
-  const distCaToJoinKm = +distCaToJoin.toFixed(2);
+  return _buildResult({
+    joinPoint:    snapPoint,
+    distCaToJoin,
+    zone,
+    stopSequence,
+    segmentIndex,
+    caCoords,
+  });
+};
 
+/** Internal builder — keeps return shape consistent across all code paths */
+const _buildResult = ({ joinPoint, distCaToJoin, zone, stopSequence, segmentIndex, caCoords }) => {
+  const distCaToJoinKm = +distCaToJoin.toFixed(2);
   return {
-    joinPoint:        snapPoint,
-    joinPointAddress: '',            // caller can reverse-geocode if needed
+    joinPoint,
+    joinPointAddress: '', // caller reverse-geocodes if needed
     distCaToJoinKm,
     zone,
+    stopSequence,        // FIX: explicit sequence number avoids zone-to-sequence logic in callers
     segmentIndex,
     caRoute: {
       from:   caCoords,
-      to:     snapPoint,
+      to:     joinPoint,
       distKm: distCaToJoinKm,
     },
+    // kept for caller backward compat — do NOT write to Ride.waypoints (removed schema field)
     waypointForDriver: {
       type:        'care_assistant_join',
-      coordinates: snapPoint,
+      coordinates: joinPoint,
       label:       'Care Assistant Join Point',
-      pickupFirst: zone !== 'before_pickup', // if before pickup, driver picks CA before patient
+      pickupFirst: zone !== 'before_pickup',
       isCompleted: false,
       completedAt: null,
-      meta: {
-        zone,
-        segmentIndex,
-        distCaToJoinKm,
-      },
+      meta:        { zone, segmentIndex, distCaToJoinKm },
     },
   };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. BUILD CA JOIN WAYPOINT FOR RIDE.waypoints ARRAY
-//    Returns waypoint object matching Ride schema waypoints sub-schema
+// 5. BUILD RIDESTOP CREATION PAYLOAD FOR CA JOIN
+//
+//    FIX: was buildCaJoinWaypoint returning Ride.waypoints[] shape (removed).
+//    Now returns RideStop.create()-compatible object.
+//    Caller still provides: rideId, bookingId, routeVersion, sequence.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * buildCaJoinWaypoint
+ * buildCaJoinStopPayload
+ *
+ * Returns object suitable for RideStop.create() for a CARE_ASSISTANT_JOIN stop.
+ *
  * @param {ReturnType<typeof resolveCaJoinPoint>} joinResult
- * @returns {object} waypoint matching Ride.waypoints schema
+ * @param {{ rideId, bookingId, routeVersion, participantId, caCoords }} opts
+ * @returns {object} RideStop creation payload (without _id)
  */
-export const buildCaJoinWaypoint = (joinResult) => ({
-  type:        'care_assistant_join',
+export const buildCaJoinStopPayload = (joinResult, { rideId, bookingId, routeVersion, participantId, caCoords }) => ({
+  ride:         rideId,
+  booking:      bookingId,
+  routeVersion: routeVersion,
+  sequence:     joinResult.stopSequence, // use resolved sequence, not raw zone
+  stopType:     'CARE_ASSISTANT_JOIN',
   location: {
     type:        'Point',
     coordinates: joinResult.joinPoint,
     address:     joinResult.joinPointAddress || 'Care Assistant Join Point',
     label:       `CA Join — ${joinResult.zone.replace(/_/g, ' ')}`,
   },
-  pickupFirst: joinResult.waypointForDriver.pickupFirst,
-  isCompleted: false,
-  completedAt: null,
+  participant: participantId || null,
+  status:      'PENDING',
   meta: {
     zone:           joinResult.zone,
+    stopSequence:   joinResult.stopSequence,
     segmentIndex:   joinResult.segmentIndex,
     distCaToJoinKm: joinResult.distCaToJoinKm,
-    caFrom:         joinResult.caRoute.from,
+    caFrom:         caCoords || joinResult.caRoute.from,
   },
 });
+
+/**
+ * buildCaJoinWaypoint — DEPRECATED
+ *
+ * Kept for any callers that haven't migrated yet.
+ * Returns the old waypoints[] shape — do NOT write to Ride schema (field removed).
+ * Migrate callers to buildCaJoinStopPayload.
+ *
+ * @deprecated Use buildCaJoinStopPayload instead
+ */
+export const buildCaJoinWaypoint = (joinResult) => {
+  console.warn('[careJoinPointUtils] buildCaJoinWaypoint is deprecated — use buildCaJoinStopPayload. Ride.waypoints[] was removed.');
+  return {
+    type:        'care_assistant_join',
+    location: {
+      type:        'Point',
+      coordinates: joinResult.joinPoint,
+      address:     joinResult.joinPointAddress || 'Care Assistant Join Point',
+      label:       `CA Join — ${joinResult.zone.replace(/_/g, ' ')}`,
+    },
+    pickupFirst: joinResult.waypointForDriver.pickupFirst,
+    isCompleted: false,
+    completedAt: null,
+    meta: {
+      zone:           joinResult.zone,
+      segmentIndex:   joinResult.segmentIndex,
+      distCaToJoinKm: joinResult.distCaToJoinKm,
+      caFrom:         joinResult.caRoute.from,
+    },
+  };
+};

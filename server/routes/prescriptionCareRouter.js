@@ -4,7 +4,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
 import multerS3 from 'multer-s3';
-
+import securePdf from '../utils/securePdf.js'; 
 import { protect, authorize }         from '../middleware/authMiddleware.js';
 import s3                              from '../config/s3.js';
 import EPrescription                   from '../models/EPrescription.js';
@@ -204,7 +204,8 @@ router.post('/prescriptions', ...isDoctor, wrap(async (req, res) => {
       const rxData = rx.toObject();
       if (rxData.doctor) rxData.doctor.doctorSignature = doctorSnap.doctorSignature;
 
-      const pdfBuffer   = await generateEPrescriptionPdf(rxData);
+   const rawPdf    = await generateEPrescriptionPdf(rxData);
+   const pdfBuffer = await securePdf(rawPdf);
       const verifyUrl   = `${process.env.FRONTEND_URL || 'https://likeson.in'}/rx/verify/${rx.rxNumber}`;
       const downloadUrl = `${process.env.BACKEND_URL  || 'https://api.likeson.in'}/api/clinical/prescriptions/${rx._id}/pdf`;
 
@@ -255,7 +256,8 @@ router.get('/prescriptions/:id/pdf', ...isAnyStaff, wrap(async (req, res) => {
     }
   }
 
-  const pdfBuffer = await generateEPrescriptionPdf(rx);
+    const rawPdf    = await generateEPrescriptionPdf(rx);
+   const pdfBuffer = await securePdf(rawPdf);
 
   res.set({
     'Content-Type':        'application/pdf',

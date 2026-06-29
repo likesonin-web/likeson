@@ -1,35 +1,30 @@
 'use client';
 
-import React, { useMemo } from 'react';
-import { useSelector } from 'react-redux';
-import { selectToken } from '@/store/slices/userSlice';
+/**
+ * AuthSocketBridge.tsx
+ *
+ * Thin wrapper that mounts SocketProvider.
+ * Token is read from Redux inside SocketProvider itself (state.user.token),
+ * so no need to pass it as a prop — the useMemo/token logic here was dead code.
+ *
+ * showStatusBadge retained as a no-op prop so callers don't break.
+ */
 
-// Import the default export from your new ChatProvider file.
-import SocketProvider from '@/context/SocketProvider';
+import React                from 'react';
+import SocketProvider       from '@/context/SocketProvider';
 
 interface AuthSocketBridgeProps {
-  children: React.ReactNode;
-  showStatusBadge?: boolean;
+  children:         React.ReactNode;
+  showStatusBadge?: boolean; // no-op — kept for backwards compat
 }
 
 export default function AuthSocketBridge({
   children,
-  showStatusBadge = true, // Retained to prevent errors if parent components still pass this prop
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  showStatusBadge = true,
 }: AuthSocketBridgeProps) {
-  const rawToken = useSelector(selectToken);
-
-  // Safely validate the token: ensures it is a non-empty string
-  const token = useMemo(() => {
-    return typeof rawToken === 'string' && rawToken.trim() !== '' 
-      ? rawToken 
-      : null;
-  }, [rawToken]);
-
-  // Always wrap children in the SocketProvider! 
-  // If token is null, SocketProvider will simply not connect the socket, 
-  // but it WILL still provide the Context so useChatSocket() doesn't crash.
   return (
-    <SocketProvider  >
+    <SocketProvider>
       {children}
     </SocketProvider>
   );

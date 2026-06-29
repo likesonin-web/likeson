@@ -971,10 +971,12 @@ export const issuePrescription = async (consultationId, prescriptionData, actorI
   if (consultation.patient?.email) {
     setImmediate(async () => {
       try {
-        const { default: generateEPrescriptionPdf } = await import('../utils/generateEPrescriptionPdf.js');
-        const { buildEPrescriptionEmail }           = await import('../utils/ePrescriptionEmailTemplate.js');
+const { default: generateEPrescriptionPdf } = await import('../utils/generateEPrescriptionPdf.js');
+const { buildEPrescriptionEmail }           = await import('../utils/ePrescriptionEmailTemplate.js');
+const { default: securePdf }               = await import('../utils/securePdf.js');
 
-        const pdfBuffer = await generateEPrescriptionPdf(rx);
+const rawPdf    = await generateEPrescriptionPdf(rx);
+const pdfBuffer = await securePdf(rawPdf);
 
         const fmtD = (d) => d
           ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })

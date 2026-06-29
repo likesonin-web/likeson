@@ -653,7 +653,7 @@ const PharmacyDashboard = ({ children }) => {
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.35, ease: "easeOut" }}
-            className="relative rounded-3xl border border-base-300 bg-base-200/35 min-h-[76vh] p-5 shadow-inner overflow-hidden backdrop-blur-sm"
+            className="relative rounded-3xl border border-base-300 bg-base-200/35 min-h-[120vh] p-5 shadow-inner overflow-hidden backdrop-blur-sm"
           >
             {/* Decorative pharmacy cross watermark */}
             <div

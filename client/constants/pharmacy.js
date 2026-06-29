@@ -36,7 +36,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
   // dispatch → return → refund → invoice → label.
   {
     title: "Order Management",
-    icon: <ShoppingCart />,
+    icon: <ShoppingCart size={20} />,
     links: [
       { name: "All Orders",              href: "/pharmacy-store/orders",                         icon: <ClipboardList size={18} />      },
     ],
@@ -46,7 +46,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
   // Routes 14–21 | Per-store stock, batch tracking, expiry & restock requests.
   {
     title: "Inventory Management",
-    icon: <Warehouse />,
+    icon: <Warehouse size={20} />,
     links: [
       { name: "Stocked Medicines", href: "/pharmacy-store/medicines",               icon: <Pill size={18} />         },
       { name: "Add Stock",         href: "/pharmacy-store/medicines/add-stock",      icon: <PackagePlus size={18} />  },
@@ -62,7 +62,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
   // ── C. Medicines Management ──────────────────────────────────────────────
   {
     title: "Medicines Management",
-    icon: <Pill />,
+    icon: <Pill size={20} />,
     links: [
       { name: "Management",   href: "/pharmacy-store/medicines-management",      icon: <ClipboardList size={18} /> },
       { name: "New Medicine", href: "/pharmacy-store/medicines-management/new",  icon: <Plus size={18} />          },
@@ -73,7 +73,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
   // Routes H1–H8 | GST-compliant HSN catalogue with bulk upload support.
   {
     title: "HSN Code Management",
-    icon: <Hash />,
+    icon: <Hash size={20} />,
     links: [
       { name: "All HSN Codes", href: "/pharmacy-store/hsn",             icon: <ScrollText size={18} /> },
     ],
@@ -83,7 +83,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
   // Routes 22–27 | Daily, monthly, and lifetime revenue plus store invoicing.
   {
     title: "Financial Reports",
-    icon: <CircleDollarSign />,
+    icon: <CircleDollarSign size={20} />,
     links: [
       { name: "Daily Financials",   href: "/pharmacy-store/financials/daily",              icon: <CalendarDays size={18} />       },
       { name: "Monthly Financials", href: "/pharmacy-store/financials/monthly",            icon: <FileBarChart size={18} />       },
@@ -98,7 +98,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
   // Routes 28–36 | Bank accounts, UPI handles, and payout requests.
   {
     title: "Settlements & Payments",
-    icon: <Landmark />,
+    icon: <Landmark size={20} />,
     links: [
       { name: "Payment Account",      href: "/pharmacy-store/financials/payment-account",          icon: <WalletCards size={18} />      },
       { name: "Add Bank Account",     href: "/pharmacy-store/financials/payment-account/bank",     icon: <Building2 size={18} />        },
@@ -113,7 +113,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
   // Routes 37–40 | Store performance: revenue, returns, and top medicines.
   {
     title: "Analytics",
-    icon: <AreaChart />,
+    icon: <AreaChart size={20} />,
     links: [
       { name: "Overview",         href: "/pharmacy-store/analytics/overview",      icon: <AreaChart size={18} />   },
       { name: "Revenue Trends",   href: "/pharmacy-store/analytics/revenue",       icon: <TrendingUp size={18} />  },
@@ -126,7 +126,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
   // Routes 41–48 | Personal profile, pharmacy-store credentials, and store config.
   {
     title: "Profile & Store",
-    icon: <UserRound />,
+    icon: <UserRound size={20} />,
     links: [
       { name: "My Profile",        href: "/pharmacy-store/profile",                 icon: <UserRound size={18} />      },
       { name: "Edit Profile",      href: "/pharmacy-store/profile/edit",            icon: <PenLine size={18} />        },
@@ -141,7 +141,7 @@ export const PHARMACY_DASHBOARD_LINKS = [
   // Routes 49–54 | Active login sessions and registered device management.
   {
     title: "Sessions & Devices",
-    icon: <ShieldCheck />,
+    icon: <ShieldCheck size={20} />,
     links: [
       { name: "Active Sessions", href: "/pharmacy-store/audit/sessions",        icon: <Clock size={18} />            },
       { name: "Revoke Session",  href: "/pharmacy-store/audit/sessions/revoke", icon: <LogOut size={18} />           },

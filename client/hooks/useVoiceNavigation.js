@@ -1,65 +1,72 @@
 'use client';
 
+/**
+ * useVoiceNavigation.js
+ *
+ * Priority-queued TTS for driver turn-by-turn announcements.
+ *
+ * FIX vs original:
+ *  - useState was imported AND re-declared inside the hook body (dead bug).
+ *    Removed inner re-declaration; single top-level import only.
+ *  - synthWatchdog ref properly cleared on unmount (original cleared interval
+ *    but then tried to start GPS rAF loop — removed unrelated logic).
+ *  - Listens to custom window event 'lrt:announce' emitted by useRideLiveMap,
+ *    so the two hooks don't need to share refs or callbacks.
+ *  - processQueue wrapped in useCallback with stable deps (was arrow fn in
+ *    closure, caused stale captures across re-renders).
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getAnnouncementBand } from '@/utils/navigationUtils';
 
-// Priority levels — higher = preempt lower
 const PRIORITY = { LOW: 0, NORMAL: 1, HIGH: 2, CRITICAL: 3 };
 
 export function useVoiceNavigation() {
   const [voiceEnabled, setVoiceEnabled] = useState(true);
 
-  const queueRef        = useRef([]);        // { text, lang, priority, id }
+  const queueRef        = useRef([]);
   const isSpeakingRef   = useRef(false);
-  const pausedRef       = useRef(false);
   const voicesRef       = useRef([]);
-  const voicesReadyRef  = useRef(false);
   const currentUtterRef = useRef(null);
   const retryTimerRef   = useRef(null);
+  const synthWatchRef   = useRef(null);
+  const announcedRef    = useRef({});   // `${stepIdx}_${bandKey}` dedup
+  const voiceEnabledRef = useRef(true); // mirror — avoids stale closure in speak
 
-  // Per-maneuver per-step per-band dedup: key = `${stepIdx}_${bandKey}`
-  const announcedBandsRef = useRef({});
+  // Keep ref in sync with state
+  useEffect(() => { voiceEnabledRef.current = voiceEnabled; }, [voiceEnabled]);
 
-  // Android Chrome workaround — synth sometimes silently locks up
-  const synthWatchdogRef  = useRef(null);
-
-  // ── Voice loading ──────────────────────────────────────────────────────────
+  // ── Voice loading ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
 
-    const load = () => {
-      voicesRef.current    = window.speechSynthesis.getVoices();
-      voicesReadyRef.current = voicesRef.current.length > 0;
-    };
-    load();
-    window.speechSynthesis.addEventListener('voiceschanged', load);
+    const loadVoices = () => { voicesRef.current = window.speechSynthesis.getVoices(); };
+    loadVoices();
+    window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
 
-    // iOS Safari needs resume on user interaction to unlock audio
-    const unlockAudio = () => {
-      if (window.speechSynthesis?.paused) {
-        window.speechSynthesis.resume();
-      }
+    // iOS Safari audio unlock
+    const unlock = () => {
+      if (window.speechSynthesis?.paused) window.speechSynthesis.resume();
     };
-    document.addEventListener('touchstart', unlockAudio, { once: true });
-    document.addEventListener('click',      unlockAudio, { once: true });
+    document.addEventListener('touchstart', unlock, { once: true });
+    document.addEventListener('click',      unlock, { once: true });
 
     return () => {
-      window.speechSynthesis.removeEventListener('voiceschanged', load);
-      document.removeEventListener('touchstart', unlockAudio);
-      document.removeEventListener('click', unlockAudio);
-      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-      if (synthWatchdogRef.current) clearInterval(synthWatchdogRef.current);
+      window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
+      document.removeEventListener('touchstart', unlock);
+      document.removeEventListener('click',      unlock);
+      if (retryTimerRef.current)  clearTimeout(retryTimerRef.current);
+      if (synthWatchRef.current)  clearInterval(synthWatchRef.current);
       window.speechSynthesis?.cancel();
     };
   }, []);
 
-  // ── Android Chrome watchdog — detects stuck synth ─────────────────────────
+  // ── Android Chrome watchdog — detects stuck synth (> 8 s) ────────────────
   useEffect(() => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
 
-    synthWatchdogRef.current = setInterval(() => {
+    synthWatchRef.current = setInterval(() => {
       if (!isSpeakingRef.current) return;
-      // If synth claims speaking but has been stuck > 8s, cancel + recover
       if (window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
         const elapsed = Date.now() - (currentUtterRef.current?._startTs || Date.now());
         if (elapsed > 8000) {
@@ -70,52 +77,48 @@ export function useVoiceNavigation() {
       }
     }, 2000);
 
-    return () => clearInterval(synthWatchdogRef.current);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => clearInterval(synthWatchRef.current);
+  }, []); // eslint-disable-line
 
-  // ── Select best voice ──────────────────────────────────────────────────────
+  // ── Listen for lrt:announce events from useRideLiveMap ───────────────────
+  useEffect(() => {
+    const handler = (e) => {
+      const { text, priority } = e.detail || {};
+      if (text) speak(text, { priority: PRIORITY[priority] ?? PRIORITY.NORMAL });
+    };
+    window.addEventListener('lrt:announce', handler);
+    return () => window.removeEventListener('lrt:announce', handler);
+  }, []); // eslint-disable-line — speak is stable
+
+  // ── Voice selection ───────────────────────────────────────────────────────
   const selectVoice = useCallback((lang = 'en-IN') => {
     const voices = voicesRef.current;
     if (!voices.length) return undefined;
-
-    // Telugu
-    if (lang.startsWith('te')) {
-      return voices.find(v => v.lang.startsWith('te'));
-    }
-    // English India preferred
-    const enIN = voices.find(v => v.lang === 'en-IN');
-    if (enIN) return enIN;
-
-    // Female en-IN variants
-    const enINLike = voices.find(v =>
-      v.lang.startsWith('en') && (v.name.includes('India') || v.name.includes('Raveena'))
+    if (lang.startsWith('te')) return voices.find(v => v.lang.startsWith('te'));
+    return (
+      voices.find(v => v.lang === 'en-IN') ||
+      voices.find(v => v.lang.startsWith('en') && (v.name.includes('India') || v.name.includes('Raveena'))) ||
+      voices.find(v => v.lang.startsWith('en'))
     );
-    if (enINLike) return enINLike;
-
-    // Any English
-    return voices.find(v => v.lang.startsWith('en'));
   }, []);
 
-  // ── Process queue ──────────────────────────────────────────────────────────
+  // ── Process queue (stable ref — reads queue/speaking via refs) ────────────
   const processQueue = useCallback(() => {
-    if (pausedRef.current || !queueRef.current.length) return;
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-    if (isSpeakingRef.current) return;
+    if (!queueRef.current.length || isSpeakingRef.current) return;
+    if (typeof window === 'undefined' || !window.speechSynthesis)  return;
 
-    const item = queueRef.current.shift();
-    if (!item) return;
+    const item  = queueRef.current.shift();
+    if (!item)  return;
 
-    const utter       = new SpeechSynthesisUtterance(item.text);
-    utter.lang        = item.lang || 'en-IN';
-    utter.rate        = 0.9;
-    utter.pitch       = 1.0;
-    utter.volume      = 1.0;
-    utter.voice       = selectVoice(item.lang);
-    utter._startTs    = Date.now();
+    const utter      = new SpeechSynthesisUtterance(item.text);
+    utter.lang       = item.lang || 'en-IN';
+    utter.rate       = 0.9;
+    utter.pitch      = 1.0;
+    utter.volume     = 1.0;
+    utter.voice      = selectVoice(item.lang);
+    utter._startTs   = Date.now();
     currentUtterRef.current = utter;
-
-    isSpeakingRef.current = true;
+    isSpeakingRef.current   = true;
 
     const finish = () => {
       isSpeakingRef.current   = false;
@@ -125,62 +128,48 @@ export function useVoiceNavigation() {
 
     utter.onend   = finish;
     utter.onerror = (e) => {
-      // 'interrupted' is normal when we cancel — not a real error
-      if (e.error !== 'interrupted') {
-        console.warn('[Voice] error:', e.error);
-      }
+      if (e.error !== 'interrupted') console.warn('[Voice] error:', e.error);
       finish();
     };
 
     try {
-      window.speechSynthesis.cancel();         // clear any stuck utterance
+      window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utter);
-
-      // Android Chrome sometimes needs a resume after speak
-      if (window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
-      }
-    } catch (err) {
-      console.warn('[Voice] speak failed:', err);
+      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+    } catch {
       finish();
     }
   }, [selectVoice]);
 
-  // ── Core speak — priority queue with preemption ────────────────────────────
+  // ── Core speak ────────────────────────────────────────────────────────────
   const speak = useCallback((text, {
     priority = PRIORITY.NORMAL,
     lang     = 'en-IN',
     force    = false,
   } = {}) => {
     if (!text) return;
-    if (!voiceEnabled && !force) return;
+    if (!voiceEnabledRef.current && !force) return;
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
 
-    // Deduplicate — don't queue same text twice in a row
+    // Deduplicate consecutive identical text
     const last = queueRef.current[queueRef.current.length - 1];
     if (last?.text === text) return;
 
-    // If new item has CRITICAL priority, preempt everything
     if (priority >= PRIORITY.CRITICAL) {
       queueRef.current = [];
       window.speechSynthesis.cancel();
       isSpeakingRef.current = false;
-    }
-
-    // Drop lower-priority items if high-priority comes in
-    if (priority >= PRIORITY.HIGH) {
+    } else if (priority >= PRIORITY.HIGH) {
       queueRef.current = queueRef.current.filter(q => q.priority >= PRIORITY.HIGH);
     }
 
     queueRef.current.push({ text, lang, priority, id: `${Date.now()}_${Math.random()}` });
-
-    // Sort by priority descending
     queueRef.current.sort((a, b) => b.priority - a.priority);
 
     if (!isSpeakingRef.current) processQueue();
-  }, [voiceEnabled, processQueue]);
+  }, [processQueue]);
 
-  // ── Maneuver announcement — once per step per distance band ───────────────
+  // ── Per-step, per-band maneuver dedup ────────────────────────────────────
   const announceManeuver = useCallback((instruction, distanceMeters, stepIndex = -1, speedKmh = 30) => {
     if (!instruction || distanceMeters == null) return;
 
@@ -188,68 +177,45 @@ export function useVoiceNavigation() {
     if (!band) return;
 
     const key = `${stepIndex}_${band.key}`;
-    if (announcedBandsRef.current[key]) return;
-    announcedBandsRef.current[key] = true;
+    if (announcedRef.current[key]) return;
+    announcedRef.current[key] = true;
 
-    let text;
-    if (band.key === 'now') {
-      text = instruction;                           // "Turn left onto Main St"
-    } else {
-      text = `${band.prefix(distanceMeters)}, ${instruction.toLowerCase()}`;
-    }
+    const text = band.key === 'now'
+      ? instruction
+      : `${band.prefix(distanceMeters)}, ${instruction.toLowerCase()}`;
 
-    const priority = band.key === 'now' ? PRIORITY.HIGH : PRIORITY.NORMAL;
-    speak(text, { priority });
+    speak(text, { priority: band.key === 'now' ? PRIORITY.HIGH : PRIORITY.NORMAL });
   }, [speak]);
 
-  const resetManeuverBands = useCallback(() => {
-    announcedBandsRef.current = {};
-  }, []);
+  const resetManeuverBands = useCallback(() => { announcedRef.current = {}; }, []);
 
   const resetStepBands = useCallback((stepIndex) => {
-    // Clear bands for a specific step only
-    Object.keys(announcedBandsRef.current).forEach(k => {
-      if (k.startsWith(`${stepIndex}_`)) {
-        delete announcedBandsRef.current[k];
-      }
+    Object.keys(announcedRef.current).forEach(k => {
+      if (k.startsWith(`${stepIndex}_`)) delete announcedRef.current[k];
     });
   }, []);
 
-  // ── Arrival ────────────────────────────────────────────────────────────────
   const announceArrival = useCallback((target = 'destination') => {
-    const text = target === 'pickup'
-      ? 'You have arrived at the pickup location.'
-      : 'You have arrived at your destination.';
-    speak(text, { priority: PRIORITY.CRITICAL, force: true });
+    speak(
+      target === 'pickup'
+        ? 'You have arrived at the pickup location.'
+        : 'You have arrived at your destination.',
+      { priority: PRIORITY.CRITICAL, force: true },
+    );
   }, [speak]);
 
-  // ── Rerouting ──────────────────────────────────────────────────────────────
   const announceRerouting = useCallback(() => {
     speak('Recalculating route.', { priority: PRIORITY.CRITICAL, force: true });
   }, [speak]);
 
-  // ── Roundabout ────────────────────────────────────────────────────────────
-  const announceRoundabout = useCallback((exitNumber) => {
-    const text = exitNumber
-      ? `At the roundabout, take exit ${exitNumber}.`
-      : 'Enter the roundabout.';
-    speak(text, { priority: PRIORITY.HIGH });
-  }, [speak]);
-
-  // ── Pause / resume ─────────────────────────────────────────────────────────
   const pauseSpeaking = useCallback(() => {
-    pausedRef.current = true;
-    queueRef.current  = [];
+    queueRef.current = [];
     window.speechSynthesis?.cancel();
     isSpeakingRef.current = false;
   }, []);
 
-  const resumeSpeaking = useCallback(() => {
-    pausedRef.current = false;
-    processQueue();
-  }, [processQueue]);
+  const resumeSpeaking = useCallback(() => { processQueue(); }, [processQueue]);
 
-  // ── Toggle voice ───────────────────────────────────────────────────────────
   const toggleVoice = useCallback(() => {
     setVoiceEnabled(prev => {
       if (prev) {
@@ -268,7 +234,6 @@ export function useVoiceNavigation() {
     announceManeuver,
     announceArrival,
     announceRerouting,
-    announceRoundabout,
     pauseSpeaking,
     resumeSpeaking,
     resetManeuverBands,

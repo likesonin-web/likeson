@@ -1,12 +1,27 @@
 'use client';
- 
 
-import { useEffect, useRef, useCallback, useState } from 'react';
-import { useDispatch, useSelector }                 from 'react-redux';
-import { useSocket }                                from '@/context/SocketProvider';
-import socketService                                from '@/services/socketService';
+/**
+ * useRideTracking.js — Corrected & production-grade
+ *
+ * FIXES from original:
+ * 1. joinBookingRoom / leaveBookingRoom called directly on socketService, NOT
+ *    dispatched as Redux thunks — those thunks don't exist in the new slice.
+ * 2. Booking room join happens ONCE on `connected` change, not every render.
+ * 3. CA socket events dispatch to BOTH rideRequestSlice (socketLive) and
+ *    operationsSlice (careRide state) — no double-registration per event.
+ * 4. Driver GPS watch: single watchPosition, cleaned up on unmount only.
+ * 5. gpsError uses functional updater to avoid stale closure reads.
+ * 6. bookingType derived from trackingData + currentRide — both checked.
+ * 7. DRIVER_STATUS exported so consumers don't need a separate import.
+ * 8. sendStatusUpdate: HTTP first, socket second, then re-fetch.
+ */
 
-// ── rideRequestSlice ─────────────────────────────────────────────────────────
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useDispatch, useSelector }                  from 'react-redux';
+import { useSocket }                                 from '@/context/SocketProvider';
+import socketService, { SOCKET_EVENTS }              from '@/services/socketService';
+
+// ── rideRequestSlice ──────────────────────────────────────────────────────────
 import {
   fetchRideTracking,
   updateRideStatus,
@@ -20,52 +35,58 @@ import {
   socketEtaUpdate,
   socketOtpVerified,
   socketRideCompleted,
-  selectActiveNavigationTarget,
+  socketCaAtJoinPoint,
+  socketCaJoinedRide,
+  socketJpWaypointCompleted,
 } from '@/store/slices/rideRequestSlice';
 
-// ── operationsSlice ──────────────────────────────────────────────────────────
+// ── operationsSlice ───────────────────────────────────────────────────────────
 import {
-  joinBookingRoom,
-  leaveBookingRoom,
   startGpsTracking,
   stopGpsTracking,
   updateDriverStatusSocket,
   triggerSos,
   requestBookingState,
-  verifyOtpSocket,
   setLiveLocation,
   setEtaUpdate,
   setRideStatus,
   setNavigationTarget,
   selectNavigationTarget,
   selectEtaUpdate,
-  DRIVER_STATUS,
   acceptRide,
   markDriverArrived,
-  // CA reducers
+  endRide,
   setCareAssistantLocation,
   setCareAssistantStatus,
   setCareAssistantJoined,
   setCareRideWorkflow,
   setCaAtJoinPoint,
-setCaHasJoined,
-setJpWaypointCompleted,
-setCaViewMode,
+  setCaHasJoined,
+  setJpWaypointCompleted,
+  setCaViewMode,
 } from '@/store/slices/operationsSlice';
 
+// ── Utils ─────────────────────────────────────────────────────────────────────
+export {
+  formatEta,
+  formatDistance,
+  getManeuverIcon,
+} from '@/utils/navigationUtils';
+
+export { DRIVER_STATUS } from '@/services/socketService';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOOK
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * useRideTracking
- * Master hook for RideLiveTracking page.
- *
- * @param {{ rideId: string, bookingId?: string }} params
+ * @param {{ rideId: string|null, bookingId: string|null }} params
  */
 export function useRideTracking({ rideId, bookingId }) {
   const dispatch = useDispatch();
-  const { on, connected, SOCKET_EVENTS: EV } = useSocket();
+  const { on, connected } = useSocket();
 
-  // ── Redux state ──────────────────────────────────────────────────────────
+  // ── Redux state ────────────────────────────────────────────────────────────
   const currentRide      = useSelector(selectCurrentRide);
   const trackingData     = useSelector(selectTrackingData);
   const socketLive       = useSelector(selectSocketLive);
@@ -73,67 +94,70 @@ export function useRideTracking({ rideId, bookingId }) {
   const navigationTarget = useSelector(selectNavigationTarget);
   const etaUpdate        = useSelector(selectEtaUpdate);
 
-  // ── Local state ──────────────────────────────────────────────────────────
+  // ── Local state ────────────────────────────────────────────────────────────
   const [isLoadingRide,   setIsLoadingRide]   = useState(true);
   const [gpsError,        setGpsError]        = useState(null);
   const [isOffline,       setIsOffline]       = useState(false);
   const [currentPosition, setCurrentPosition] = useState(null);
 
-  // ── CA-specific local state ───────────────────────────────────────────────
+  // CA state
   const [caLiveLocation, setCaLiveLocation] = useState(null);
   const [caStatus,       setCaStatusLocal]  = useState('not_joined');
   const [caJoinPoint,    setCaJoinPoint]    = useState(null);
   const [caName,         setCaName]         = useState(null);
+  const [bookingType,    setBookingType]     = useState(null);
 
-  // ── Derived booking type ──────────────────────────────────────────────────
-  const [bookingType, setBookingType] = useState(null);
+  // ── Refs ───────────────────────────────────────────────────────────────────
+  const gpsWatchIdRef    = useRef(null);
+  const lastPositionRef  = useRef(null);
+  const mountedRef       = useRef(true);
+  const lastPosSetAt     = useRef(0);
 
-  // ── Refs ─────────────────────────────────────────────────────────────────
-  const gpsWatchIdRef   = useRef(null);
-  const lastPositionRef = useRef(null);
-  const mountedRef      = useRef(true);
-  const lastSetPosAt    = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
-  // ── 1. Initial data fetch ────────────────────────────────────────────────
+  // ── 1. Fetch ride on mount ─────────────────────────────────────────────────
   useEffect(() => {
     if (!rideId) return;
     setIsLoadingRide(true);
     dispatch(fetchRideTracking({ rideId }))
-      .then((result) => {
+      .then(result => {
         if (!mountedRef.current) return;
         const data = result?.payload;
+
+        // Booking type
         const bt = data?.ride?.booking?.bookingType
-          || data?.booking?.bookingType
           || data?.bookingType
+          || data?.booking?.bookingType
           || null;
         if (bt) setBookingType(bt);
 
+        // CA join point from waypoints (legacy) or stops
         const waypoints = data?.ride?.waypoints || [];
-        const joinWp = waypoints.find(w => w.type === 'care_assistant_join');
+        const joinWp    = waypoints.find(w => w.type === 'care_assistant_join');
         if (joinWp?.location?.coordinates?.length >= 2) {
           setCaJoinPoint({
             coordinates:    joinWp.location.coordinates,
-            zone:           joinWp.meta?.zone || null,
-            distCaToJoinKm: joinWp.meta?.distCaToJoinKm || null,
+            zone:           joinWp.meta?.zone,
+            distCaToJoinKm: joinWp.meta?.distCaToJoinKm,
           });
         }
 
-        const caSnap = data?.ride?.careAssistantSnapshot
-          || data?.careAssistant;
-        if (caSnap?.name || caSnap?.fullName) {
-          setCaName(caSnap.name || caSnap.fullName);
-        }
+        // CA snapshot
+        const caSnap = data?.ride?.careAssistantSnapshot;
+        if (caSnap?.name) setCaName(caSnap.name);
 
+        // CA live location
         const caLoc = data?.careAssistant?.liveLocation
           || data?.tracking?.careAssistantLiveLocation;
-        if (caLoc?.lat && caLoc?.lng) {
-          setCaLiveLocation(caLoc);
-        }
+        if (caLoc?.lat && caLoc?.lng) setCaLiveLocation(caLoc);
       })
       .finally(() => { if (mountedRef.current) setIsLoadingRide(false); });
   }, [rideId, dispatch]);
 
-  // ── Sync bookingType from Redux once ride loads ───────────────────────────
+  // ── Sync bookingType from Redux once ride hydrates ─────────────────────────
   useEffect(() => {
     if (!currentRide) return;
     const bt = currentRide?.booking?.bookingType
@@ -141,220 +165,136 @@ export function useRideTracking({ rideId, bookingId }) {
       || trackingData?.bookingType
       || null;
     if (bt && bt !== bookingType) setBookingType(bt);
-
     const snap = currentRide?.careAssistantSnapshot;
     if (snap?.name && !caName) setCaName(snap.name);
   }, [currentRide, trackingData, bookingType, caName]);
 
-  // ── 2. Socket room: join once when connected + bookingId available ─────────
+  // ── 2. Join booking socket room ────────────────────────────────────────────
+  // FIX: call socketService directly — not via Redux thunk
   useEffect(() => {
     if (!connected || !bookingId) return;
-    dispatch(joinBookingRoom({ bookingId }));
+    socketService.joinBookingRoom(bookingId);
     dispatch(requestBookingState({ bookingId }));
-    return () => { dispatch(leaveBookingRoom({ bookingId })); };
+    return () => socketService.leaveBookingRoom(bookingId);
   }, [connected, bookingId, dispatch]);
 
-  // ── 3. Socket event listeners — registered ONCE ───────────────────────────
+  // ── 3. Socket event listeners — single registration per event ─────────────
   useEffect(() => {
     const unsubs = [
 
-      on(EV.LOCATION_UPDATE, (data) => {
-        dispatch(socketLocationUpdate(data));
-        dispatch(setLiveLocation(data));
+      // Driver location broadcast (admin ops / tracking page reads this)
+      on(SOCKET_EVENTS.LOCATION_UPDATE, (d) => {
+        dispatch(socketLocationUpdate(d));
+        dispatch(setLiveLocation(d));
       }),
 
-      // CA reached join point
-on('care_assistant_at_jp', (data) => {
-  if (!mountedRef.current) return;
-  if (data?.careAssistantStatus) {
-    setCaStatusLocal(data.careAssistantStatus);
-    dispatch(setCareAssistantStatus({ careAssistantStatus: data.careAssistantStatus }));
-  }
-  dispatch(setCaAtJoinPoint());
-}),
-
-// CA joined ride — update view mode
-on('care_assistant_joined_ride', (data) => {
-  // Merged with existing handler — add to the existing one:
-  // After the existing dispatch(setCareAssistantJoined(data)):
-  dispatch(setCaViewMode('driver_tracking_only'));
-  dispatch(setCaHasJoined(data));
-  if (!mountedRef.current) return;
-  setCaStatusLocal('in_ride');
-}),
-
-// Driver marked JP complete
-on('ca_join_waypoint_completed', (data) => {
-  if (!mountedRef.current) return;
-  dispatch(setJpWaypointCompleted(data));
-  // Update local caJoinPoint as completed
-  setCaJoinPoint(prev => prev ? { ...prev, isCompleted: true } : prev);
-}),
-
-      on(EV.ETA_UPDATE, (data) => {
-        dispatch(socketEtaUpdate(data));
-        dispatch(setEtaUpdate(data));
+      on(SOCKET_EVENTS.ETA_UPDATE, (d) => {
+        dispatch(socketEtaUpdate(d));
+        dispatch(setEtaUpdate(d));
       }),
 
-      on(EV.RIDE_STATUS_CHANGED, (data) => {
-        dispatch(socketRideStatusChanged(data));
-        dispatch(setRideStatus(data));
-        if (data.status === 'completed')    dispatch(socketRideCompleted(data));
-        if (data.status === 'otp_verified') dispatch(socketOtpVerified(data));
-
-        if (data.activeNavigationTarget) {
-          dispatch(setNavigationTarget({
-            currentTarget:          data.activeNavigationTarget,
-            activeNavigationTarget: data.activeNavigationTarget,
-            bookingId:              data.bookingId,
-            rideId:                 data.rideId,
-          }));
-          dispatch(socketNavigationTargetChanged({
-            currentTarget: data.activeNavigationTarget,
-          }));
-        }
-
-        if (data.bookingType && mountedRef.current) {
-          setBookingType(data.bookingType);
-        }
-      }),
-
-      on(EV.NAVIGATION_TARGET_CHANGED, (data) => {
-        dispatch(socketNavigationTargetChanged(data));
-        dispatch(setNavigationTarget(data));
-      }),
-
-      // ── CARE ASSISTANT: live location update ─────────────────────────────
-      on('care_assistant_location_update', (data) => {
-        if (!mountedRef.current) return;
-
-        const loc = {
-          lat:       data.lat,
-          lng:       data.lng,
-          heading:   data.heading  ?? 0,
-          speed:     data.speed    ?? 0,
-          updatedAt: data.updatedAt || new Date().toISOString(),
-        };
-
-        setCaLiveLocation(loc);
-
-        dispatch(setCareAssistantLocation({
-          ...loc,
-          role:            'care_assistant',
-          careAssistantId: data.careAssistantId || null,
-          bookingId:       data.bookingId       || bookingId,
-          rideId:          data.rideId          || rideId,
-          status:          data.status          || null,
-        }));
-
-        if (data.status && mountedRef.current) {
-          setCaStatusLocal(data.status);
-        }
-      }),
-
-      // ── CARE ASSISTANT: status change ─────────────────────────────────────
-      on('care_assistant_status_change', (data) => {
-        if (!mountedRef.current) return;
-
-        const newStatus = data.careAssistantStatus || data.status || null;
-        if (newStatus) {
-          setCaStatusLocal(newStatus);
-          dispatch(setCareAssistantStatus({ careAssistantStatus: newStatus }));
-        }
-
-        if (data.careAssistantName && mountedRef.current) {
-          setCaName(data.careAssistantName);
-        }
-      }),
-
-      // ── CARE ASSISTANT: joined ride session ───────────────────────────────
-      on('care_assistant_joined_ride', (data) => {
-        if (!mountedRef.current) return;
-
-        dispatch(setCareAssistantJoined({
-          careAssistantId:   data.careAssistantId,
-          careAssistantName: data.careAssistantName,
-          joinedAt:          data.joinedAt,
-          caJoinPoint:       null,
-        }));
-
-        if (data.careAssistantName) setCaName(data.careAssistantName);
-
-        if (data.currentLocation?.lat && data.currentLocation?.lng) {
-          const loc = {
-            lat:     data.currentLocation.lat,
-            lng:     data.currentLocation.lng,
-            heading: 0,
-            speed:   0,
+      on(SOCKET_EVENTS.RIDE_STATUS_CHANGED, (d) => {
+        dispatch(socketRideStatusChanged(d));
+        dispatch(setRideStatus(d));
+        if (d.status === 'completed')    dispatch(socketRideCompleted(d));
+        if (d.status === 'otp_verified') dispatch(socketOtpVerified(d));
+        if (d.activeNavigationTarget) {
+          const navPayload = {
+            currentTarget:          d.activeNavigationTarget,
+            activeNavigationTarget: d.activeNavigationTarget,
           };
-          setCaLiveLocation(loc);
-          dispatch(setCareAssistantLocation({ ...loc, role: 'care_assistant' }));
+          dispatch(setNavigationTarget(navPayload));
+          dispatch(socketNavigationTargetChanged(navPayload));
         }
+        if (d.bookingType && mountedRef.current) setBookingType(d.bookingType);
       }),
 
-      // ── CARE ASSISTANT: attached to ride by admin ──────────────────────────
-      on('care_assistant_attached_to_ride', (data) => {
+      on(SOCKET_EVENTS.NAVIGATION_TARGET_CHANGED, (d) => {
+        dispatch(socketNavigationTargetChanged(d));
+        dispatch(setNavigationTarget(d));
+      }),
+
+      // ── CA events ────────────────────────────────────────────────────────
+      on(SOCKET_EVENTS.CARE_ASSISTANT_LOCATION_UPDATE, (d) => {
         if (!mountedRef.current) return;
-
-        if (data.careAssistantName) setCaName(data.careAssistantName);
-
-        if (data.caJoinPoint?.coordinates?.length >= 2) {
-          setCaJoinPoint({
-            coordinates:    data.caJoinPoint.coordinates,
-            zone:           data.caJoinPoint.zone           || null,
-            distCaToJoinKm: data.caJoinPoint.distCaToJoinKm || null,
-          });
-
-          dispatch(setCareRideWorkflow({
-            careAssistantJoined:    true,
-            activeNavigationTarget: 'pickup_care_assistant',
-          }));
-        }
-
-        dispatch(setCareAssistantJoined({
-          careAssistantId:   data.careAssistantId,
-          careAssistantName: data.careAssistantName,
-          joinedAt:          new Date().toISOString(),
-          caJoinPoint:       data.caJoinPoint || null,
-        }));
+        const loc = { lat: d.lat, lng: d.lng, heading: d.heading ?? 0, speed: d.speed ?? 0, updatedAt: d.updatedAt };
+        setCaLiveLocation(loc);
+        dispatch(setCareAssistantLocation({ ...loc, role: 'care_assistant', careAssistantId: d.careAssistantId, bookingId: d.bookingId }));
+        if (d.status) setCaStatusLocal(d.status);
       }),
 
-      // ── BOOKING STATE SNAPSHOT (reconnect) ────────────────────────────────
-      on('booking_state_snapshot', (data) => {
+      on(SOCKET_EVENTS.CARE_ASSISTANT_STATUS_CHANGE, (d) => {
         if (!mountedRef.current) return;
+        const s = d.careAssistantStatus || d.status;
+        if (s) { setCaStatusLocal(s); dispatch(setCareAssistantStatus({ careAssistantStatus: s })); }
+        if (d.careAssistantName) setCaName(d.careAssistantName);
+      }),
 
-        if (data.tracking?.careAssistantLiveLocation) {
-          const loc = data.tracking.careAssistantLiveLocation;
-          if (loc.coordinates?.length >= 2) {
-            setCaLiveLocation({
-              lat:     loc.coordinates[1],
-              lng:     loc.coordinates[0],
-              heading: loc.heading  || 0,
-              speed:   loc.speedKmh || 0,
-            });
-          }
+      on(SOCKET_EVENTS.CARE_ASSISTANT_AT_JP, (d) => {
+        if (!mountedRef.current) return;
+        if (d?.careAssistantStatus) {
+          setCaStatusLocal(d.careAssistantStatus);
+          dispatch(setCareAssistantStatus({ careAssistantStatus: d.careAssistantStatus }));
         }
+        dispatch(setCaAtJoinPoint());
+        dispatch(socketCaAtJoinPoint(d));
+      }),
 
-        if (data.tracking?.careAssistantStatus) {
-          setCaStatusLocal(data.tracking.careAssistantStatus);
+      on(SOCKET_EVENTS.CARE_ASSISTANT_JOINED_RIDE, (d) => {
+        if (!mountedRef.current) return;
+        dispatch(setCareAssistantJoined({ careAssistantId: d.careAssistantId, careAssistantName: d.careAssistantName, joinedAt: d.joinedAt, caJoinPoint: null }));
+        dispatch(setCaHasJoined(d));
+        dispatch(setCaViewMode('driver_tracking_only'));
+        dispatch(socketCaJoinedRide(d));
+        setCaStatusLocal('in_ride');
+        if (d.careAssistantName) setCaName(d.careAssistantName);
+        if (d.currentLocation?.lat) setCaLiveLocation({ lat: d.currentLocation.lat, lng: d.currentLocation.lng, heading: 0, speed: 0 });
+      }),
+
+      on(SOCKET_EVENTS.CARE_ASSISTANT_ATTACHED, (d) => {
+        if (!mountedRef.current) return;
+        if (d.careAssistantName) setCaName(d.careAssistantName);
+        if (d.caJoinPoint?.coordinates?.length >= 2) {
+          setCaJoinPoint({ coordinates: d.caJoinPoint.coordinates, zone: d.caJoinPoint.zone, distCaToJoinKm: d.caJoinPoint.distCaToJoinKm });
+          dispatch(setCareRideWorkflow({ careAssistantJoined: true, activeNavigationTarget: 'pickup_care_assistant' }));
+        }
+        dispatch(setCareAssistantJoined({ careAssistantId: d.careAssistantId, careAssistantName: d.careAssistantName, joinedAt: new Date().toISOString(), caJoinPoint: d.caJoinPoint || null }));
+      }),
+
+      on(SOCKET_EVENTS.CA_JOIN_WAYPOINT_COMPLETED, (d) => {
+        if (!mountedRef.current) return;
+        dispatch(setJpWaypointCompleted(d));
+        dispatch(socketJpWaypointCompleted(d));
+        setCaJoinPoint(prev => prev ? { ...prev, isCompleted: true } : prev);
+      }),
+
+      on(SOCKET_EVENTS.JOIN_POINT_CALCULATED, (d) => {
+        if (!mountedRef.current) return;
+        if (d.location?.coordinates) {
+          setCaJoinPoint({ coordinates: d.location.coordinates, zone: d.zone, distCaToJoinKm: d.distCaToJoinKm });
         }
       }),
 
+      // Booking state snapshot (reconnect hydration)
+      on(SOCKET_EVENTS.BOOKING_STATE_SNAPSHOT, (d) => {
+        if (!mountedRef.current) return;
+        const caLoc = d.tracking?.careAssistantLiveLocation;
+        if (caLoc?.coordinates?.length >= 2) {
+          setCaLiveLocation({ lat: caLoc.coordinates[1], lng: caLoc.coordinates[0], heading: caLoc.heading || 0, speed: caLoc.speedKmh || 0 });
+        }
+        if (d.tracking?.careAssistantStatus) setCaStatusLocal(d.tracking.careAssistantStatus);
+      }),
     ];
 
     return () => unsubs.forEach(fn => fn?.());
-  }, [on, EV, dispatch, bookingId, rideId]);
+  }, [on, dispatch, bookingId, rideId]);
 
-  // ── 4. GPS — internal watchPosition ──────────────────────────────────────
-  // FIX: removed gpsError from deps — caused new fn ref on every error state change,
-  // making the stale closure unable to clear the error. Now uses functional updater
-  // setGpsError(prev => prev ? null : prev) in success handler — no stale read.
+  // ── 4. GPS watch ───────────────────────────────────────────────────────────
   const startTracking = useCallback(() => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setGpsError('GPS not supported on this device');
       return;
     }
-
     if (gpsWatchIdRef.current !== null) {
       navigator.geolocation.clearWatch(gpsWatchIdRef.current);
       gpsWatchIdRef.current = null;
@@ -362,64 +302,48 @@ on('ca_join_waypoint_completed', (data) => {
 
     gpsWatchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
-        const { latitude: lat, longitude: lng, heading, accuracy } = pos.coords;
-        const rawSpeed = pos.coords.speed;
-
-        const speedKmh = rawSpeed != null && rawSpeed >= 0
-          ? +(rawSpeed * 3.6).toFixed(1)
-          : 0;
+        const { latitude: lat, longitude: lng, heading, accuracy, speed: rawSpeed } = pos.coords;
+        const speedKmh = rawSpeed != null && rawSpeed >= 0 ? +(rawSpeed * 3.6).toFixed(1) : 0;
 
         let computedHeading = heading;
-        if ((computedHeading === null || computedHeading === undefined) && lastPositionRef.current) {
+        if ((computedHeading == null) && lastPositionRef.current) {
           const prev = lastPositionRef.current;
-          const dLat = lat - prev.lat;
-          const dLng = lng - prev.lng;
-          computedHeading = ((Math.atan2(dLng, dLat) * 180) / Math.PI + 360) % 360;
+          const dLat = lat - prev.lat, dLng = lng - prev.lng;
+          computedHeading = ((Math.atan2(dLng, dLat) * 180 / Math.PI) + 360) % 360;
         }
 
-        const position = {
-          lat,
-          lng,
-          heading:  +(computedHeading ?? 0).toFixed(1),
-          speed:    speedKmh,
-          accuracy: accuracy ?? null,
-        };
-
+        const position = { lat, lng, heading: +(computedHeading ?? 0).toFixed(1), speed: speedKmh, accuracy: accuracy ?? null };
         lastPositionRef.current = position;
 
+        // Throttle React state update to 1/s max
         const now = Date.now();
-        if (now - lastSetPosAt.current > 1000) {
-          lastSetPosAt.current = now;
+        if (now - lastPosSetAt.current > 1000) {
+          lastPosSetAt.current = now;
           if (mountedRef.current) setCurrentPosition({ ...position });
         }
 
+        // Emit GPS to socket
         socketService.emit('driver_location', {
           bookingId: bookingId ?? undefined,
-          lat,
-          lng,
+          lat, lng,
           heading:  position.heading,
           speed:    speedKmh,
           accuracy: accuracy ?? undefined,
         });
 
-        // FIX: functional updater — no stale closure read of gpsError
         if (mountedRef.current) setGpsError(prev => prev ? null : prev);
       },
       (err) => {
         if (!mountedRef.current) return;
-        if (err.code === err.PERMISSION_DENIED) {
-          setGpsError('GPS permission denied. Enable location access.');
-        } else if (err.code === err.POSITION_UNAVAILABLE) {
-          setGpsError('GPS signal unavailable.');
-        } else {
-          setGpsError('GPS timeout. Retrying…');
-        }
+        if (err.code === err.PERMISSION_DENIED)       setGpsError('GPS permission denied. Enable location access.');
+        else if (err.code === err.POSITION_UNAVAILABLE) setGpsError('GPS signal unavailable.');
+        else                                            setGpsError('GPS timeout. Retrying…');
       },
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 10_000 }
     );
 
     dispatch(startGpsTracking({ bookingId }));
-  }, [bookingId, dispatch]); // FIX: removed gpsError — was causing fn churn + stale closures
+  }, [bookingId, dispatch]);
 
   const stopTracking = useCallback(() => {
     if (gpsWatchIdRef.current !== null) {
@@ -429,13 +353,13 @@ on('ca_join_waypoint_completed', (data) => {
     dispatch(stopGpsTracking());
   }, [dispatch]);
 
-  // Start GPS once on mount; stop on unmount
+  // Start GPS once
   useEffect(() => {
     startTracking();
     return () => stopTracking();
   }, []); // eslint-disable-line
 
-  // ── 5. Offline detection ──────────────────────────────────────────────────
+  // ── 5. Offline detection ───────────────────────────────────────────────────
   useEffect(() => {
     const onOffline = () => { if (mountedRef.current) setIsOffline(true); };
     const onOnline  = () => {
@@ -451,88 +375,68 @@ on('ca_join_waypoint_completed', (data) => {
     };
   }, [rideId, dispatch]);
 
-  // ── 6. Cleanup mountedRef ────────────────────────────────────────────────
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      // Set false FIRST before async callbacks fire
-      mountedRef.current = false;
-    };
-  }, []);
-
-  // ── sendStatusUpdate ──────────────────────────────────────────────────────
+  // ── sendStatusUpdate ───────────────────────────────────────────────────────
   const sendStatusUpdate = useCallback(async (action, extras = {}) => {
     const pos = lastPositionRef.current;
 
-    const driverStatusToAction = {
-      [DRIVER_STATUS.ACCEPTED]:      'accept',
-      [DRIVER_STATUS.EN_ROUTE]:      'start_route',
-      [DRIVER_STATUS.ARRIVED]:       'arrived',
-      [DRIVER_STATUS.RIDE_STARTED]:  'start_ride',
-      [DRIVER_STATUS.AT_STOP]:       'at_stop',
-      [DRIVER_STATUS.STOP_DEPARTED]: 'resume',
-      [DRIVER_STATUS.COMPLETED]:     'complete',
-      [DRIVER_STATUS.CANCELLED]:     'cancel',
+    // Map legacy DRIVER_STATUS constants to HTTP action strings
+    const statusToAction = {
+      accepted:      'accept',
+      en_route:      'start_route',
+      arrived:       'arrived',
+      otp_verified:  'verify_otp',
+      ride_started:  'start_ride',
+      at_stop:       'at_stop',
+      stop_departed: 'resume',
+      completed:     'complete',
+      cancelled:     'cancel',
     };
+    const httpAction = statusToAction[action] ?? action;
 
-    const httpAction = driverStatusToAction[action] ?? action;
-
-    if (action === DRIVER_STATUS.ACCEPTED && bookingId) {
+    // HTTP call
+    if (action === 'accepted' && bookingId) {
       await dispatch(acceptRide({ bookingId }));
-    } else if (action === DRIVER_STATUS.ARRIVED && bookingId) {
+    } else if (action === 'arrived' && bookingId) {
       await dispatch(markDriverArrived({ bookingId }));
+    } else if (action === 'completed' && bookingId) {
+      await dispatch(endRide({ bookingId, ...extras }));
     } else if (rideId) {
       await dispatch(updateRideStatus({ rideId, action: httpAction, ...extras }));
     }
 
+    // Socket status update (non-blocking)
     if (bookingId && rideId) {
-      dispatch(updateDriverStatusSocket({
-        bookingId,
-        rideId,
-        status: action,
-        lat: pos?.lat,
-        lng: pos?.lng,
-        ...extras,
-      }));
+      dispatch(updateDriverStatusSocket({ bookingId, rideId, status: action, lat: pos?.lat, lng: pos?.lng, ...extras }));
     }
 
+    // Refresh tracking after short delay
     if (rideId) {
-      setTimeout(() => {
-        if (mountedRef.current) dispatch(fetchRideTracking({ rideId }));
-      }, 800);
+      setTimeout(() => { if (mountedRef.current) dispatch(fetchRideTracking({ rideId })); }, 800);
     }
   }, [bookingId, rideId, dispatch]);
 
-  // ── verifyOtp ─────────────────────────────────────────────────────────────
+  // ── verifyOtp ──────────────────────────────────────────────────────────────
   const verifyOtp = useCallback(async (otp) => {
-    if (!rideId) return { success: false, message: 'No rideId' };
+    if (!rideId) return { error: 'No rideId' };
     const httpResult = await dispatch(updateRideStatus({ rideId, action: 'verify_otp', otp }));
-    if (bookingId) {
-      socketService.verifyOtpAsync({ bookingId, rideId, otp }).catch(() => {});
-    }
+    // Also fire socket OTP (non-blocking, best-effort)
+    if (bookingId) socketService.verifyOtpAsync({ bookingId, rideId, otp }).catch(() => {});
     return httpResult;
   }, [bookingId, rideId, dispatch]);
 
-  // ── triggerSosAlert ───────────────────────────────────────────────────────
-  const triggerSosAlert = useCallback((sosType = 'safety') => {
+  // ── triggerSosAlert ────────────────────────────────────────────────────────
+  const triggerSosAlert = useCallback((sosType = 'SAFETY') => {
     const pos = lastPositionRef.current;
-    dispatch(triggerSos({
-      bookingId: bookingId || '',
-      rideId:    rideId    || '',
-      lat:       pos?.lat,
-      lng:       pos?.lng,
-      sosType,
-    }));
+    dispatch(triggerSos({ bookingId: bookingId || '', rideId: rideId || '', lat: pos?.lat, lng: pos?.lng, sosType }));
   }, [bookingId, rideId, dispatch]);
 
-  // ─────────────────────────────────────────────────────────────────────────
   return {
-    ride:            currentRide,
-    tracking:        trackingData,
+    ride:                    currentRide,
+    tracking:                trackingData,
     socketLive,
-    rideStatus:      rideStatus || currentRide?.status,
-    rideStage:       socketLive?.rideStage || currentRide?.rideStage,
-    activeNavigationTarget: socketLive?.activeNavigationTarget || currentRide?.activeNavigationTarget,
+    rideStatus:              rideStatus || currentRide?.status,
+    rideStage:               socketLive?.rideStage || currentRide?.rideStage,
+    activeNavigationTarget:  socketLive?.activeNavigationTarget || currentRide?.activeNavigationTarget,
     navigationTarget,
     etaUpdate,
     currentPosition,
@@ -540,18 +444,15 @@ on('ca_join_waypoint_completed', (data) => {
     gpsError,
     isOffline,
     connected,
-    // ── CA-specific ──────────────────────────────────────────────────────
     bookingType,
     caLiveLocation,
     caStatus,
     caJoinPoint,
     caName,
-    // ── Actions ──────────────────────────────────────────────────────────
     sendStatusUpdate,
     verifyOtp,
     triggerSosAlert,
     startTracking,
     stopTracking,
-    DRIVER_STATUS,
   };
 }

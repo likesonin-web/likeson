@@ -807,18 +807,29 @@ const CouponInput = React.memo(({ orderTotal, coupon, couponLoading, couponError
 });
 CouponInput.displayName = 'CouponInput';
 
-const BillSummary = React.memo(({ billSummary, subscriptionDiscount, coupon, paymentMethod, deliveryCharge, platformFee, deliveryType, deliveryPricing }) => {
-  const subTotal   = billSummary.itemsTotal  ?? 0;
-  const taxTotal   = billSummary.estimatedTax ?? 0;
-  const grossTotal = billSummary.totalAmount  ?? 0;
-  const subSavings   = parseFloat((subTotal * (subscriptionDiscount / 100)).toFixed(2));
+const BillSummary = React.memo(({ items, subscriptionDiscount, coupon, deliveryCharge, platformFee, deliveryType }) => {
+  // 1. Exact match to backend buildBilling math
+  const subTotal = parseFloat(items.reduce((sum, item) => sum + (item.pricePerUnit * item.quantity), 0).toFixed(2));
+  const subSavings = parseFloat((subTotal * (subscriptionDiscount / 100)).toFixed(2));
   const couponSaving = coupon?.discountAmount ?? 0;
   
-  const finalTotal   = parseFloat(Math.max(0, grossTotal - subSavings - couponSaving + deliveryCharge + platformFee).toFixed(2));
+  const totalDiscount = parseFloat((subSavings + couponSaving).toFixed(2));
+  const afterAllDiscounts = parseFloat(Math.max(0, subTotal - totalDiscount).toFixed(2));
+  const finalTotal = parseFloat((afterAllDiscounts + deliveryCharge + platformFee).toFixed(2));
+
+  // 2. Calculate included GST purely for display (matches backend logic)
+  const discountFactor = subTotal > 0 ? afterAllDiscounts / subTotal : 0;
+  let estimatedGst = 0;
+  items.forEach((item) => {
+    const itemTotal = item.pricePerUnit * item.quantity;
+    const itemPaidShare = itemTotal * discountFactor;
+    const gstPct = item.medicine?.gstPercentage ?? item.gstPercentage ?? 5;
+    estimatedGst += (itemPaidShare * gstPct) / (100 + gstPct);
+  });
 
   const rows = [
     { label: 'Items Total',      value: `₹${subTotal.toFixed(2)}`,  highlight: false },
-    { label: 'Estimated GST',    value: `₹${taxTotal.toFixed(2)}`,  highlight: false },
+    { label: 'Estimated GST (Included)', value: `₹${estimatedGst.toFixed(2)}`,  highlight: false },
     { label: `Delivery (${deliveryType})`, value: deliveryCharge > 0 ? `₹${deliveryCharge.toFixed(2)}` : 'FREE', highlight: deliveryCharge === 0 },
     { label: 'Platform Fee',     value: `₹${platformFee.toFixed(2)}`, highlight: false },
     ...(subSavings > 0 ? [{ label: `Plan Discount (${subscriptionDiscount}%)`, value: `-₹${subSavings.toFixed(2)}`, highlight: true, isDiscount: true }] : []),
@@ -1073,16 +1084,22 @@ export default function CartPage() {
   const addressRef = useRef(null);
 
   // ── Derived ───────────────────────────────────────────────────────────────────
+ 
   const rxPresent      = useMemo(() => hasAnyRxItem(items), [items]);
   const missingRxItems = useMemo(() => getMissingRxItems(items), [items]);
   const allRxDone      = useMemo(() => allPrescriptionsUploaded(items), [items]);
   const totalItems     = useMemo(() => items.reduce((s, i) => s + i.quantity, 0), [items]);
 
+  // ✅ Compute exact subTotal natively from items (fixes cart bugs)
+  const subTotal = useMemo(() => {
+    return parseFloat(items.reduce((sum, item) => sum + (item.pricePerUnit * item.quantity), 0).toFixed(2));
+  }, [items]);
+
+  // ✅ Pre-coupon total
   const orderTotalForCoupon = useMemo(() => {
-    const gross    = billSummary.totalAmount ?? 0;
-    const subSaved = gross * (pharmacyDiscount / 100);
-    return parseFloat(Math.max(0, gross - subSaved).toFixed(2));
-  }, [billSummary.totalAmount, pharmacyDiscount]);
+    const subSaved = parseFloat((subTotal * (pharmacyDiscount / 100)).toFixed(2));
+    return parseFloat(Math.max(0, subTotal - subSaved).toFixed(2));
+  }, [subTotal, pharmacyDiscount]);
 
   // Fetch Delivery Pricing whenever the base cart total changes
   useEffect(() => {
@@ -1096,11 +1113,15 @@ export default function CartPage() {
     ? (deliveryPricing?.delivery?.express?.charge ?? 0)
     : (deliveryPricing?.delivery?.standard?.charge ?? 0);
 
+  // ✅ Exact replica of backend final total
   const finalPayable = useMemo(() => {
+    const subSaved = parseFloat((subTotal * (pharmacyDiscount / 100)).toFixed(2));
     const couponSaving = coupon?.discountAmount ?? 0;
-    const discountedTotal = Math.max(0, orderTotalForCoupon - couponSaving);
-    return parseFloat((discountedTotal + deliveryCharge + platformFee).toFixed(2));
-  }, [orderTotalForCoupon, coupon, deliveryCharge, platformFee]);
+    const totalDiscount = parseFloat((subSaved + couponSaving).toFixed(2));
+    const afterAllDiscounts = parseFloat(Math.max(0, subTotal - totalDiscount).toFixed(2));
+
+    return parseFloat((afterAllDiscounts + deliveryCharge + platformFee).toFixed(2));
+  }, [subTotal, pharmacyDiscount, coupon, deliveryCharge, platformFee]);
 
   const goToStep = useCallback((next) => {
     setSlideDir(STEP_ORDER[next] > STEP_ORDER[step] ? 1 : -1);
@@ -1539,12 +1560,12 @@ export default function CartPage() {
               <div className="lg:col-span-5">
                 <div className="sticky top-28 space-y-5">
 
-                  <section className="glass-card p-6" aria-label="Bill summary">
+               <section className="glass-card p-6" aria-label="Bill summary">
                     <h2 className="text-[10px] font-bold uppercase tracking-widest text-base-content/40 mb-5 flex items-center gap-1.5">
                       <ReceiptText className="w-4 h-4" /> Bill Summary
                     </h2>
                     <BillSummary 
-                      billSummary={billSummary} 
+                      items={items} // ✅ Changed this line
                       subscriptionDiscount={pharmacyDiscount} 
                       coupon={coupon} 
                       paymentMethod={paymentMethod} 

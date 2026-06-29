@@ -2162,12 +2162,17 @@ router.get('/orders/my-orders', protect, asyncHandler(async (req, res) => {
   const pageNum  = Math.max(1, parseInt(page, 10));
   const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10)));
   const skip     = (pageNum - 1) * limitNum;
-  const filter   = { customer: req.user._id };
+  
+  // ✅ Explicitly ensure we exclude soft-deleted/archived data
+  const filter   = { customer: req.user._id, isArchived: false }; 
   if (status) filter['delivery.status'] = status;
 
   const [orders, total] = await Promise.all([
     PharmacyOrder.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum)
-      .populate('store', 'storeName address').lean(),
+      // ✅ Added comprehensive populations so frontend has full data
+      .populate('store', 'storeName address contact status storeType isOnline timings operationalCapacity deliverySettings')
+      .populate('items.medicine', 'name brandName genericName images category dosage packaging')
+      .lean({ virtuals: true }),
     PharmacyOrder.countDocuments(filter),
   ]);
 

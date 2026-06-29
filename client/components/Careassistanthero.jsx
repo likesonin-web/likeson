@@ -227,7 +227,7 @@ export default function CareHome() {
           <button onClick={() => router.push('/care-assistant/dashboard')} className="btn btn-primary btn-sm md:btn-md rounded-xl shadow-sm">
             <LayoutDashboard size={18} /> View Dashboard
           </button>
-          <button onClick={() => router.push('/care-assistant/profile')} className="btn btn-outline btn-sm md:btn-md rounded-xl bg-base-100 shadow-sm">
+          <button onClick={() => router.push('/care-assistant/profile')} className="btn btn-outline btn-sm md:btn-md rounded-xl  shadow-sm">
             <UserCog size={18} /> Manage Account
           </button>
           <button onClick={() => router.push('/care-assistant/support')} className="btn btn-ghost btn-sm md:btn-md rounded-xl bg-base-200/60">

@@ -1,4 +1,3 @@
- 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API from '../api';
 import toast from 'react-hot-toast';
@@ -7,11 +6,10 @@ import toast from 'react-hot-toast';
 // ASYNC THUNKS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── POST /ride-requests/customer ───────────────────────────────────────────
+// POST /ride-requests/customer
 export const customerRequestRide = createAsyncThunk(
   'rideRequest/customerRequestRide',
   async (payload, { rejectWithValue }) => {
-    // payload: { pickupLocation, destinationLocation, scheduledAt?, bookingId?, notes? }
     try {
       const { data } = await API.post('/ride-requests/customer', payload);
       return data.data;
@@ -21,11 +19,10 @@ export const customerRequestRide = createAsyncThunk(
   }
 );
 
-// ── POST /ride-requests/care-assistant ────────────────────────────────────
+// POST /ride-requests/care-assistant
 export const careAssistantRequestRide = createAsyncThunk(
   'rideRequest/careAssistantRequestRide',
   async (payload, { rejectWithValue }) => {
-    // payload: { pickupLocation, destinationLocation, bookingId, scheduledAt?, notes? }
     try {
       const { data } = await API.post('/ride-requests/care-assistant', payload);
       return data.data;
@@ -35,7 +32,7 @@ export const careAssistantRequestRide = createAsyncThunk(
   }
 );
 
-// ── GET /ride-requests/:rideId ────────────────────────────────────────────
+// GET /ride-requests/:rideId
 export const fetchRide = createAsyncThunk(
   'rideRequest/fetchRide',
   async (rideId, { rejectWithValue }) => {
@@ -48,7 +45,7 @@ export const fetchRide = createAsyncThunk(
   }
 );
 
-// ── GET /ride-requests/admin/all ──────────────────────────────────────────
+// GET /ride-requests/admin/all
 export const fetchAdminAllRides = createAsyncThunk(
   'rideRequest/fetchAdminAllRides',
   async ({ status = 'searching', page = 1, limit = 20 } = {}, { rejectWithValue }) => {
@@ -63,7 +60,7 @@ export const fetchAdminAllRides = createAsyncThunk(
   }
 );
 
-// ── GET /ride-requests/admin/:rideId/nearby ───────────────────────────────
+// GET /ride-requests/admin/:rideId/nearby
 export const fetchNearbyDrivers = createAsyncThunk(
   'rideRequest/fetchNearbyDrivers',
   async (rideId, { rejectWithValue }) => {
@@ -76,12 +73,11 @@ export const fetchNearbyDrivers = createAsyncThunk(
   }
 );
 
-// ── POST /ride-requests/admin/:rideId/assign ──────────────────────────────
+// POST /ride-requests/admin/:rideId/assign
+// assignType: 'tp' | 'solo' | 'agency_driver'
 export const adminAssignRide = createAsyncThunk(
   'rideRequest/adminAssignRide',
   async ({ rideId, assignType, assignId }, { rejectWithValue }) => {
-    // assignType: 'tp' | 'solo'
-    // assignId: TransportPartner._id | SoloDriverPartner._id
     try {
       const { data } = await API.post(`/ride-requests/admin/${rideId}/assign`, {
         assignType,
@@ -94,11 +90,27 @@ export const adminAssignRide = createAsyncThunk(
   }
 );
 
-// ── PATCH /ride-requests/tp/:rideId/assign-driver ─────────────────────────
+// PATCH /ride-requests/admin/:rideId/replace-driver
+export const adminReplaceDriver = createAsyncThunk(
+  'rideRequest/adminReplaceDriver',
+  async ({ rideId, newDriverId, newSoloPartnerId, reason }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.patch(`/ride-requests/admin/${rideId}/replace-driver`, {
+        ...(newDriverId        && { newDriverId }),
+        ...(newSoloPartnerId   && { newSoloPartnerId }),
+        ...(reason             && { reason }),
+      });
+      return { rideId, ...data.data };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+// PATCH /ride-requests/tp/:rideId/assign-driver
 export const tpAssignDriver = createAsyncThunk(
   'rideRequest/tpAssignDriver',
   async ({ rideId, driverId }, { rejectWithValue }) => {
-    // driverId = Driver._id (NOT User._id)
     try {
       const { data } = await API.patch(`/ride-requests/tp/${rideId}/assign-driver`, {
         driverId,
@@ -110,12 +122,12 @@ export const tpAssignDriver = createAsyncThunk(
   }
 );
 
-// ── PATCH /ride-requests/:rideId/status ──────────────────────────────────
-// action strings: accept | start_route | arrived | verify_otp |
-//                 start_ride | at_stop | resume | complete | cancel
+// PATCH /ride-requests/:rideId/status
+// action: accept | start_route | arrived | verify_otp | start_ride |
+//         at_stop | resume | complete | cancel | complete_waypoint
 export const updateRideStatus = createAsyncThunk(
   'rideRequest/updateRideStatus',
-  async ({ rideId, action, otp, stopIndex, cancelReason, eta } = {}, { rejectWithValue }) => {
+  async ({ rideId, action, otp, stopIndex, cancelReason, eta, waypointType } = {}, { rejectWithValue }) => {
     try {
       const { data } = await API.patch(`/ride-requests/${rideId}/status`, {
         action,
@@ -123,6 +135,7 @@ export const updateRideStatus = createAsyncThunk(
         ...(stopIndex    !== undefined && { stopIndex }),
         ...(cancelReason !== undefined && { cancelReason }),
         ...(eta          !== undefined && { eta }),
+        ...(waypointType !== undefined && { waypointType }),
       });
       return { rideId, ...data.data };
     } catch (err) {
@@ -131,7 +144,7 @@ export const updateRideStatus = createAsyncThunk(
   }
 );
 
-// ── GET /ride-requests/:rideId/live ──────────────────────────────────────
+// GET /ride-requests/:rideId/live
 export const fetchRideLive = createAsyncThunk(
   'rideRequest/fetchRideLive',
   async (rideId, { rejectWithValue }) => {
@@ -144,7 +157,7 @@ export const fetchRideLive = createAsyncThunk(
   }
 );
 
-// ── GET /ride-requests/:rideId/tracking ──────────────────────────────────
+// GET /ride-requests/:rideId/tracking
 export const fetchRideTracking = createAsyncThunk(
   'rideRequest/fetchRideTracking',
   async ({ rideId, breadcrumbs = 100 } = {}, { rejectWithValue }) => {
@@ -152,25 +165,147 @@ export const fetchRideTracking = createAsyncThunk(
       const { data } = await API.get(`/ride-requests/${rideId}/tracking`, {
         params: { breadcrumbs },
       });
-      return data.data; // { ride, tracking, socketHint, _serverTime }
+      return data.data; // { ride, stops, tracking, socketHint, _serverTime }
     } catch (err) {
       return rejectWithValue(err.response?.data?.message || err.message);
     }
   }
 );
 
-// ── POST /ride-requests/:rideId/tracking/milestone ───────────────────────
+// POST /ride-requests/:rideId/tracking/milestone
 export const postMilestone = createAsyncThunk(
   'rideRequest/postMilestone',
   async ({ rideId, name, coordinates = null, stopSequence = null, meta = null } = {}, { rejectWithValue }) => {
     try {
       const { data } = await API.post(`/ride-requests/${rideId}/tracking/milestone`, {
-        name,
-        coordinates,
-        stopSequence,
-        meta,
+        name, coordinates, stopSequence, meta,
       });
       return data.data; // { rideId, milestone, bookingRoom }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+// GET /ride-requests/:rideId/stops
+export const fetchRideStops = createAsyncThunk(
+  'rideRequest/fetchRideStops',
+  async (rideId, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/ride-requests/${rideId}/stops`);
+      return data.data; // { rideId, currentStopId, stops, total }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+// PATCH /ride-requests/:rideId/stop/:stopId/arrived
+export const markStopArrived = createAsyncThunk(
+  'rideRequest/markStopArrived',
+  async ({ rideId, stopId }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.patch(`/ride-requests/${rideId}/stop/${stopId}/arrived`);
+      return { rideId, stopId, ...data.data }; // { stopId, stopType, status, otp? }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+// PATCH /ride-requests/:rideId/stop/:stopId/verify-otp
+export const verifyStopOtp = createAsyncThunk(
+  'rideRequest/verifyStopOtp',
+  async ({ rideId, stopId, otp }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.patch(`/ride-requests/${rideId}/stop/${stopId}/verify-otp`, { otp });
+      return { rideId, stopId, ...data.data }; // { status, nextStop? }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+// PATCH /ride-requests/:rideId/stop/:stopId/depart
+export const departStop = createAsyncThunk(
+  'rideRequest/departStop',
+  async ({ rideId, stopId }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.patch(`/ride-requests/${rideId}/stop/${stopId}/depart`);
+      return { rideId, stopId, ...data.data }; // { status, nextStop? }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+// GET /ride-requests/:rideId/participants
+export const fetchRideParticipants = createAsyncThunk(
+  'rideRequest/fetchRideParticipants',
+  async (rideId, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/ride-requests/${rideId}/participants`);
+      return data.data; // { rideId, participants, total }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+// GET /ride-requests/:rideId/sos
+export const fetchRideSosEvents = createAsyncThunk(
+  'rideRequest/fetchRideSosEvents',
+  async (rideId, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/ride-requests/${rideId}/sos`);
+      return data.data; // { rideId, events, total }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+// POST /ride-requests/:rideId/sos
+// sosType: MEDICAL | SAFETY | VEHICLE_BREAKDOWN | ACCIDENT | PATIENT_CONDITION | OTHER
+export const triggerRideSos = createAsyncThunk(
+  'rideRequest/triggerRideSos',
+  async ({ rideId, sosType, description, coordinates }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.post(`/ride-requests/${rideId}/sos`, {
+        sosType,
+        ...(description  && { description }),
+        ...(coordinates  && { coordinates }),
+      });
+      return { rideId, ...data.data }; // { sosEventId, sosType }
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+// PATCH /ride-requests/:rideId/sos/:sosEventId/resolve
+export const resolveRideSos = createAsyncThunk(
+  'rideRequest/resolveRideSos',
+  async ({ rideId, sosEventId, resolutionNotes }, { rejectWithValue }) => {
+    try {
+      const { data } = await API.patch(
+        `/ride-requests/${rideId}/sos/${sosEventId}/resolve`,
+        { resolutionNotes }
+      );
+      return { rideId, sosEventId, ...data.data };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message);
+    }
+  }
+);
+
+// GET /ride-requests/:rideId/care-assistant-live
+export const fetchCareAssistantLive = createAsyncThunk(
+  'rideRequest/fetchCareAssistantLive',
+  async (rideId, { rejectWithValue }) => {
+    try {
+      const { data } = await API.get(`/ride-requests/${rideId}/care-assistant-live`);
+      return data.data;
     } catch (err) {
       return rejectWithValue(err.response?.data?.message || err.message);
     }
@@ -191,6 +326,19 @@ const initialState = {
   // Full tracking doc (breadcrumbs, milestones, polylines)
   trackingData: null,
 
+  // Active stops for current ride (from GET /stops or embedded in /tracking)
+  stops: [],
+  currentStopId: null,
+
+  // Participants
+  participants: [],
+
+  // SOS events
+  sosEvents: [],
+
+  // Care assistant live (role-gated view)
+  caLiveData: null,
+
   // Admin: list of rides
   adminRides: [],
   adminTotal: 0,
@@ -203,36 +351,43 @@ const initialState = {
   // Ride just created (customer / care-assistant)
   createdRide: null,
 
-  // Socket-pushed live state (updated by socket actions below)
-socketLive: {
-  status:    null,
-  rideStage: null,          // ← ADD: new field from backend
-  liveLocation: null,
-  etaMinutes:   null,
-  etaTarget:    null,
-  navigationTarget: null,
-  activeNavigationTarget: null,  // ← ADD: canonical field name
-  driverSnapshot:   null,
-  vehicleSnapshot:  null,
-  otpResult:        null,
-  wrongOtpAttempts: 0,
-  activeTarget:     null,        // keep for compat
-  hospitalEta: {
-    hospitalId:   null,
-    hospitalName: null,
-    etaMinutes:   null,
-    distanceKm:   null,
-    coordinates:  null,
+  // Socket-pushed live state (updated by socket action reducers below)
+  socketLive: {
+    status:                 null,
+    rideStage:              null,
+    liveLocation:           null,
+    etaMinutes:             null,
+    etaTarget:              null,
+    navigationTarget:       null,
+    activeNavigationTarget: null,
+    activeTarget:           null, // alias — kept for compat
+    driverSnapshot:         null,
+    vehicleSnapshot:        null,
+    otpResult:              null,
+    wrongOtpAttempts:       0,
+    hospitalEta: {
+      hospitalId:   null,
+      hospitalName: null,
+      etaMinutes:   null,
+      distanceKm:   null,
+      coordinates:  null,
+    },
+    careAssistantTracking: {
+      bookingId:      null,
+      rideId:         null,
+      driverLocation: null,
+      activeTarget:   null,
+      etaMinutes:     null,
+      distanceKm:     null,
+    },
   },
-  careAssistantTracking: {
-    bookingId:      null,
-    rideId:         null,
-    driverLocation: null,
-    activeTarget:   null,
-    etaMinutes:     null,
-    distanceKm:     null,
-  },
-},
+
+  // CA workflow state — top-level (NOT inside socketLive)
+  caAtJoinPoint: false,
+  caHasJoined:   false,
+  caViewMode:    null, // 'navigate_to_jp' | 'driver_tracking_only'
+  jpCompleted:   false,
+
   // Loading states per operation
   loading: {
     customerRequest:    false,
@@ -241,19 +396,22 @@ socketLive: {
     adminAll:           false,
     nearby:             false,
     adminAssign:        false,
+    adminReplace:       false,
     tpAssign:           false,
     statusUpdate:       false,
     live:               false,
     tracking:           false,
     milestone:          false,
+    stops:              false,
+    stopArrived:        false,
+    stopOtp:            false,
+    stopDepart:         false,
+    participants:       false,
+    sosEvents:          false,
+    sosTrigger:         false,
+    sosResolve:         false,
+    caLive:             false,
   },
-
-  // Full care ride CA tracking
-caAtJoinPoint:     false,
-caHasJoined:       false,
-caViewMode:        null,   // 'navigate_to_jp' | 'driver_tracking_only'
-jpCompleted:       false,
-updatedWaypoints:  null,
 
   errors: {
     customerRequest:    null,
@@ -262,11 +420,21 @@ updatedWaypoints:  null,
     adminAll:           null,
     nearby:             null,
     adminAssign:        null,
+    adminReplace:       null,
     tpAssign:           null,
     statusUpdate:       null,
     live:               null,
     tracking:           null,
     milestone:          null,
+    stops:              null,
+    stopArrived:        null,
+    stopOtp:            null,
+    stopDepart:         null,
+    participants:       null,
+    sosEvents:          null,
+    sosTrigger:         null,
+    sosResolve:         null,
+    caLive:             null,
   },
 };
 
@@ -280,57 +448,55 @@ const rideRequestSlice = createSlice({
 
   reducers: {
     // ── Socket event handlers ──────────────────────────────────────────────
-    // Call these from SocketProvider listeners (useBookingRoom / useSocket).
 
-    // location_update → SOCKET_EVENTS.LOCATION_UPDATE
-socketLocationUpdate(state, action) {
-  const p = action.payload;
-  state.socketLive.liveLocation = {
-    lat:       p.lat,
-    lng:       p.lng,
-    heading:   p.heading   ?? 0,
-    speedKmh:  p.speedKmh  ?? p.speed ?? 0,
-    updatedAt: p.updatedAt ?? Date.now(),
-  };
-  if (state.liveData) {
-    state.liveData.liveLocation = state.socketLive.liveLocation;
-  }
-},
+    // location_update
+    socketLocationUpdate(state, action) {
+      const p = action.payload;
+      state.socketLive.liveLocation = {
+        lat:       p.lat,
+        lng:       p.lng,
+        heading:   p.heading  ?? 0,
+        speedKmh:  p.speedKmh ?? p.speed ?? 0,
+        updatedAt: p.updatedAt ?? Date.now(),
+      };
+      if (state.liveData) {
+        state.liveData.liveLocation = state.socketLive.liveLocation;
+      }
+    },
 
-    // eta_update → SOCKET_EVENTS.ETA_UPDATE
+    // eta_update
     socketEtaUpdate(state, action) {
-      // payload: { etaMinutes, distanceRemainingKm, currentTarget, … }
-      state.socketLive.etaMinutes = action.payload.etaMinutes ?? state.socketLive.etaMinutes;
+      state.socketLive.etaMinutes = action.payload.etaMinutes   ?? state.socketLive.etaMinutes;
       state.socketLive.etaTarget  = action.payload.currentTarget ?? state.socketLive.etaTarget;
       if (state.liveData) state.liveData.currentEtaMinutes = action.payload.etaMinutes;
     },
 
-    // ride_status_changed → SOCKET_EVENTS.RIDE_STATUS_CHANGED
-   socketRideStatusChanged(state, action) {
-  const p = action.payload;
-  state.socketLive.status = p.status;
-  // NEW: also capture rideStage + activeNavigationTarget
-  if (p.rideStage)             state.socketLive.rideStage             = p.rideStage;
-  if (p.activeNavigationTarget) state.socketLive.activeNavigationTarget = p.activeNavigationTarget;
-  if (p.activeNavigationTarget) state.socketLive.activeTarget          = p.activeNavigationTarget;
-  if (state.currentRide?._id === p.rideId) {
-    state.currentRide.status = p.status;
-    if (p.rideStage) state.currentRide.rideStage = p.rideStage;
-  }
-},
+    // ride_status_changed
+    socketRideStatusChanged(state, action) {
+      const p = action.payload;
+      state.socketLive.status = p.status;
+      if (p.rideStage)              state.socketLive.rideStage             = p.rideStage;
+      if (p.activeNavigationTarget) {
+        state.socketLive.activeNavigationTarget = p.activeNavigationTarget;
+        state.socketLive.activeTarget           = p.activeNavigationTarget;
+      }
+      if (state.currentRide?._id === p.rideId) {
+        state.currentRide.status = p.status;
+        if (p.rideStage) state.currentRide.rideStage = p.rideStage;
+      }
+    },
 
-    // driver_accepted, driver_en_route, driver_arrived, otp_verified,
-    // ride_started, at_stop, ride_completed, ride_cancelled
-    socketDriverAccepted(state, action) {
+    // Fine-grained status reducers (server also emits dedicated events)
+    socketDriverAccepted(state) {
       state.socketLive.status = 'driver_accepted';
       if (state.currentRide) state.currentRide.status = 'driver_accepted';
     },
     socketDriverEnRoute(state, action) {
-      state.socketLive.status    = 'driver_en_route';
+      state.socketLive.status     = 'driver_en_route';
       state.socketLive.etaMinutes = action.payload?.currentEtaMinutes ?? state.socketLive.etaMinutes;
       if (state.currentRide) state.currentRide.status = 'driver_en_route';
     },
-    socketDriverArrived(state, action) {
+    socketDriverArrived(state) {
       state.socketLive.status = 'driver_arrived';
       if (state.currentRide) state.currentRide.status = 'driver_arrived';
     },
@@ -339,128 +505,101 @@ socketLocationUpdate(state, action) {
       state.socketLive.otpResult = { success: true, ...action.payload };
       if (state.currentRide) state.currentRide.status = 'otp_verified';
     },
-    socketRideStarted(state, action) {
+    socketRideStarted(state) {
       state.socketLive.status = 'in_progress';
       if (state.currentRide) state.currentRide.status = 'in_progress';
     },
-    socketAtStop(state, action) {
+    socketAtStop(state) {
       state.socketLive.status = 'at_stop';
       if (state.currentRide) state.currentRide.status = 'at_stop';
     },
-    socketRideCompleted(state, action) {
+    socketRideCompleted(state) {
       state.socketLive.status = 'completed';
       if (state.currentRide) state.currentRide.status = 'completed';
     },
-    socketRideCancelled(state, action) {
+    socketRideCancelled(state) {
       state.socketLive.status = 'cancelled';
       if (state.currentRide) state.currentRide.status = 'cancelled';
     },
-    socketHospitalEtaUpdate(
-  state,
-  action
-) {
 
-  state.socketLive.hospitalEta = {
+    // hospital_eta_update
+    socketHospitalEtaUpdate(state, action) {
+      state.socketLive.hospitalEta = {
+        hospitalId:   action.payload.hospitalId,
+        hospitalName: action.payload.hospitalName,
+        etaMinutes:   action.payload.etaMinutes,
+        distanceKm:   action.payload.distanceKm,
+        coordinates:  action.payload.coordinates,
+      };
+    },
 
-    hospitalId:
-      action.payload.hospitalId,
+    // care-assistant:ride:tracking
+    socketCareAssistantTracking(state, action) {
+      state.socketLive.careAssistantTracking = {
+        bookingId:      action.payload.bookingId,
+        rideId:         action.payload.rideId,
+        driverLocation: action.payload.driverLocation,
+        activeTarget:   action.payload.activeTarget,
+        etaMinutes:     action.payload.etaMinutes,
+        distanceKm:     action.payload.distanceKm,
+      };
+      state.socketLive.activeTarget = action.payload.activeTarget;
+    },
 
-    hospitalName:
-      action.payload.hospitalName,
+    // care_assistant_at_jp — CA reached join point
+    // FIX: writes to state.caAtJoinPoint (top-level), NOT state.socketLive.caAtJoinPoint
+    socketCaAtJoinPoint(state, action) {
+      state.caAtJoinPoint = true;
+      state.caViewMode    = 'navigate_to_jp';
+      if (action.payload?.careAssistantStatus) {
+        state.socketLive.careAssistantTracking = {
+          ...state.socketLive.careAssistantTracking,
+          caStatus: action.payload.careAssistantStatus,
+        };
+      }
+    },
 
-    etaMinutes:
-      action.payload.etaMinutes,
+    // care_assistant_joined_ride — CA boarded, switch to driver-only view
+    // FIX: writes to state.caHasJoined (top-level)
+    socketCaJoinedRide(state, action) {
+      state.caHasJoined   = true;
+      state.caViewMode    = 'driver_tracking_only';
+      state.caAtJoinPoint = false;
+      if (action.payload?.jpCompleted) state.jpCompleted = true;
+    },
 
-    distanceKm:
-      action.payload.distanceKm,
+    // ca_join_waypoint_completed — driver picked up CA
+    // FIX: writes to state.jpCompleted (top-level)
+    socketJpWaypointCompleted(state, action) {
+      state.jpCompleted = true;
+      // Also patch stops array if loaded
+      if (state.stops?.length) {
+        state.stops = state.stops.map(s =>
+          s.stopType === 'CARE_ASSISTANT_JOIN' ? { ...s, status: 'COMPLETED', isCompleted: true } : s
+        );
+      }
+    },
 
-    coordinates:
-      action.payload.coordinates,
-  };
-},
-
-socketCareAssistantTracking(
-  state,
-  action
-) {
-
-  state.socketLive
-    .careAssistantTracking = {
-
-    bookingId:
-      action.payload.bookingId,
-
-    rideId:
-      action.payload.rideId,
-
-    driverLocation:
-      action.payload.driverLocation,
-
-    activeTarget:
-      action.payload.activeTarget,
-
-    etaMinutes:
-      action.payload.etaMinutes,
-
-    distanceKm:
-      action.payload.distanceKm,
-  };
-
-  state.socketLive.activeTarget =
-    action.payload.activeTarget;
-},
-
-// care_assistant_at_jp → CA reached join point
-socketCaAtJoinPoint(state, action) {
-  const p = action.payload;
-  state.socketLive.caAtJoinPoint   = true;
-  state.socketLive.caViewMode      = 'navigate_to_jp'; // still at JP, not yet in ride
-  if (p.careAssistantStatus) {
-    state.socketLive.careAssistantTracking = {
-      ...state.socketLive.careAssistantTracking,
-      caStatus: p.careAssistantStatus,
-    };
-  }
-},
-
-// care_assistant_joined_ride → CA boarded, switch CA to driver-only view
-socketCaJoinedRide(state, action) {
-  const p = action.payload;
-  state.socketLive.caHasJoined  = true;
-  state.socketLive.caViewMode   = 'driver_tracking_only';
-  state.socketLive.caAtJoinPoint = false;
-  if (p.jpCompleted) state.socketLive.jpCompleted = true;
-  if (p.updatedWaypoints) state.socketLive.updatedWaypoints = p.updatedWaypoints;
-},
-
-// ca_join_waypoint_completed → driver marked CA as picked up
-socketJpWaypointCompleted(state, action) {
-  const p = action.payload;
-  state.socketLive.jpCompleted = true;
-  if (p.updatedWaypoints) state.socketLive.updatedWaypoints = p.updatedWaypoints;
-},
-    // navigation_target_changed → SOCKET_EVENTS.NAVIGATION_TARGET_CHANGED
-    // payload: { currentTarget, coords, address, polyline, bookingId, rideId }
+    // navigation_target_changed
     socketNavigationTargetChanged(state, action) {
-  const p = action.payload;
-  state.socketLive.navigationTarget      = p;
-  state.socketLive.activeNavigationTarget = p.currentTarget || p.activeNavigationTarget;
-  state.socketLive.activeTarget          = p.currentTarget || p.activeNavigationTarget;
-},
+      const p = action.payload;
+      state.socketLive.navigationTarget      = p;
+      state.socketLive.activeNavigationTarget = p.currentTarget || p.activeNavigationTarget;
+      state.socketLive.activeTarget          = p.currentTarget || p.activeNavigationTarget;
+    },
 
-    // otp_result → SOCKET_EVENTS.OTP_RESULT
+    // otp_result
     socketOtpResult(state, action) {
       state.socketLive.otpResult = action.payload;
     },
 
-    // otp_wrong_attempt → SOCKET_EVENTS.OTP_WRONG_ATTEMPT
+    // otp_wrong_attempt
     socketOtpWrongAttempt(state) {
       state.socketLive.wrongOtpAttempts += 1;
     },
 
-    // ride_assigned (socket — after admin/TP assigns driver)
+    // ride_assigned (after admin/TP assigns driver)
     socketRideAssigned(state, action) {
-      // payload: { rideId, bookingId, status, driverSnapshot }
       state.socketLive.status         = action.payload.status;
       state.socketLive.driverSnapshot = action.payload.driverSnapshot ?? state.socketLive.driverSnapshot;
       if (state.currentRide?._id === action.payload.rideId) {
@@ -468,30 +607,55 @@ socketJpWaypointCompleted(state, action) {
       }
     },
 
+    // stop_arrived / stop_departed — patch local stops array
+    socketStopArrived(state, action) {
+      const { stopId } = action.payload;
+      if (state.stops?.length) {
+        state.stops = state.stops.map(s =>
+          s.stopId?.toString() === stopId ? { ...s, status: 'ARRIVED' } : s
+        );
+      }
+    },
+    socketStopDeparted(state, action) {
+      const { departedStopId } = action.payload;
+      if (state.stops?.length) {
+        state.stops = state.stops.map(s =>
+          s.stopId?.toString() === departedStopId ? { ...s, status: 'COMPLETED' } : s
+        );
+      }
+      if (action.payload.nextStop) {
+        state.currentStopId = action.payload.nextStop.stopId;
+      }
+    },
+
     // ── Manual resets ──────────────────────────────────────────────────────
     clearCurrentRide(state) {
-      state.currentRide     = null;
-      state.liveData        = null;
-      state.trackingData    = null;
-      state.nearbyResult    = null;
-      state.createdRide     = null;
-      state.socketLive      = initialState.socketLive;
-    },
-
-    clearCreatedRide(state) {
-      state.createdRide = null;
-    },
-
-    clearNearby(state) {
+      state.currentRide  = null;
+      state.liveData     = null;
+      state.trackingData = null;
       state.nearbyResult = null;
+      state.createdRide  = null;
+      state.stops        = [];
+      state.currentStopId = null;
+      state.participants = [];
+      state.sosEvents    = [];
+      state.caLiveData   = null;
+      state.socketLive   = initialState.socketLive;
+      state.caAtJoinPoint = false;
+      state.caHasJoined   = false;
+      state.caViewMode    = null;
+      state.jpCompleted   = false;
     },
 
-    clearErrors(state) {
-      state.errors = initialState.errors;
-    },
-
-    resetSocketLive(state) {
-      state.socketLive = initialState.socketLive;
+    clearCreatedRide(state) { state.createdRide = null; },
+    clearNearby(state)       { state.nearbyResult = null; },
+    clearErrors(state)       { state.errors = initialState.errors; },
+    resetSocketLive(state)   {
+      state.socketLive    = initialState.socketLive;
+      state.caAtJoinPoint = false;
+      state.caHasJoined   = false;
+      state.caViewMode    = null;
+      state.jpCompleted   = false;
     },
   },
 
@@ -499,16 +663,13 @@ socketJpWaypointCompleted(state, action) {
 
     // ── customerRequestRide ────────────────────────────────────────────────
     builder
-      .addCase(customerRequestRide.pending, (state) => {
-        state.loading.customerRequest = true;
-        state.errors.customerRequest  = null;
-      })
+      .addCase(customerRequestRide.pending,   (state) => { state.loading.customerRequest = true;  state.errors.customerRequest = null; })
       .addCase(customerRequestRide.fulfilled, (state, action) => {
         state.loading.customerRequest = false;
-        state.createdRide             = action.payload;
+        state.createdRide = action.payload;
         toast.success('Ride requested. Waiting for driver assignment.');
       })
-      .addCase(customerRequestRide.rejected, (state, action) => {
+      .addCase(customerRequestRide.rejected,  (state, action) => {
         state.loading.customerRequest = false;
         state.errors.customerRequest  = action.payload;
         toast.error(action.payload || 'Ride request failed');
@@ -516,16 +677,13 @@ socketJpWaypointCompleted(state, action) {
 
     // ── careAssistantRequestRide ───────────────────────────────────────────
     builder
-      .addCase(careAssistantRequestRide.pending, (state) => {
-        state.loading.careRequest = true;
-        state.errors.careRequest  = null;
-      })
+      .addCase(careAssistantRequestRide.pending,   (state) => { state.loading.careRequest = true;  state.errors.careRequest = null; })
       .addCase(careAssistantRequestRide.fulfilled, (state, action) => {
         state.loading.careRequest = false;
         state.createdRide         = action.payload;
         toast.success('Ride requested for patient.');
       })
-      .addCase(careAssistantRequestRide.rejected, (state, action) => {
+      .addCase(careAssistantRequestRide.rejected,  (state, action) => {
         state.loading.careRequest = false;
         state.errors.careRequest  = action.payload;
         toast.error(action.payload || 'Care assistant ride request failed');
@@ -533,17 +691,13 @@ socketJpWaypointCompleted(state, action) {
 
     // ── fetchRide ─────────────────────────────────────────────────────────
     builder
-      .addCase(fetchRide.pending, (state) => {
-        state.loading.fetchRide = true;
-        state.errors.fetchRide  = null;
-      })
+      .addCase(fetchRide.pending,   (state) => { state.loading.fetchRide = true;  state.errors.fetchRide = null; })
       .addCase(fetchRide.fulfilled, (state, action) => {
-        state.loading.fetchRide = false;
-        state.currentRide       = action.payload;
-        // Sync socket live status with fetched ride status
-        state.socketLive.status = action.payload.status;
+        state.loading.fetchRide     = false;
+        state.currentRide           = action.payload;
+        state.socketLive.status     = action.payload.status;
       })
-      .addCase(fetchRide.rejected, (state, action) => {
+      .addCase(fetchRide.rejected,  (state, action) => {
         state.loading.fetchRide = false;
         state.errors.fetchRide  = action.payload;
         toast.error(action.payload || 'Could not fetch ride');
@@ -551,10 +705,7 @@ socketJpWaypointCompleted(state, action) {
 
     // ── fetchAdminAllRides ────────────────────────────────────────────────
     builder
-      .addCase(fetchAdminAllRides.pending, (state) => {
-        state.loading.adminAll = true;
-        state.errors.adminAll  = null;
-      })
+      .addCase(fetchAdminAllRides.pending,   (state) => { state.loading.adminAll = true;  state.errors.adminAll = null; })
       .addCase(fetchAdminAllRides.fulfilled, (state, action) => {
         state.loading.adminAll = false;
         state.adminRides       = action.payload.rides;
@@ -562,7 +713,7 @@ socketJpWaypointCompleted(state, action) {
         state.adminPage        = action.payload.page;
         state.adminPages       = action.payload.pages;
       })
-      .addCase(fetchAdminAllRides.rejected, (state, action) => {
+      .addCase(fetchAdminAllRides.rejected,  (state, action) => {
         state.loading.adminAll = false;
         state.errors.adminAll  = action.payload;
         toast.error(action.payload || 'Could not fetch rides');
@@ -570,15 +721,9 @@ socketJpWaypointCompleted(state, action) {
 
     // ── fetchNearbyDrivers ────────────────────────────────────────────────
     builder
-      .addCase(fetchNearbyDrivers.pending, (state) => {
-        state.loading.nearby = true;
-        state.errors.nearby  = null;
-      })
-      .addCase(fetchNearbyDrivers.fulfilled, (state, action) => {
-        state.loading.nearby  = false;
-        state.nearbyResult    = action.payload;
-      })
-      .addCase(fetchNearbyDrivers.rejected, (state, action) => {
+      .addCase(fetchNearbyDrivers.pending,   (state) => { state.loading.nearby = true;  state.errors.nearby = null; })
+      .addCase(fetchNearbyDrivers.fulfilled, (state, action) => { state.loading.nearby = false; state.nearbyResult = action.payload; })
+      .addCase(fetchNearbyDrivers.rejected,  (state, action) => {
         state.loading.nearby = false;
         state.errors.nearby  = action.payload;
         toast.error(action.payload || 'Nearby search failed');
@@ -586,34 +731,34 @@ socketJpWaypointCompleted(state, action) {
 
     // ── adminAssignRide ───────────────────────────────────────────────────
     builder
-      .addCase(adminAssignRide.pending, (state) => {
-        state.loading.adminAssign = true;
-        state.errors.adminAssign  = null;
-      })
+      .addCase(adminAssignRide.pending,   (state) => { state.loading.adminAssign = true;  state.errors.adminAssign = null; })
       .addCase(adminAssignRide.fulfilled, (state, action) => {
         state.loading.adminAssign = false;
-        // Remove assigned ride from admin list (no longer 'searching')
-        state.adminRides = state.adminRides.filter(
-          (r) => r._id !== action.payload.rideId
-        );
-        toast.success(
-          action.payload.assignedTo === 'tp'
-            ? 'Transport partner assigned. Waiting for driver.'
-            : 'Solo driver assigned.'
-        );
+        state.adminRides = state.adminRides.filter(r => r._id !== action.payload.rideId);
+        toast.success(action.payload.assignedTo === 'tp' ? 'Transport partner assigned. Waiting for driver.' : 'Driver assigned.');
       })
-      .addCase(adminAssignRide.rejected, (state, action) => {
+      .addCase(adminAssignRide.rejected,  (state, action) => {
         state.loading.adminAssign = false;
         state.errors.adminAssign  = action.payload;
         toast.error(action.payload || 'Assignment failed');
       });
 
+    // ── adminReplaceDriver ────────────────────────────────────────────────
+    builder
+      .addCase(adminReplaceDriver.pending,   (state) => { state.loading.adminReplace = true;  state.errors.adminReplace = null; })
+      .addCase(adminReplaceDriver.fulfilled, (state, action) => {
+        state.loading.adminReplace = false;
+        toast.success('Driver replaced.');
+      })
+      .addCase(adminReplaceDriver.rejected,  (state, action) => {
+        state.loading.adminReplace = false;
+        state.errors.adminReplace  = action.payload;
+        toast.error(action.payload || 'Driver replacement failed');
+      });
+
     // ── tpAssignDriver ────────────────────────────────────────────────────
     builder
-      .addCase(tpAssignDriver.pending, (state) => {
-        state.loading.tpAssign = true;
-        state.errors.tpAssign  = null;
-      })
+      .addCase(tpAssignDriver.pending,   (state) => { state.loading.tpAssign = true;  state.errors.tpAssign = null; })
       .addCase(tpAssignDriver.fulfilled, (state, action) => {
         state.loading.tpAssign = false;
         if (state.currentRide?._id === action.payload.rideId) {
@@ -622,7 +767,7 @@ socketJpWaypointCompleted(state, action) {
         }
         toast.success('Driver assigned to ride.');
       })
-      .addCase(tpAssignDriver.rejected, (state, action) => {
+      .addCase(tpAssignDriver.rejected,  (state, action) => {
         state.loading.tpAssign = false;
         state.errors.tpAssign  = action.payload;
         toast.error(action.payload || 'Driver assignment failed');
@@ -630,19 +775,24 @@ socketJpWaypointCompleted(state, action) {
 
     // ── updateRideStatus ──────────────────────────────────────────────────
     builder
-      .addCase(updateRideStatus.pending, (state) => {
-        state.loading.statusUpdate = true;
-        state.errors.statusUpdate  = null;
-      })
+      .addCase(updateRideStatus.pending,   (state) => { state.loading.statusUpdate = true;  state.errors.statusUpdate = null; })
       .addCase(updateRideStatus.fulfilled, (state, action) => {
         state.loading.statusUpdate = false;
         const newStatus = action.payload.status;
-        if (state.currentRide?._id === action.payload.rideId) {
+        if (newStatus && state.currentRide?._id === action.payload.rideId) {
           state.currentRide.status = newStatus;
         }
-        state.socketLive.status = newStatus;
+        if (newStatus) state.socketLive.status = newStatus;
 
-        // Action-specific toasts
+        // complete_waypoint → mark CA join stop completed
+        if (action.payload.jpCompleted && state.stops?.length) {
+          state.stops = state.stops.map(s =>
+            s.stopType === 'CARE_ASSISTANT_JOIN' ? { ...s, status: 'COMPLETED', isCompleted: true } : s
+          );
+          state.jpCompleted = true;
+        }
+        if (action.payload.nextStopId) state.currentStopId = action.payload.nextStopId;
+
         const toastMap = {
           driver_accepted: 'Ride accepted.',
           driver_en_route: 'En route to pickup.',
@@ -653,9 +803,9 @@ socketJpWaypointCompleted(state, action) {
           completed:       'Ride completed.',
           cancelled:       'Ride cancelled.',
         };
-        if (toastMap[newStatus]) toast.success(toastMap[newStatus]);
+        if (newStatus && toastMap[newStatus]) toast.success(toastMap[newStatus]);
       })
-      .addCase(updateRideStatus.rejected, (state, action) => {
+      .addCase(updateRideStatus.rejected,  (state, action) => {
         state.loading.statusUpdate = false;
         state.errors.statusUpdate  = action.payload;
         toast.error(action.payload || 'Status update failed');
@@ -663,40 +813,36 @@ socketJpWaypointCompleted(state, action) {
 
     // ── fetchRideLive ─────────────────────────────────────────────────────
     builder
-      .addCase(fetchRideLive.pending, (state) => {
-        state.loading.live = true;
-        state.errors.live  = null;
-      })
+      .addCase(fetchRideLive.pending,   (state) => { state.loading.live = true;  state.errors.live = null; })
       .addCase(fetchRideLive.fulfilled, (state, action) => {
-        state.loading.live = false;
-        state.liveData     = action.payload;
-        // Sync status
-        state.socketLive.status    = action.payload.status;
+        state.loading.live          = false;
+        state.liveData              = action.payload;
+        state.socketLive.status     = action.payload.status;
         state.socketLive.etaMinutes = action.payload.currentEtaMinutes ?? state.socketLive.etaMinutes;
         state.socketLive.etaTarget  = action.payload.currentEtaTarget  ?? state.socketLive.etaTarget;
         state.socketLive.liveLocation = action.payload.liveLocation ?? state.socketLive.liveLocation;
+        if (action.payload.currentStop) state.currentStopId = action.payload.currentStop.stopId;
       })
-      .addCase(fetchRideLive.rejected, (state, action) => {
-        state.loading.live = false;
-        state.errors.live  = action.payload;
-      });
+      .addCase(fetchRideLive.rejected,  (state, action) => { state.loading.live = false; state.errors.live = action.payload; });
 
     // ── fetchRideTracking ─────────────────────────────────────────────────
+    // FIX: router returns { ride, stops, tracking, ... } — stops is top-level, NOT ride.waypoints
     builder
-      .addCase(fetchRideTracking.pending, (state) => {
-        state.loading.tracking = true;
-        state.errors.tracking  = null;
-      })
+      .addCase(fetchRideTracking.pending,   (state) => { state.loading.tracking = true;  state.errors.tracking = null; })
       .addCase(fetchRideTracking.fulfilled, (state, action) => {
         state.loading.tracking = false;
         state.trackingData     = action.payload;
-        // Also hydrate currentRide from tracking snapshot
         if (action.payload.ride) {
           state.currentRide       = action.payload.ride;
           state.socketLive.status = action.payload.ride.status;
+          state.currentStopId     = action.payload.ride.currentStopId || state.currentStopId;
+        }
+        // Hydrate stops from top-level stops array (router returns stops[] separately)
+        if (Array.isArray(action.payload.stops)) {
+          state.stops = action.payload.stops;
         }
       })
-      .addCase(fetchRideTracking.rejected, (state, action) => {
+      .addCase(fetchRideTracking.rejected,  (state, action) => {
         state.loading.tracking = false;
         state.errors.tracking  = action.payload;
         toast.error(action.payload || 'Could not load tracking data');
@@ -704,31 +850,172 @@ socketJpWaypointCompleted(state, action) {
 
     // ── postMilestone ─────────────────────────────────────────────────────
     builder
-      .addCase(postMilestone.pending, (state) => {
-        state.loading.milestone = true;
-        state.errors.milestone  = null;
-      })
+      .addCase(postMilestone.pending,   (state) => { state.loading.milestone = true;  state.errors.milestone = null; })
       .addCase(postMilestone.fulfilled, (state, action) => {
         state.loading.milestone = false;
-        // Append milestone to trackingData if loaded
         if (state.trackingData?.tracking?.milestones) {
           state.trackingData.tracking.milestones.push(action.payload.milestone);
         }
       })
-      .addCase(postMilestone.rejected, (state, action) => {
+      .addCase(postMilestone.rejected,  (state, action) => {
         state.loading.milestone = false;
         state.errors.milestone  = action.payload;
         toast.error(action.payload || 'Milestone record failed');
+      });
+
+    // ── fetchRideStops ────────────────────────────────────────────────────
+    builder
+      .addCase(fetchRideStops.pending,   (state) => { state.loading.stops = true;  state.errors.stops = null; })
+      .addCase(fetchRideStops.fulfilled, (state, action) => {
+        state.loading.stops    = false;
+        state.stops            = action.payload.stops || [];
+        state.currentStopId    = action.payload.currentStopId || state.currentStopId;
+      })
+      .addCase(fetchRideStops.rejected,  (state, action) => { state.loading.stops = false; state.errors.stops = action.payload; });
+
+    // ── markStopArrived ───────────────────────────────────────────────────
+    builder
+      .addCase(markStopArrived.pending,   (state) => { state.loading.stopArrived = true;  state.errors.stopArrived = null; })
+      .addCase(markStopArrived.fulfilled, (state, action) => {
+        state.loading.stopArrived = false;
+        const { stopId, status } = action.payload;
+        state.stops = state.stops.map(s =>
+          s.stopId?.toString() === stopId ? { ...s, status } : s
+        );
+        if (action.payload.otp) {
+          // OTP returned for PATIENT_PICKUP — store temporarily for UI
+          state.socketLive.otpResult = { otp: action.payload.otp, stopType: action.payload.stopType };
+        }
+      })
+      .addCase(markStopArrived.rejected,  (state, action) => {
+        state.loading.stopArrived = false;
+        state.errors.stopArrived  = action.payload;
+        toast.error(action.payload || 'Mark arrived failed');
+      });
+
+    // ── verifyStopOtp ─────────────────────────────────────────────────────
+    builder
+      .addCase(verifyStopOtp.pending,   (state) => { state.loading.stopOtp = true;  state.errors.stopOtp = null; })
+      .addCase(verifyStopOtp.fulfilled, (state, action) => {
+        state.loading.stopOtp       = false;
+        state.socketLive.status     = action.payload.status; // otp_verified
+        if (state.currentRide) state.currentRide.status = action.payload.status;
+        const { stopId } = action.payload;
+        state.stops = state.stops.map(s =>
+          s.stopId?.toString() === stopId ? { ...s, status: 'COMPLETED' } : s
+        );
+        if (action.payload.nextStop) state.currentStopId = action.payload.nextStop.stopId;
+        toast.success('OTP verified.');
+      })
+      .addCase(verifyStopOtp.rejected,  (state, action) => {
+        state.loading.stopOtp = false;
+        state.errors.stopOtp  = action.payload;
+        toast.error(action.payload || 'Invalid OTP');
+      });
+
+    // ── departStop ────────────────────────────────────────────────────────
+    builder
+      .addCase(departStop.pending,   (state) => { state.loading.stopDepart = true;  state.errors.stopDepart = null; })
+      .addCase(departStop.fulfilled, (state, action) => {
+        state.loading.stopDepart    = false;
+        state.socketLive.status     = action.payload.status; // in_progress
+        if (state.currentRide) state.currentRide.status = action.payload.status;
+        const { stopId } = action.payload;
+        state.stops = state.stops.map(s =>
+          s.stopId?.toString() === stopId ? { ...s, status: 'COMPLETED' } : s
+        );
+        if (action.payload.nextStop) state.currentStopId = action.payload.nextStop.stopId;
+      })
+      .addCase(departStop.rejected,  (state, action) => {
+        state.loading.stopDepart = false;
+        state.errors.stopDepart  = action.payload;
+        toast.error(action.payload || 'Depart stop failed');
+      });
+
+    // ── fetchRideParticipants ─────────────────────────────────────────────
+    builder
+      .addCase(fetchRideParticipants.pending,   (state) => { state.loading.participants = true;  state.errors.participants = null; })
+      .addCase(fetchRideParticipants.fulfilled, (state, action) => {
+        state.loading.participants = false;
+        state.participants         = action.payload.participants || [];
+      })
+      .addCase(fetchRideParticipants.rejected,  (state, action) => { state.loading.participants = false; state.errors.participants = action.payload; });
+
+    // ── fetchRideSosEvents ────────────────────────────────────────────────
+    builder
+      .addCase(fetchRideSosEvents.pending,   (state) => { state.loading.sosEvents = true;  state.errors.sosEvents = null; })
+      .addCase(fetchRideSosEvents.fulfilled, (state, action) => {
+        state.loading.sosEvents = false;
+        state.sosEvents         = action.payload.events || [];
+      })
+      .addCase(fetchRideSosEvents.rejected,  (state, action) => { state.loading.sosEvents = false; state.errors.sosEvents = action.payload; });
+
+    // ── triggerRideSos ────────────────────────────────────────────────────
+    builder
+      .addCase(triggerRideSos.pending,   (state) => { state.loading.sosTrigger = true;  state.errors.sosTrigger = null; })
+      .addCase(triggerRideSos.fulfilled, (state, action) => {
+        state.loading.sosTrigger = false;
+        toast.success('SOS triggered. Admin notified.');
+      })
+      .addCase(triggerRideSos.rejected,  (state, action) => {
+        state.loading.sosTrigger = false;
+        state.errors.sosTrigger  = action.payload;
+        toast.error(action.payload || 'SOS trigger failed');
+      });
+
+    // ── resolveRideSos ────────────────────────────────────────────────────
+    builder
+      .addCase(resolveRideSos.pending,   (state) => { state.loading.sosResolve = true;  state.errors.sosResolve = null; })
+      .addCase(resolveRideSos.fulfilled, (state, action) => {
+        state.loading.sosResolve = false;
+        const { sosEventId } = action.payload;
+        state.sosEvents = state.sosEvents.map(e =>
+          e._id?.toString() === sosEventId ? { ...e, isResolved: true } : e
+        );
+        toast.success('SOS resolved.');
+      })
+      .addCase(resolveRideSos.rejected,  (state, action) => {
+        state.loading.sosResolve = false;
+        state.errors.sosResolve  = action.payload;
+        toast.error(action.payload || 'SOS resolve failed');
+      });
+
+    // ── fetchCareAssistantLive ────────────────────────────────────────────
+    builder
+      .addCase(fetchCareAssistantLive.pending,   (state) => { state.loading.caLive = true;  state.errors.caLive = null; })
+      .addCase(fetchCareAssistantLive.fulfilled, (state, action) => {
+        state.loading.caLive = false;
+        state.caLiveData     = action.payload;
+        // Hydrate CA workflow flags from server response
+        if (action.payload.caViewMode)    state.caViewMode    = action.payload.caViewMode;
+        if (action.payload.caHasJoined !== undefined) state.caHasJoined = action.payload.caHasJoined;
+        if (action.payload.caJoinPoint)   {
+          // Store in stops as CA JOIN stop if not already there
+          const caJoinExists = state.stops.some(s => s.stopType === 'CARE_ASSISTANT_JOIN');
+          if (!caJoinExists && action.payload.caJoinPoint?.stopId) {
+            state.stops.push({
+              stopId:    action.payload.caJoinPoint.stopId,
+              stopType:  'CARE_ASSISTANT_JOIN',
+              location:  { coordinates: action.payload.caJoinPoint.coordinates, address: action.payload.caJoinPoint.address },
+              status:    action.payload.caJoinPoint.status || 'PENDING',
+              isCompleted: action.payload.caJoinPoint.isCompleted || false,
+              meta:      { zone: action.payload.caJoinPoint.zone, distCaToJoinKm: action.payload.caJoinPoint.distCaToJoinKm },
+            });
+          }
+        }
+      })
+      .addCase(fetchCareAssistantLive.rejected,  (state, action) => {
+        state.loading.caLive = false;
+        state.errors.caLive  = action.payload;
       });
   },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ACTIONS (socket handlers + manual resets)
+// ACTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const {
-  // Socket event actions — dispatch from SocketProvider listeners
   socketLocationUpdate,
   socketEtaUpdate,
   socketRideStatusChanged,
@@ -740,17 +1027,17 @@ export const {
   socketAtStop,
   socketRideCompleted,
   socketRideCancelled,
+  socketHospitalEtaUpdate,
+  socketCareAssistantTracking,
+  socketCaAtJoinPoint,
+  socketCaJoinedRide,
+  socketJpWaypointCompleted,
   socketNavigationTargetChanged,
   socketOtpResult,
   socketOtpWrongAttempt,
   socketRideAssigned,
-  socketHospitalEtaUpdate,
-socketCareAssistantTracking,
-socketCaAtJoinPoint,
-socketCaJoinedRide,
-socketJpWaypointCompleted,
-
-  // Manual resets
+  socketStopArrived,
+  socketStopDeparted,
   clearCurrentRide,
   clearCreatedRide,
   clearNearby,
@@ -774,34 +1061,45 @@ export const selectAdminPagination    = (s) => ({
 });
 export const selectNearbyResult       = (s) => s.rideRequest.nearbyResult;
 export const selectSocketLive         = (s) => s.rideRequest.socketLive;
-export const selectHospitalEta =
-  (s) =>
-    s.rideRequest.socketLive
-      .hospitalEta;
-
-export const selectCareAssistantTracking =
-  (s) =>
-    s.rideRequest.socketLive
-      .careAssistantTracking;
-
-export const selectActiveTarget =
-  (s) =>
-    s.rideRequest.socketLive
-      .activeTarget;
 export const selectRideStatus         = (s) => s.rideRequest.socketLive.status;
+export const selectRideStage          = (s) => s.rideRequest.socketLive.rideStage;
 export const selectLiveLocation       = (s) => s.rideRequest.socketLive.liveLocation;
 export const selectNavigationTarget   = (s) => s.rideRequest.socketLive.navigationTarget;
-export const selectEta                = (s) => ({
-  minutes: s.rideRequest.socketLive.etaMinutes,
-  target:  s.rideRequest.socketLive.etaTarget,
-});
+export const selectActiveNavigationTarget = (s) => s.rideRequest.socketLive.activeNavigationTarget;
+export const selectActiveTarget       = (s) => s.rideRequest.socketLive.activeTarget;
+export const selectEta                = (s) => ({ minutes: s.rideRequest.socketLive.etaMinutes, target: s.rideRequest.socketLive.etaTarget });
+export const selectEtaUpdate          = (s) => s.rideRequest.socketLive.etaMinutes; // compat alias used by useRideTracking
 export const selectOtpResult          = (s) => s.rideRequest.socketLive.otpResult;
 export const selectWrongOtpAttempts   = (s) => s.rideRequest.socketLive.wrongOtpAttempts;
+export const selectHospitalEta        = (s) => s.rideRequest.socketLive.hospitalEta;
+export const selectCareAssistantTracking = (s) => s.rideRequest.socketLive.careAssistantTracking;
 
+// Stops
+export const selectStops              = (s) => s.rideRequest.stops;
+export const selectCurrentStopId      = (s) => s.rideRequest.currentStopId;
+export const selectCurrentStop        = (s) => {
+  const id = s.rideRequest.currentStopId;
+  return id ? s.rideRequest.stops.find(st => st.stopId?.toString() === id?.toString()) ?? null : null;
+};
+
+// Participants
+export const selectParticipants       = (s) => s.rideRequest.participants;
+
+// SOS
+export const selectSosEvents          = (s) => s.rideRequest.sosEvents;
+
+// CA live
+export const selectCaLiveData         = (s) => s.rideRequest.caLiveData;
+
+// CA workflow — FIX: reads top-level, not socketLive sub-object
+export const selectCaAtJoinPoint      = (s) => s.rideRequest.caAtJoinPoint;
+export const selectCaHasJoined        = (s) => s.rideRequest.caHasJoined;
+export const selectCaViewMode         = (s) => s.rideRequest.caViewMode;
+export const selectJpCompleted        = (s) => s.rideRequest.jpCompleted;
+
+// Loading
 export const selectRideLoading        = (s) => s.rideRequest.loading;
 export const selectRideErrors         = (s) => s.rideRequest.errors;
-
-// Per-operation loading shortcuts
 export const selectStatusUpdating     = (s) => s.rideRequest.loading.statusUpdate;
 export const selectTrackingLoading    = (s) => s.rideRequest.loading.tracking;
 export const selectLiveLoading        = (s) => s.rideRequest.loading.live;
@@ -810,72 +1108,53 @@ export const selectNearbyLoading      = (s) => s.rideRequest.loading.nearby;
 export const selectAdminAssignLoading = (s) => s.rideRequest.loading.adminAssign;
 export const selectTpAssignLoading    = (s) => s.rideRequest.loading.tpAssign;
 
-export const selectCaViewMode    = (s) => s.rideRequest.socketLive.caViewMode;
-export const selectCaHasJoined   = (s) => s.rideRequest.socketLive.caHasJoined;
-export const selectCaAtJoinPoint = (s) => s.rideRequest.socketLive.caAtJoinPoint;
-export const selectJpCompleted   = (s) => s.rideRequest.socketLive.jpCompleted;
 // ─────────────────────────────────────────────────────────────────────────────
 // SOCKET WIRING HELPER
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * wireRideSocketEvents — call inside SocketProvider or a component.
- *
- * Usage (inside SocketProvider or useEffect):
- *   const unsub = wireRideSocketEvents(on, SOCKET_EVENTS, dispatch);
- *   return unsub;
- *
- * @param {Function} on              — socketService.on
- * @param {object}   SOCKET_EVENTS   — from socketService.js
- * @param {Function} dispatch        — Redux dispatch
- * @returns {() => void}             — cleanup fn
+ * wireRideSocketEvents
+ * @param {Function} on             — socketService.on
+ * @param {object}   SOCKET_EVENTS  — from socketService.js
+ * @param {Function} dispatch       — Redux dispatch
+ * @returns {() => void}            — cleanup fn
  */
 export function wireRideSocketEvents(on, SOCKET_EVENTS, dispatch) {
   const EV = SOCKET_EVENTS;
 
   const unsubs = [
-    on(EV.LOCATION_UPDATE,           (d) => dispatch(socketLocationUpdate(d))),
-    on(EV.ETA_UPDATE,                (d) => dispatch(socketEtaUpdate(d))),
-    on(EV.RIDE_STATUS_CHANGED,       (d) => dispatch(socketRideStatusChanged(d))),
-    on(EV.NAVIGATION_TARGET_CHANGED, (d) => dispatch(socketNavigationTargetChanged(d))),
-    on(EV.OTP_RESULT,                (d) => dispatch(socketOtpResult(d))),
-    on(EV.OTP_WRONG_ATTEMPT,         ()  => dispatch(socketOtpWrongAttempt())),
-   on('hospital_eta_update', (d) => dispatch(socketHospitalEtaUpdate(d))),
-   // ADD after existing on() calls:
-on('care_assistant_joined_ride',    (d) => dispatch(socketRideAssigned(d))),
-on('care_assistant_attached_to_ride', (d) => dispatch(socketRideAssigned(d))),
-on('hospital:eta:update', (d) => dispatch(socketHospitalEtaUpdate(d))),
+    on(EV.LOCATION_UPDATE,                    (d) => dispatch(socketLocationUpdate(d))),
+    on(EV.ETA_UPDATE,                         (d) => dispatch(socketEtaUpdate(d))),
+    on(EV.RIDE_STATUS_CHANGED,                (d) => dispatch(socketRideStatusChanged(d))),
+    on(EV.NAVIGATION_TARGET_CHANGED,          (d) => dispatch(socketNavigationTargetChanged(d))),
+    on(EV.OTP_RESULT,                         (d) => dispatch(socketOtpResult(d))),
+    on(EV.OTP_WRONG_ATTEMPT,                  ()  => dispatch(socketOtpWrongAttempt())),
+    on(EV.HOSPITAL_ETA_UPDATE,                (d) => dispatch(socketHospitalEtaUpdate(d))),
+    on(EV.STOP_ARRIVED,                       (d) => dispatch(socketStopArrived(d))),
+    on(EV.STOP_DEPARTED,                      (d) => dispatch(socketStopDeparted(d))),
 
-on(
-  'care-assistant:ride:tracking',
+    // CA workflow — each event mapped ONCE
+    on(EV.CARE_ASSISTANT_AT_JP,               (d) => dispatch(socketCaAtJoinPoint(d))),
+    on(EV.CARE_ASSISTANT_JOINED_RIDE,         (d) => dispatch(socketCaJoinedRide(d))),
+    on(EV.CA_JOIN_WAYPOINT_COMPLETED,         (d) => dispatch(socketJpWaypointCompleted(d))),
+    on(EV.CARE_ASSISTANT_ATTACHED,            (d) => dispatch(socketRideAssigned(d))),
 
-  (d) =>
-    dispatch(
-      socketCareAssistantTracking(d)
-    )
-),
+    // care-assistant:ride:tracking (custom event, not in SOCKET_EVENTS)
+    on('care-assistant:ride:tracking',         (d) => dispatch(socketCareAssistantTracking(d))),
 
-// Add inside wireRideSocketEvents unsubs array:
-on('care_assistant_at_jp',         (d) => dispatch(socketCaAtJoinPoint(d))),
-on('care_assistant_joined_ride',   (d) => dispatch(socketCaJoinedRide(d))),
-on('ca_join_waypoint_completed',   (d) => dispatch(socketJpWaypointCompleted(d))),
-
-    // Fine-grained ride status events
-    on('driver_accepted',  (d) => dispatch(socketDriverAccepted(d))),
-    on('driver_en_route',  (d) => dispatch(socketDriverEnRoute(d))),
-    on('driver_arrived',   (d) => dispatch(socketDriverArrived(d))),
-    on('otp_verified',     (d) => dispatch(socketOtpVerified(d))),
-    on('ride_started',     (d) => dispatch(socketRideStarted(d))),
-    on('at_stop',          (d) => dispatch(socketAtStop(d))),
-    on('ride_completed',   (d) => dispatch(socketRideCompleted(d))),
-    on('ride_cancelled',   (d) => dispatch(socketRideCancelled(d))),
-    on('ride_assigned',    (d) => dispatch(socketRideAssigned(d))),
+    // Fine-grained ride status events (server emits these in addition to ride_status_changed)
+    on('driver_accepted',                      (d) => dispatch(socketDriverAccepted(d))),
+    on('driver_en_route',                      (d) => dispatch(socketDriverEnRoute(d))),
+    on('driver_arrived',                       (d) => dispatch(socketDriverArrived(d))),
+    on('otp_verified',                         (d) => dispatch(socketOtpVerified(d))),
+    on('ride_started',                         (d) => dispatch(socketRideStarted(d))),
+    on('at_stop',                              (d) => dispatch(socketAtStop(d))),
+    on(EV.RIDE_COMPLETED,                     (d) => dispatch(socketRideCompleted(d))),
+    on('ride_cancelled',                       (d) => dispatch(socketRideCancelled(d))),
+    on('ride_assigned',                        (d) => dispatch(socketRideAssigned(d))),
   ];
 
   return () => unsubs.forEach((fn) => fn?.());
 }
 
 export default rideRequestSlice.reducer;
-
-export const selectRideStage              = (s) => s.rideRequest.socketLive.rideStage;
-export const selectActiveNavigationTarget = (s) => s.rideRequest.socketLive.activeNavigationTarget;

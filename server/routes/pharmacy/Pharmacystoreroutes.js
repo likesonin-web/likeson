@@ -738,27 +738,35 @@ router.delete('/hsn/:code', protect, authorize('superadmin'),
  * [01] GET /orders
  */
 router.get('/orders', protect, authorize('pharmacy'), attachPharmacyStore,
-  cache(30, (req) => `pharmacy:${req.pharmacy?.store?._id}:orders:${JSON.stringify(req.query)}`),
+ 
   asyncHandler(async (req, res) => {
     const { status, dateFilter = 'today', startDate, endDate, paymentStatus, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
     const { page, limit, skip } = getPagination(req.query);
+    
+    // Ensure store ID is strictly matched
     const filter = { store: req.pharmacy.store._id, isArchived: false };
     if (status)        filter['delivery.status'] = status;
     if (paymentStatus) filter['payment.status']  = paymentStatus;
     filter.createdAt = parseDateFilter(dateFilter, startDate, endDate);
+    
     const allowedSort = ['createdAt', 'updatedAt', 'billing.totalPayable'];
     const sortField   = allowedSort.includes(sortBy) ? sortBy : 'createdAt';
+    
     const [orders, totalCount] = await Promise.all([
       PharmacyOrder.find(filter)
-        .populate('store',    'storeName contact address status storeType')
-        .populate('customer', 'name email phone')
-        .populate('items.medicine', 'name brandName genericName images category')
+        // ✅ Populating dependencies for virtuals AND extra relations
+        .populate('store', 'storeName contact address status storeType isOnline timings operationalCapacity deliverySettings')
+        .populate('customer', 'name email phone avatar location')
+        .populate('delivery.internalPartner', 'name phone')
+        .populate('prescription.verifiedBy', 'name role')
+        .populate('items.medicine', 'name brandName genericName images category dosage packaging isPrescriptionRequired hsnCode gstPercentage')
         .sort({ [sortField]: sortOrder === 'asc' ? 1 : -1 })
         .skip(skip)
         .limit(limit)
         .lean({ virtuals: true }),
       PharmacyOrder.countDocuments(filter),
     ]);
+    
     res.status(200).json({
       success: true,
       data: {
@@ -768,7 +776,6 @@ router.get('/orders', protect, authorize('pharmacy'), attachPharmacyStore,
     });
   })
 );
-
 /**
  * [02] GET /orders/:orderId
  */

@@ -667,10 +667,7 @@ function OrderCard({ order, selected, onClick, index }) {
         </div>
       </div>
 
-      {/* Selected indicator */}
-      {selected && (
-        <div className="absolute top-3 right-3 w-2 h-2 rounded-full bg-primary animate-pulse" />
-      )}
+      
     </motion.button>
   );
 }
@@ -706,7 +703,7 @@ function OrderDetail({ order, onAction, loadingAction }) {
   const btnO = "inline-flex items-center justify-center gap-2 rounded-xl text-xs font-semibold transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none bg-warning/15 text-warning border border-warning/40 hover:bg-warning/25 px-3.5 py-2";
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 ">
 
       {/* ── HEADER ── */}
       <div className="flex items-start justify-between gap-3 pb-4 border-b border-base-200">
@@ -1400,7 +1397,7 @@ export default function PharmacyOrderManagement() {
                   <motion.div
                     key={currentOrder._id || currentOrder.orderId}
                     variants={slideIn} initial="hidden" animate="visible" exit="exit"
-                    className={`bg-base-100 rounded-2xl border border-base-200 shadow-sm p-5 lg:max-h-[calc(100vh-130px)] lg:overflow-y-auto scrollbar-thin ${detailOpen ? "block" : "hidden lg:block"}`}>
+                    className={` bg-base-100 rounded-2xl  shadow-sm p-5 lg:max-h-[calc(100vh-130px)] lg:overflow-y-auto scrollbar-thin ${detailOpen ? "block" : "hidden lg:block"}`}>
                     <OrderDetail
                       order={currentOrder}
                       onAction={setActiveAction}

@@ -33,7 +33,6 @@ import {
 } from '@/store/slices/transportPartnerSlice';
 
 // ── Navigation Constants ──────────────────────────────────────────────────────
-// Update this path to match exactly where you saved the constants file
 import { 
   DRIVER_DASHBOARD_LINKS, 
   DRIVER_TOP_RIGHT_LINKS 
@@ -45,34 +44,35 @@ import {
 
 const STATUS_OPTIONS = ['Available', 'On-Break', 'Offline'];
 
+// Refactored to pure Tailwind classes
 const STATUS_META = {
   Available: {
     label: 'Available',
-    color: 'var(--success)',
-    bg: 'color-mix(in srgb, var(--success), transparent 88%)',
-    border: 'color-mix(in srgb, var(--success), transparent 55%)',
-    textClass: 'text-success',
+    dotClass: 'bg-primary',
+    bgClass: 'bg-primary/15',
+    borderClass: 'border-primary/50',
+    textClass: 'text-primary',
   },
   'On-Trip': {
     label: 'On Trip',
-    color: 'var(--warning)',
-    bg: 'color-mix(in srgb, var(--warning), transparent 88%)',
-    border: 'color-mix(in srgb, var(--warning), transparent 55%)',
-    textClass: 'text-warning',
+    dotClass: 'bg-secondary',
+    bgClass: 'bg-secondary/15',
+    borderClass: 'border-secondary/50',
+    textClass: 'text-secondary',
   },
   'On-Break': {
     label: 'On Break',
-    color: 'var(--info)',
-    bg: 'color-mix(in srgb, var(--info), transparent 88%)',
-    border: 'color-mix(in srgb, var(--info), transparent 55%)',
-    textClass: 'text-info',
+    dotClass: 'bg-accent',
+    bgClass: 'bg-accent/15',
+    borderClass: 'border-accent/50',
+    textClass: 'text-accent',
   },
   Offline: {
     label: 'Offline',
-    color: 'var(--error)',
-    bg: 'color-mix(in srgb, var(--error), transparent 88%)',
-    border: 'color-mix(in srgb, var(--error), transparent 55%)',
-    textClass: 'text-error',
+    dotClass: 'bg-error',
+    bgClass: 'bg-base-200',
+    borderClass: 'border-base-300',
+    textClass: 'text-base-content',
   },
 };
 
@@ -123,57 +123,39 @@ const ITEM_V = {
 const StatusDot = ({ status, size = 'md' }) => {
   const m = STATUS_META[status] || STATUS_META.Offline;
   const sizeMap = { sm: 'w-2 h-2', md: 'w-2.5 h-2.5', lg: 'w-3.5 h-3.5' };
+  
   return (
-    <span className="relative flex shrink-0" style={{ width: sizeMap[size]?.split(' ')[0]?.replace('w-','')+'*0.25rem' }}>
-      <span
-        className={`${sizeMap[size]} rounded-full animate-ping absolute opacity-60`}
-        style={{ backgroundColor: m.color }}
-      />
-      <span
-        className={`${sizeMap[size]} rounded-full`}
-        style={{ backgroundColor: m.color }}
-      />
+    <span className={`relative flex shrink-0 ${sizeMap[size]}`}>
+      <span className={`${sizeMap[size]} rounded-full animate-ping absolute opacity-60 ${m.dotClass}`} />
+      <span className={`${sizeMap[size]} rounded-full ${m.dotClass}`} />
     </span>
   );
 };
 
-/** Real toggle status pill — optimized for mobile size */
 const StatusToggle = ({ currentStatus, onSelect, disabled }) => {
   const options = STATUS_OPTIONS;
   const currentIdx = options.indexOf(currentStatus);
   const activeIdx = currentIdx === -1 ? 2 : currentIdx;
 
   return (
-    <div
-      className="flex items-center rounded-full p-0.5 gap-0.5"
-      style={{
-        background: 'var(--base-200)',
-        border: '1px solid var(--base-300)',
-      }}
-    >
+    <div className="flex items-center rounded-full p-0.5 gap-0.5 bg-base-200 border border-base-300">
       {options.map((s, i) => {
         const m = STATUS_META[s];
         const isActive = i === activeIdx;
+        
         return (
           <button
             key={s}
             onClick={() => !disabled && onSelect(s)}
             disabled={disabled}
-            style={{
-              background: isActive ? m.bg : 'transparent',
-              border: isActive ? `1px solid ${m.border}` : '1px solid transparent',
-              color: isActive ? m.color : 'color-mix(in oklch, var(--base-content) 50%, transparent)',
-            }}
-            // Made padding and text smaller on mobile to fit the right icons
-            className="flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-3 py-1 sm:py-1.5 rounded-full text-[8px] sm:text-[10px] font-bold tracking-wide uppercase transition-all duration-200 cursor-pointer outline-none disabled:cursor-not-allowed"
+            className={`flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-3 py-1 sm:py-1.5 rounded-full text-[8px] sm:text-[10px] font-bold tracking-wide uppercase transition-all duration-200 cursor-pointer outline-none disabled:cursor-not-allowed ${
+              isActive 
+                ? `${m.bgClass} border ${m.borderClass} ${m.textClass}` 
+                : 'bg-transparent border border-transparent text-base-content/50 hover:text-base-content/80'
+            }`}
           >
-            <span
-              className="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full shrink-0"
-              style={{ background: isActive ? m.color : 'currentColor', opacity: isActive ? 1 : 0.4 }}
-            />
-            {/* Show full label on sm+ screens */}
+            <span className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full shrink-0 ${isActive ? m.dotClass + ' opacity-100' : 'bg-current opacity-40'}`} />
             <span className="hidden sm:inline">{m.label}</span>
-            {/* Show truncated label (first 3 letters) on mobile */}
             <span className="sm:hidden">{m.label.substring(0, 3)}</span>
           </button>
         );
@@ -185,16 +167,9 @@ const StatusToggle = ({ currentStatus, onSelect, disabled }) => {
 const EarningsTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div
-      className="px-3 py-2 rounded-xl text-[11px] shadow-xl"
-      style={{
-        background: 'var(--base-100)',
-        border: '1px solid var(--base-300)',
-        color: 'var(--base-content)',
-      }}
-    >
+    <div className="px-3 py-2 rounded-xl text-[11px] shadow-xl bg-base-100 border border-base-300 text-base-content">
       <p className="font-bold mb-0.5 m-0">{label}</p>
-      <p className="m-0" style={{ color: 'var(--primary)', fontWeight: 700 }}>
+      <p className="m-0 font-bold text-primary">
         ₹ {payload[0]?.value?.toLocaleString('en-IN')}
       </p>
     </div>
@@ -208,17 +183,15 @@ const NavGroup = ({ group, index, onLinkClick }) => {
     <motion.div custom={index} variants={ITEM_V} initial="hidden" animate="visible" className="mb-0.5">
       <button
         onClick={() => setOpen(p => !p)}
-        className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border-none cursor-pointer text-[10px] uppercase tracking-wider font-bold transition-all duration-200 group outline-none"
-        style={{
-          background: open ? 'color-mix(in srgb, var(--primary), transparent 88%)' : 'transparent',
-          color: open ? 'var(--primary)' : 'var(--base-content)',
-        }}
+        className={`w-full flex items-center justify-between  px-3.5 py-3.5 rounded-xl border-none cursor-pointer text-[10px] uppercase tracking-wider font-bold transition-all duration-200 group outline-none ${
+          open ? 'bg-primary/15 text-primary ' : '  text-base-content hover:bg-base-200'
+        }`}
       >
         <span className="flex items-center gap-2.5">
-          <span style={{ opacity: open ? 1 : 0.55 }}>{group.icon}</span>
+          <span className={open ? 'opacity-100' : 'opacity-55'}>{group.icon}</span>
           {group.title}
         </span>
-        <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ type: 'spring', stiffness: 260, damping: 20 }} style={{ opacity: 0.5 }}>
+        <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ type: 'spring', stiffness: 260, damping: 20 }} className="opacity-50">
           <ChevronRight size={13} strokeWidth={2.5} />
         </motion.span>
       </button>
@@ -231,21 +204,15 @@ const NavGroup = ({ group, index, onLinkClick }) => {
             exit={{ height: 0, opacity: 0, transition: { duration: 0.2 } }}
             className="overflow-hidden"
           >
-            <div
-              className="ml-5 pl-4 py-1.5 mt-1 mb-1 flex flex-col gap-0.5"
-              style={{ borderLeft: '1px solid var(--base-300)' }}
-            >
+            <div className="ml-5 pl-2 py-1.5 mt-1 mb-1 flex flex-col gap-0.5 border-l border-base-300">
               {group.links.map(link => (
                 <Link
                   key={link.href}
                   href={link.href}
                   onClick={onLinkClick}
-                  className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-[10px] uppercase font-semibold no-underline transition-all duration-200"
-                  style={{ color: 'color-mix(in oklch, var(--base-content) 70%, transparent)' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'color-mix(in srgb, var(--primary), transparent 92%)'; e.currentTarget.style.color = 'var(--primary)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'color-mix(in oklch, var(--base-content) 70%, transparent)'; }}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-[10px] uppercase font-semibold no-underline transition-all duration-200 text-base-content/70 hover:bg-primary/10 hover:text-primary"
                 >
-                  <span style={{ opacity: 0.6 }}>{link.icon}</span>
+                  <span className="opacity-60">{link.icon}</span>
                   {link.name}
                 </Link>
               ))}
@@ -257,40 +224,31 @@ const NavGroup = ({ group, index, onLinkClick }) => {
   );
 };
 
-const MetricCard = ({ icon: Icon, label, value, sub, colorVar = 'var(--primary)', index }) => (
-  <motion.div
-    custom={index} variants={CARD_V} initial="hidden" animate="visible"
-    className="rounded-2xl p-4 flex flex-col gap-2"
-    style={{
-      background: 'var(--base-200)',
-      border: `1px solid var(--base-300)`,
-      borderTop: `2.5px solid ${colorVar}`,
-    }}
-  >
-    <div
-      className="w-8 h-8 rounded-xl flex items-center justify-center"
-      style={{ background: `color-mix(in srgb, ${colorVar}, transparent 86%)` }}
+const MetricCard = ({ icon: Icon, label, value, sub, colorClass = 'primary', index }) => {
+  const colors = {
+    primary: { text: 'text-primary', bg: 'bg-primary/15', border: 'border-t-primary' },
+    accent: { text: 'text-accent', bg: 'bg-accent/15', border: 'border-t-accent' },
+    success: { text: 'text-success', bg: 'bg-success/15', border: 'border-t-success' },
+    warning: { text: 'text-warning', bg: 'bg-warning/15', border: 'border-t-warning' },
+  };
+  const c = colors[colorClass] || colors.primary;
+
+  return (
+    <motion.div
+      custom={index} variants={CARD_V} initial="hidden" animate="visible"
+      className={`rounded-2xl p-4 flex flex-col gap-2 bg-base-200 border border-base-300 border-t-[2.5px] ${c.border}`}
     >
-      <Icon size={16} color={colorVar} strokeWidth={2.2} />
-    </div>
-    <div>
-      <p
-        className="font-montserrat font-extrabold text-xl leading-none m-0"
-        style={{ color: colorVar }}
-      >
-        {value}
-      </p>
-      <p className="text-[0.62rem] font-bold uppercase tracking-wider m-0 mt-1" style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}>
-        {label}
-      </p>
-      {sub && (
-        <p className="text-[0.6rem] m-0 mt-0.5" style={{ color: 'color-mix(in oklch, var(--base-content) 38%, transparent)' }}>
-          {sub}
-        </p>
-      )}
-    </div>
-  </motion.div>
-);
+      <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${c.bg}`}>
+        <Icon size={16} className={c.text} strokeWidth={2.2} />
+      </div>
+      <div>
+        <p className={`font-montserrat font-extrabold text-xl leading-none m-0 ${c.text}`}>{value}</p>
+        <p className="text-[0.62rem] font-bold uppercase tracking-wider m-0 mt-1 text-base-content/45">{label}</p>
+        {sub && <p className="text-[0.6rem] m-0 mt-0.5 text-base-content/40">{sub}</p>}
+      </div>
+    </motion.div>
+  );
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
@@ -339,7 +297,6 @@ export default function DriverDashboard() {
     router.push('/login');
   }, [dispatch, router]);
 
-  // Derived values
   const driver  = driverMe;
   const rewards = driverRewards || driver?.rewards;
   const status  = driver?.status || 'Offline';
@@ -351,16 +308,12 @@ export default function DriverDashboard() {
   const radialData = [{
     name: 'Rating',
     value: Math.round(((perf.rating || 0) / 5) * 100),
-    fill: 'var(--primary)',
+    fill: 'var(--primary)', 
   }];
   const weekTotal = MOCK_WEEKLY.reduce((a, b) => a + b.amt, 0);
 
-  // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div
-      data-theme="driver"
-      className="min-h-dvh bg-base-100 font-poppins relative overflow-x-hidden"
-    >
+    <div data-theme="driver" className="min-h-dvh   font-poppins bg-base-100 relative overflow-x-hidden">
 
       {/* ─── Sidebar Overlay ─────────────────────────────────────────────── */}
       <AnimatePresence>
@@ -370,8 +323,7 @@ export default function DriverDashboard() {
             variants={OVERLAY_V} initial="hidden" animate="visible" exit="hidden"
             transition={{ duration: 0.18 }}
             onClick={closeSidebar}
-            className="fixed inset-0 z-40"
-            style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' }}
+            className="fixed inset-0 z-40 bg-black/55 backdrop-blur-sm"
           />
         )}
       </AnimatePresence>
@@ -382,27 +334,12 @@ export default function DriverDashboard() {
           <motion.aside
             key="sidebar"
             variants={SIDEBAR_V} initial="closed" animate="open" exit="closed"
-            className="fixed top-0 left-0 bottom-0 z-50 flex flex-col overflow-y-auto"
-            style={{
-              width: 'min(82vw, 288px)',
-              background: 'var(--base-200)',
-              borderRight: '1px solid var(--base-300)',
-            }}
+            className="fixed top-0 left-0 bottom-0 z-[100] flex flex-col overflow-y-auto bg-base-100 border-r border-base-300 w-[min(82vw,288px)]"
           >
             {/* Sidebar header */}
-            <div
-              className="p-4 flex items-center justify-between gap-3 border-b"
-              style={{
-                background: 'linear-gradient(135deg, var(--primary) 0%, color-mix(in oklch, var(--primary) 70%, var(--secondary)) 100%)',
-                borderBottom: '1px solid rgba(255,255,255,0.12)',
-                paddingTop: 'max(1rem, calc(env(safe-area-inset-top) + 0.75rem))',
-              }}
-            >
+            <div className="p-4 flex items-center justify-between gap-3 border-b bg-primary  to-base-300   ">
               <div className="flex items-center gap-3 min-w-0">
-                <div
-                  className="w-11 h-11 rounded-2xl shrink-0 flex items-center justify-center overflow-hidden font-extrabold text-lg"
-                  style={{ background: 'rgba(255,255,255,0.2)', border: '2px solid rgba(255,255,255,0.35)', color: 'white' }}
-                >
+                <div className="w-11 h-11 rounded-2xl shrink-0 flex items-center justify-center overflow-hidden font-extrabold text-lg bg-white/20 border-2 border-white/35 text-white">
                   {driver?.user?.avatar
                     ? <img src={driver.user.avatar} alt="" className="w-full h-full object-cover" />
                     : (driver?.legalName || 'D')[0].toUpperCase()
@@ -412,12 +349,12 @@ export default function DriverDashboard() {
                   <p className="font-extrabold text-xs text-white m-0 leading-tight truncate">
                     {driver?.legalName || 'Driver'}
                   </p>
-                  <p className="text-[0.67rem] m-0 mt-0.5 truncate" style={{ color: 'rgba(255,255,255,0.65)' }}>
+                  <p className="text-[0.67rem] m-0 mt-0.5 truncate text-white/65">
                     {driver?.driverCode || 'ID pending'}
                   </p>
                   <div className="flex items-center gap-1.5 mt-1">
-                    <span className="w-2 h-2 rounded-full shrink-0 animate-pulse" style={{ background: sm.color }} />
-                    <span className="text-[0.65rem] font-semibold" style={{ color: 'rgba(255,255,255,0.8)' }}>
+                    <span className={`w-2 h-2 rounded-full shrink-0 animate-pulse ${sm.dotClass}`} />
+                    <span className="text-[0.65rem] font-semibold text-white/80">
                       {sm.label}
                     </span>
                   </div>
@@ -425,10 +362,7 @@ export default function DriverDashboard() {
               </div>
               <button
                 onClick={closeSidebar}
-                className="shrink-0 w-8 h-8 rounded-xl flex items-center justify-center border-none cursor-pointer text-white transition-colors"
-                style={{ background: 'rgba(255,255,255,0.12)' }}
-                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.22)'}
-                onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.12)'}
+                className="shrink-0 w-8 h-8 rounded-xl flex items-center justify-center border-none cursor-pointer text-white transition-colors bg-white/10 hover:bg-white/20"
               >
                 <X size={16} />
               </button>
@@ -438,14 +372,12 @@ export default function DriverDashboard() {
             {!kycOk && (
               <motion.div
                 initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
-                className="mx-3 mt-3 px-3 py-2.5 rounded-xl flex items-center gap-2"
-                style={{ background: 'color-mix(in srgb, var(--warning), transparent 86%)', border: '1px solid color-mix(in srgb, var(--warning), transparent 55%)' }}
+                className="mx-3 mt-3 px-3 py-2.5 rounded-xl flex items-center gap-2 bg-warning/15 border border-warning/50"
               >
-                <AlertCircle size={15} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+                <AlertCircle size={15} className="text-warning shrink-0" />
                 <Link
                   href="/driver/kyc/submit" onClick={closeSidebar}
-                  className="text-[11px] font-bold no-underline"
-                  style={{ color: 'color-mix(in oklch, var(--warning) 80%, oklch(20% 0.04 72))' }}
+                  className="text-[11px] font-bold no-underline text-warning hover:opacity-80"
                 >
                   KYC pending — complete now →
                 </Link>
@@ -454,13 +386,10 @@ export default function DriverDashboard() {
 
             {/* Status toggle in sidebar */}
             <div className="px-3 pt-4 pb-2">
-              <p className="text-[0.58rem] font-bold uppercase tracking-widest mb-2" style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}>
+              <p className="text-[0.58rem] font-bold uppercase tracking-widest mb-2 text-base-content/40">
                 My Status
               </p>
-              <div
-                className="flex rounded-xl p-1 gap-1"
-                style={{ background: 'var(--base-300)' }}
-              >
+              <div className="flex rounded-xl p-1 gap-1 bg-base-200">
                 {STATUS_OPTIONS.map(s => {
                   const m = STATUS_META[s];
                   const isActive = s === status;
@@ -469,14 +398,11 @@ export default function DriverDashboard() {
                       key={s}
                       onClick={() => !onTrip && handleStatus(s)}
                       disabled={onTrip || statusLoading}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border-none text-[10px] font-bold uppercase tracking-wide transition-all duration-200 cursor-pointer outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                      style={{
-                        background: isActive ? m.bg : 'transparent',
-                        color: isActive ? m.color : 'color-mix(in oklch, var(--base-content) 50%, transparent)',
-                        border: isActive ? `1px solid ${m.border}` : '1px solid transparent',
-                      }}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border text-[10px] font-bold uppercase tracking-wide transition-all duration-200 cursor-pointer outline-none disabled:cursor-not-allowed disabled:opacity-60 ${
+                        isActive ? `${m.bgClass} ${m.textClass} ${m.borderClass}` : 'bg-transparent text-base-content/50 border-transparent hover:text-base-content/80'
+                      }`}
                     >
-                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: isActive ? m.color : 'currentColor', opacity: isActive ? 1 : 0.4 }} />
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? m.dotClass + ' opacity-100' : 'bg-current opacity-40'}`} />
                       {m.label.split(' ')[0]}
                     </button>
                   );
@@ -492,17 +418,10 @@ export default function DriverDashboard() {
             </nav>
 
             {/* Bottom: logout */}
-            <div className="p-3 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))]" style={{ borderTop: '1px solid var(--base-300)' }}>
+            <div className="p-3 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))] border-t border-base-300">
               <button
                 onClick={handleLogout}
-                className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl text-xs font-bold font-poppins cursor-pointer transition-all duration-200 border-none"
-                style={{
-                  background: 'color-mix(in srgb, var(--error), transparent 90%)',
-                  color: 'var(--error)',
-                  border: '1px solid color-mix(in srgb, var(--error), transparent 65%)',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = 'var(--error)'; e.currentTarget.style.color = 'var(--error-content)'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'color-mix(in srgb, var(--error), transparent 90%)'; e.currentTarget.style.color = 'var(--error)'; }}
+                className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl text-xs font-bold font-poppins cursor-pointer transition-all duration-200 bg-error/10 text-error border border-error/30 hover:bg-error hover:text-error-content"
               >
                 <LogOut size={15} /> Sign Out
               </button>
@@ -512,40 +431,19 @@ export default function DriverDashboard() {
       </AnimatePresence>
 
       {/* ─── Sticky Top Bar ──────────────────────────────────────────────── */}
-      <header
-        // Updated paddings & gaps to be smaller on mobile (px-2, gap-1)
-        className="sticky top-0 z-30 flex items-center justify-between px-2 sm:px-4 py-2 sm:py-3 gap-1 sm:gap-3"
-        style={{
-          background: 'color-mix(in srgb, var(--base-100) 90%, transparent)',
-          backdropFilter: 'blur(16px) saturate(160%)',
-          borderBottom: '1px solid var(--base-300)',
-          paddingTop: 'max(0.75rem, calc(env(safe-area-inset-top) + 0.5rem))',
-        }}
-      >
-        {/* Hamburger - Shrunk on mobile */}
+      <header className="sticky top-0 z-[99] flex items-center justify-between px-2 sm:px-4 py-2 sm:py-3 gap-1 sm:gap-3 bg-base-100/90 backdrop-blur-md backdrop-saturate-150 border-b border-base-300 pt-[max(0.75rem,calc(env(safe-area-inset-top)+0.5rem))]">
         <button
           onClick={() => setSidebarOpen(true)}
-          className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl flex items-center justify-center border-none cursor-pointer transition-colors shrink-0"
-          style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)', color: 'var(--base-content)' }}
-          onMouseEnter={e => e.currentTarget.style.background = 'var(--base-300)'}
-          onMouseLeave={e => e.currentTarget.style.background = 'var(--base-200)'}
+          className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl flex items-center justify-center cursor-pointer transition-colors shrink-0 bg-base-200 border border-base-300 text-base-content hover:bg-base-300"
           aria-label="Open menu"
         >
           <Menu size={16} className="sm:w-5 sm:h-5" />
         </button>
 
-        {/* Center — Status Toggle */}
         <div className="flex-1 flex justify-center min-w-0 overflow-x-auto no-scrollbar">
           {onTrip ? (
-            <div
-              className="flex items-center gap-1.5 sm:gap-2 px-2 py-1 sm:px-4 sm:py-2 rounded-full text-[9px] sm:text-[11px] font-bold truncate"
-              style={{
-                background: STATUS_META['On-Trip'].bg,
-                border: `1px solid ${STATUS_META['On-Trip'].border}`,
-                color: STATUS_META['On-Trip'].color,
-              }}
-            >
-              <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-ping shrink-0" style={{ background: 'var(--warning)' }} />
+            <div className={`flex items-center gap-1.5 sm:gap-2 px-2 py-1 sm:px-4 sm:py-2 rounded-full text-[9px] sm:text-[11px] font-bold truncate ${STATUS_META['On-Trip'].bgClass} ${STATUS_META['On-Trip'].borderClass} ${STATUS_META['On-Trip'].textClass}`}>
+              <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-ping shrink-0 bg-warning" />
               On Trip
             </div>
           ) : (
@@ -557,17 +455,13 @@ export default function DriverDashboard() {
           )}
         </div>
 
-        {/* Right — icon links (Using imported constant) */}
         <div className="flex gap-1 sm:gap-2 shrink-0">
           {DRIVER_TOP_RIGHT_LINKS.map(l => (
             <Link
               key={l.href}
               href={l.href}
               title={l.name}
-              className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl flex items-center justify-center no-underline transition-colors"
-              style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)', color: 'var(--base-content)' }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--base-300)'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'var(--base-200)'; }}
+              className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl flex items-center justify-center no-underline transition-colors bg-base-200 border border-base-300 text-base-content hover:bg-base-300"
             >
               {l.icon}
             </Link>
@@ -576,37 +470,21 @@ export default function DriverDashboard() {
       </header>
 
       {/* ─── Page Content ─────────────────────────────────────────────────── */}
-      <main
-        className="mx-auto pb-10"
-        style={{
-          maxWidth: '768px',
-          paddingBottom: 'max(2.5rem, calc(env(safe-area-inset-bottom) + 2rem))',
-        }}
-      >
+      <main className="mx-auto pb-[max(2.5rem,calc(env(safe-area-inset-bottom)+2rem))] max-w-[768px]">
         {/* ── Hero Card ──────────────────────────────────────────────────── */}
         <motion.div
           initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.06, type: 'spring', stiffness: 260, damping: 28 }}
-          className="mx-4 mt-4 rounded-2xl overflow-hidden relative"
-          style={{
-            background: 'linear-gradient(135deg, var(--primary) 0%, color-mix(in oklch, var(--primary) 60%, var(--secondary)) 100%)',
-            boxShadow: '0 10px 36px color-mix(in srgb, var(--primary), transparent 62%)',
-          }}
+          className="mx-4 mt-4 rounded-2xl overflow-hidden relative bg-[linear-gradient(135deg,var(--primary),var(--secondary))] shadow-[0_10px_36px_rgba(0,0,0,0.2)] shadow-primary/40"
         >
           {/* Decorative circles */}
-          <div
-            className="absolute -top-8 -right-8 w-36 h-36 rounded-full opacity-10 pointer-events-none"
-            style={{ background: 'white' }}
-          />
-          <div
-            className="absolute -bottom-6 -left-4 w-24 h-24 rounded-full opacity-[0.07] pointer-events-none"
-            style={{ background: 'white' }}
-          />
+          <div className="absolute -top-8 -right-8 w-36 h-36 rounded-full opacity-10 bg-white pointer-events-none" />
+          <div className="absolute -bottom-6 -left-4 w-24 h-24 rounded-full opacity-5 bg-white pointer-events-none" />
 
           <div className="relative z-10 p-5">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <p className="m-0 text-[0.62rem] font-bold uppercase tracking-widest" style={{ color: 'rgba(255,255,255,0.6)' }}>
+                <p className="m-0 text-[0.62rem] font-bold uppercase tracking-widest text-white/60">
                   Welcome Back
                 </p>
                 <h2 className="font-montserrat font-extrabold text-xl text-white m-0 mt-0.5">
@@ -614,16 +492,10 @@ export default function DriverDashboard() {
                 </h2>
               </div>
               {/* KYC chip */}
-              <div
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full shrink-0"
-                style={{
-                  background: kycOk ? 'rgba(255,255,255,0.15)' : 'rgba(255,180,0,0.25)',
-                  border: kycOk ? '1px solid rgba(255,255,255,0.2)' : '1px solid rgba(255,180,0,0.45)',
-                }}
-              >
+              <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full shrink-0 border ${kycOk ? 'bg-white/15 border-white/20' : 'bg-warning/25 border-warning/40'}`}>
                 {kycOk
                   ? <CheckCircle2 size={13} className="text-white" />
-                  : <AlertCircle size={13} style={{ color: 'var(--warning)' }} />
+                  : <AlertCircle size={13} className="text-warning" />
                 }
                 <span className="text-[10px] font-bold text-white">
                   {kycOk ? 'KYC Verified' : 'KYC Pending'}
@@ -638,7 +510,7 @@ export default function DriverDashboard() {
                   label: 'STATUS',
                   content: (
                     <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: sm.color }} />
+                      <span className={`w-2 h-2 rounded-full animate-pulse ${sm.dotClass}`} />
                       <span className="text-white font-extrabold text-xs">{sm.label}</span>
                     </div>
                   ),
@@ -660,12 +532,8 @@ export default function DriverDashboard() {
                   ),
                 },
               ].map(({ label, content }) => (
-                <div
-                  key={label}
-                  className="rounded-xl p-2.5"
-                  style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.18)' }}
-                >
-                  <p className="m-0 text-[0.58rem] font-bold uppercase tracking-wider" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                <div key={label} className="rounded-xl p-2.5 bg-white/10 border border-white/20">
+                  <p className="m-0 text-[0.58rem] font-bold uppercase tracking-wider text-white/55">
                     {label}
                   </p>
                   {content}
@@ -680,26 +548,22 @@ export default function DriverDashboard() {
           <MetricCard
             index={0} icon={Activity} label="Total Rides"
             value={(perf.totalRidesCompleted || 0).toLocaleString('en-IN')}
-            sub="All time"
-            colorVar="var(--primary)"
+            sub="All time" colorClass="primary"
           />
           <MetricCard
             index={1} icon={Star} label="Rating"
             value={perf.rating ? perf.rating.toFixed(1) : '—'}
-            sub={`${perf.ratingCount || 0} reviews`}
-            colorVar="var(--accent)"
+            sub={`${perf.ratingCount || 0} reviews`} colorClass="accent"
           />
           <MetricCard
             index={2} icon={TrendingUp} label="Earned"
             value={`₹${((perf.totalEarnings || 0) / 1000).toFixed(1)}k`}
-            sub="Lifetime"
-            colorVar="var(--success)"
+            sub="Lifetime" colorClass="success"
           />
           <MetricCard
             index={3} icon={Zap} label="Coins"
             value={(rewards?.coinBalance || 0).toLocaleString('en-IN')}
-            sub={rewards?.tier || 'Bronze'}
-            colorVar="var(--warning)"
+            sub={rewards?.tier || 'Bronze'} colorClass="warning"
           />
         </div>
 
@@ -707,8 +571,7 @@ export default function DriverDashboard() {
         <motion.div
           initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.32, type: 'spring', stiffness: 240, damping: 26 }}
-          className="mx-4 mt-4 p-4 rounded-2xl flex items-center gap-4"
-          style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)' }}
+          className="mx-4 mt-4 p-4 rounded-2xl flex items-center gap-4 bg-base-200 border border-base-300"
         >
           <div className="w-[76px] h-[76px] shrink-0">
             <ResponsiveContainer width="100%" height="100%">
@@ -727,32 +590,26 @@ export default function DriverDashboard() {
             </ResponsiveContainer>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-montserrat font-extrabold text-2xl m-0 flex items-baseline gap-1" style={{ color: 'var(--primary)' }}>
+            <p className="font-montserrat font-extrabold text-2xl m-0 flex items-baseline gap-1 text-primary">
               {perf.rating ? perf.rating.toFixed(1) : '—'}
-              <span className="text-[11px] font-medium" style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}>/5</span>
+              <span className="text-[11px] font-medium text-base-content/40">/5</span>
             </p>
-            <p className="text-[11px] m-0 mt-0.5 mb-3" style={{ color: 'color-mix(in oklch, var(--base-content) 55%, transparent)' }}>
-              Tier: <strong style={{ color: 'var(--accent)' }}>{perf.performanceTier || 'Bronze'}</strong>
+            <p className="text-[11px] m-0 mt-0.5 mb-3 text-base-content/55">
+              Tier: <strong className="text-accent">{perf.performanceTier || 'Bronze'}</strong>
             </p>
             {/* Profile completion bar */}
             <div className="flex items-center gap-2">
-              <div
-                className="flex-1 h-1.5 rounded-full overflow-hidden"
-                style={{ background: 'var(--base-300)' }}
-              >
+              <div className="flex-1 h-1.5 rounded-full overflow-hidden bg-base-300">
                 <div
-                  className="h-full rounded-full transition-all duration-700"
-                  style={{
-                    width: `${driver?.profileCompletionPercent || 0}%`,
-                    background: 'linear-gradient(90deg, var(--primary), color-mix(in oklch, var(--primary) 70%, var(--secondary)))',
-                  }}
+                  className="h-full rounded-full transition-all duration-700 bg-gradient-to-r from-primary to-primary/70"
+                  style={{ width: `${driver?.profileCompletionPercent || 0}%` }}
                 />
               </div>
-              <span className="text-[0.67rem] font-bold shrink-0" style={{ color: 'var(--primary)' }}>
+              <span className="text-[0.67rem] font-bold shrink-0 text-primary">
                 {driver?.profileCompletionPercent || 0}%
               </span>
             </div>
-            <p className="text-[0.58rem] m-0 mt-0.5" style={{ color: 'color-mix(in oklch, var(--base-content) 35%, transparent)' }}>
+            <p className="text-[0.58rem] m-0 mt-0.5 text-base-content/35">
               Profile complete
             </p>
           </div>
@@ -762,26 +619,18 @@ export default function DriverDashboard() {
         <motion.div
           initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4, type: 'spring', stiffness: 240, damping: 26 }}
-          className="mx-4 mt-4 p-4 rounded-2xl"
-          style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)' }}
+          className="mx-4 mt-4 p-4 rounded-2xl bg-base-200 border border-base-300"
         >
           <div className="flex items-start justify-between mb-3">
             <div>
-              <h3 className="font-montserrat font-extrabold text-sm m-0" style={{ color: 'var(--base-content)' }}>
+              <h3 className="font-montserrat font-extrabold text-sm m-0 text-base-content">
                 Weekly Earnings
               </h3>
-              <p className="text-[11px] m-0 mt-0.5" style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}>
+              <p className="text-[11px] m-0 mt-0.5 text-base-content/50">
                 This week breakdown
               </p>
             </div>
-            <span
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold"
-              style={{
-                background: 'color-mix(in srgb, var(--primary), transparent 88%)',
-                border: '1px solid color-mix(in srgb, var(--primary), transparent 65%)',
-                color: 'var(--primary)',
-              }}
-            >
+            <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold bg-primary/10 border border-primary/35 text-primary">
               ₹ {weekTotal.toLocaleString('en-IN')}
             </span>
           </div>
@@ -828,51 +677,46 @@ export default function DriverDashboard() {
               label: 'Avg Pickup',
               value: `${perf.avgPickupTimeMinutes || 0}m`,
               icon: Clock,
-              color: 'var(--info)',
+              colorClass: 'text-info',
+              borderClass: 'border-t-info',
             },
             {
               label: 'KM Driven',
               value: (perf.totalDistanceKm || 0).toLocaleString('en-IN'),
               icon: Navigation,
-              color: 'var(--success)',
+              colorClass: 'text-success',
+              borderClass: 'border-t-success',
             },
             {
               label: 'Cancel %',
               value: `${Math.round(perf.cancellationRate || 0)}%`,
               icon: AlertCircle,
-              color: 'var(--error)',
+              colorClass: 'text-error',
+              borderClass: 'border-t-error',
             },
-          ].map(({ label, value, icon: Icon, color }) => (
+          ].map(({ label, value, icon: Icon, colorClass, borderClass }) => (
             <div
               key={label}
-              className="rounded-2xl p-3 text-center"
-              style={{
-                background: 'var(--base-200)',
-                border: '1px solid var(--base-300)',
-                borderTop: `2.5px solid ${color}`,
-              }}
+              className={`rounded-2xl p-3 text-center bg-base-200 border border-base-300 border-t-[2.5px] ${borderClass}`}
             >
-              <Icon size={17} className="mx-auto mb-1.5" style={{ color, opacity: 0.85 }} />
-              <p className="font-montserrat font-extrabold text-base m-0" style={{ color }}>
+              <Icon size={17} className={`mx-auto mb-1.5 opacity-85 ${colorClass}`} />
+              <p className={`font-montserrat font-extrabold text-base m-0 ${colorClass}`}>
                 {value}
               </p>
-              <p className="text-[0.58rem] uppercase tracking-wide m-0 mt-0.5" style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}>
+              <p className="text-[0.58rem] uppercase tracking-wide m-0 mt-0.5 text-base-content/45">
                 {label}
               </p>
             </div>
           ))}
         </motion.div>
 
-        {/* ── Quick access chips (Now re-using Top Right Links mapping) ───── */}
+        {/* ── Quick access chips ─────────────────────────────────────────── */}
         <motion.div
           initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.54, type: 'spring', stiffness: 240, damping: 26 }}
           className="px-4 mt-5"
         >
-          <p
-            className="text-[0.6rem] font-bold tracking-widest uppercase m-0 mb-3"
-            style={{ color: 'color-mix(in oklch, var(--base-content) 38%, transparent)' }}
-          >
+          <p className="text-[0.6rem] font-bold tracking-widest uppercase m-0 mb-3 text-base-content/40">
             Quick Access
           </p>
           <div className="flex flex-wrap gap-2">
@@ -880,24 +724,9 @@ export default function DriverDashboard() {
               <Link
                 key={link.href}
                 href={link.href}
-                className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[11px] font-semibold no-underline transition-all duration-200"
-                style={{
-                  background: 'var(--base-200)',
-                  border: '1px solid var(--base-300)',
-                  color: 'var(--base-content)',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.background = 'color-mix(in srgb, var(--primary), transparent 90%)';
-                  e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--primary), transparent 55%)';
-                  e.currentTarget.style.color = 'var(--primary)';
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.background = 'var(--base-200)';
-                  e.currentTarget.style.borderColor = 'var(--base-300)';
-                  e.currentTarget.style.color = 'var(--base-content)';
-                }}
+                className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[11px] font-semibold no-underline transition-all duration-200 bg-base-200 border border-base-300 text-base-content hover:bg-primary/10 hover:border-primary/50 hover:text-primary"
               >
-                <span style={{ opacity: 0.65 }}>{link.icon}</span>
+                <span className="opacity-65">{link.icon}</span>
                 {link.name}
               </Link>
             ))}
@@ -908,27 +737,19 @@ export default function DriverDashboard() {
         <motion.div
           initial={{ opacity: 0 }} animate={{ opacity: 1 }}
           transition={{ delay: 0.62 }}
-          className="mx-4 mt-5 p-3.5 rounded-2xl flex items-center gap-3"
-          style={{ background: 'var(--base-200)', border: '1px solid var(--base-300)' }}
+          className="mx-4 mt-5 p-3.5 rounded-2xl flex items-center gap-3 bg-base-200 border border-base-300"
         >
-          <Wifi size={17} style={{ color: 'var(--success)', flexShrink: 0 }} />
+          <Wifi size={17} className="text-success shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-[11px] font-bold m-0" style={{ color: 'var(--base-content)' }}>
+            <p className="text-[11px] font-bold m-0 text-base-content">
               Live Tracking Active
             </p>
-            <p className="text-[0.63rem] m-0 mt-0.5" style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}>
+            <p className="text-[0.63rem] m-0 mt-0.5 text-base-content/50">
               Location syncing every 15s
             </p>
           </div>
-          <div
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[10px] font-bold shrink-0"
-            style={{
-              background: 'color-mix(in srgb, var(--success), transparent 88%)',
-              border: '1px solid color-mix(in srgb, var(--success), transparent 60%)',
-              color: 'var(--success)',
-            }}
-          >
-            <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'var(--success)' }} />
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[10px] font-bold shrink-0 bg-success/15 border border-success/40 text-success">
+            <span className="w-1.5 h-1.5 rounded-full animate-pulse bg-success" />
             Online
           </div>
         </motion.div>
@@ -936,13 +757,7 @@ export default function DriverDashboard() {
         {/* Loading skeleton */}
         {loading && (
           <div className="flex justify-center py-6">
-            <div
-              className="w-7 h-7 rounded-full border-[3px] animate-spin"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--primary), transparent 70%)',
-                borderTopColor: 'var(--primary)',
-              }}
-            />
+            <div className="w-7 h-7 rounded-full border-[3px] border-primary/30 border-t-primary animate-spin" />
           </div>
         )}
       </main>
@@ -956,16 +771,9 @@ export default function DriverDashboard() {
             animate={{ opacity: 1, y: 0,  scale: 1 }}
             exit={{   opacity: 0, y: 18,  scale: 0.92 }}
             transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-            className="fixed z-[999] text-xs font-bold px-5 py-3 rounded-2xl shadow-xl"
-            style={{
-              bottom: 'max(5.5rem, calc(env(safe-area-inset-bottom) + 5rem))',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              background: toast.type === 'error' ? 'var(--error)' : 'var(--success)',
-              color: toast.type === 'error' ? 'var(--error-content)' : 'var(--success-content)',
-              whiteSpace: 'nowrap',
-              pointerEvents: 'none',
-            }}
+            className={`fixed z-[999] text-xs font-bold px-5 py-3 rounded-2xl shadow-xl whitespace-nowrap pointer-events-none bottom-[max(5.5rem,calc(env(safe-area-inset-bottom)+5rem))] left-1/2 -translate-x-1/2 ${
+              toast.type === 'error' ? 'bg-error text-error-content' : 'bg-success text-success-content'
+            }`}
           >
             {toast.msg}
           </motion.div>

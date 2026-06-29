@@ -53,7 +53,6 @@ import {
   Boxes,
   MapPin,
   Truck,
-  BadgePercent,
   Zap,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -181,7 +180,7 @@ const ImageGallery = React.memo(({ images, activeIdx, onIdxChange, onOpenFull })
   if (!images?.length) {
     return (
       <div className="aspect-square rounded-2xl bg-base-200 flex items-center justify-center border border-base-300">
-        <Pill className="w-20 h-20 text-primary" style={{ opacity: 0.2 }} />
+        <Pill className="w-20 h-20 text-primary opacity-20" />
       </div>
     );
   }
@@ -212,16 +211,12 @@ const ImageGallery = React.memo(({ images, activeIdx, onIdxChange, onOpenFull })
           {hovering && (
             <div
               aria-hidden="true"
-              className="absolute hidden lg:block border pointer-events-none"
+              className="absolute hidden lg:block border rounded-field border-primary/40 bg-primary/10 pointer-events-none z-20"
               style={{
                 width: LENS,
                 height: LENS,
                 left: lensPos.x - LENS / 2,
                 top: lensPos.y - LENS / 2,
-                borderRadius: 'var(--r-field)',
-                borderColor: 'color-mix(in srgb, var(--primary), transparent 60%)',
-                backgroundColor: 'color-mix(in srgb, var(--primary), transparent 92%)',
-                zIndex: 20,
               }}
             />
           )}
@@ -229,8 +224,7 @@ const ImageGallery = React.memo(({ images, activeIdx, onIdxChange, onOpenFull })
           <button
             onClick={onOpenFull}
             aria-label="Open fullscreen image"
-            className="btn btn-ghost absolute top-4 right-4 p-2"
-            style={{ zIndex: 30 }}
+            className="btn btn-ghost absolute top-4 right-4 p-2 z-30"
           >
             <Maximize2 className="w-4 h-4" />
           </button>
@@ -243,14 +237,11 @@ const ImageGallery = React.memo(({ images, activeIdx, onIdxChange, onOpenFull })
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute top-0 w-full h-full rounded-2xl overflow-hidden border border-base-300 bg-base-100 hidden lg:block shadow-depth-lg"
+              className="absolute top-0 w-full h-full rounded-2xl overflow-hidden border border-base-300 bg-base-100 bg-no-repeat hidden lg:block shadow-depth-lg z-[100] left-[105%]"
               style={{
-                left: '105%',
-                zIndex: 100,
                 backgroundImage: `url(${currentSrc})`,
                 backgroundPosition: `${zoomPos.x}% ${zoomPos.y}%`,
                 backgroundSize: `${ZOOM * 100}%`,
-                backgroundRepeat: 'no-repeat',
               }}
             />
           )}
@@ -260,20 +251,14 @@ const ImageGallery = React.memo(({ images, activeIdx, onIdxChange, onOpenFull })
       {images.length > 1 && (
         <div
           ref={thumbsRef}
-          className="flex gap-2 overflow-x-auto p-1 pb-2"
-          style={{ scrollbarWidth: 'none' }}
+          className="flex gap-2 overflow-x-auto p-1 pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
         >
           {images.map((img, i) => (
             <button
               key={i}
               onClick={() => onIdxChange(i)}
               aria-label={`View image ${i + 1}`}
-              className="shrink-0 w-20 h-20 rounded-xl overflow-hidden border-2 transition-all"
-              style={{
-                borderColor: i === activeIdx ? 'var(--primary)' : 'var(--base-300)',
-                opacity: i === activeIdx ? 1 : 0.6,
-                transform: i === activeIdx ? 'scale(1.05)' : 'scale(1)',
-              }}
+              className={`shrink-0 w-20 h-20 rounded-xl overflow-hidden border-2 transition-all duration-200 ${i === activeIdx ? 'border-primary opacity-100 scale-105' : 'border-base-300 opacity-60 scale-100'}`}
             >
               <img
                 src={img.url}
@@ -294,27 +279,13 @@ ImageGallery.displayName = 'ImageGallery';
 
 const InfoBox = React.memo(({ icon: Icon, label, value, accent = false }) => (
   <div
-    className="flex items-center gap-3 p-4 rounded-xl border"
-    style={{
-      backgroundColor: accent
-        ? 'color-mix(in srgb, var(--primary), transparent 93%)'
-        : 'color-mix(in srgb, var(--base-200), transparent 0%)',
-      borderColor: accent
-        ? 'color-mix(in srgb, var(--primary), transparent 70%)'
-        : 'var(--base-300)',
-    }}
+    className={`flex items-center gap-3 p-4 rounded-xl border ${accent ? 'bg-primary/10 border-primary/30' : 'bg-base-200 border-base-300'}`}
   >
-    <div
-      className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-      style={{ backgroundColor: 'color-mix(in srgb, var(--primary), transparent 88%)' }}
-    >
+    <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-primary/10">
       <Icon className="w-4 h-4 text-primary" />
     </div>
     <div className="min-w-0 flex-1">
-      <p
-        className="text-xs font-black uppercase tracking-widest"
-        style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-      >
+      <p className="text-xs font-black uppercase tracking-widest text-base-content/50">
         {label}
       </p>
       <p className="text-sm font-bold text-base-content truncate">{value || '—'}</p>
@@ -329,26 +300,14 @@ const SafetyCard = React.memo(({ title, list = [], icon: Icon, variant }) => {
   const isError = variant === 'error';
   return (
     <div
-      className="p-5 rounded-xl border-2"
-      style={{
-        color: isError ? 'var(--error)' : 'var(--warning)',
-        borderColor: isError
-          ? 'color-mix(in srgb, var(--error), transparent 75%)'
-          : 'color-mix(in srgb, var(--warning), transparent 75%)',
-        backgroundColor: isError
-          ? 'color-mix(in srgb, var(--error), transparent 94%)'
-          : 'color-mix(in srgb, var(--warning), transparent 94%)',
-      }}
+      className={`p-5 rounded-xl border-2 ${isError ? 'text-error border-error/30 bg-error/10' : 'text-warning border-warning/30 bg-warning/10'}`}
     >
       <h5 className="flex items-center gap-2 font-black text-xs uppercase tracking-widest mb-3">
         <Icon className="w-4 h-4" />
         {title}
       </h5>
       {list.length === 0 ? (
-        <p
-          className="text-xs italic"
-          style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-        >
+        <p className="text-xs italic text-base-content/60">
           None listed.
         </p>
       ) : (
@@ -356,12 +315,7 @@ const SafetyCard = React.memo(({ title, list = [], icon: Icon, variant }) => {
           {list.map((item, i) => (
             <span
               key={i}
-              className="px-3 py-1 rounded-lg text-xs font-bold border"
-              style={{
-                backgroundColor: 'color-mix(in srgb, var(--base-100), transparent 30%)',
-                borderColor: 'currentColor',
-                opacity: 0.9,
-              }}
+              className="px-3 py-1 rounded-lg text-xs font-bold border bg-base-100/70 border-current opacity-90"
             >
               {item}
             </span>
@@ -386,19 +340,19 @@ const StockBadge = React.memo(({ storeInventory }) => {
 
   if (isOut)
     return (
-      <span className="badge badge-error" style={{ color: 'var(--error-content)' }}>
+      <span className="badge badge-error text-error">
         Out of Stock
       </span>
     );
   if (isLow)
     return (
-      <span className="badge badge-warning flex items-center gap-1" style={{ color: 'var(--warning-content)' }}>
+      <span className="badge badge-warning flex items-center gap-1 text-warning">
         <AlertTriangle className="w-3 h-3" />
         Low Stock ({totalStock} left)
       </span>
     );
   return (
-    <span className="badge badge-success flex items-center gap-1" style={{ color: 'var(--success-content)' }}>
+    <span className="badge badge-success flex items-center gap-1 text-success">
       <CheckCircle2 className="w-3 h-3" />
       In Stock ({totalStock} units)
     </span>
@@ -410,41 +364,18 @@ StockBadge.displayName = 'StockBadge';
 
 const PricingRow = React.memo(({ label, value, sub, highlight, strike, green, muted, large }) => (
   <div
-    className="flex items-center justify-between py-2"
-    style={{
-      borderBottom: highlight ? 'none' : '1px solid color-mix(in srgb, var(--base-300), transparent 40%)',
-    }}
+    className={`flex items-center justify-between py-2 ${highlight ? 'border-b-0' : 'border-b border-base-300/60'}`}
   >
-    <span
-      className={`text-sm font-medium ${large ? 'font-black' : ''}`}
-      style={{
-        color: muted
-          ? 'color-mix(in oklch, var(--base-content) 50%, transparent)'
-          : 'var(--base-content)',
-        fontSize: large ? '1rem' : undefined,
-      }}
-    >
+    <span className={`text-sm font-medium ${large ? 'text-base font-black' : ''} ${muted ? 'text-base-content/50' : 'text-base-content'}`}>
       {label}
       {sub && (
-        <span
-          className="ml-1 text-xs"
-          style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-        >
+        <span className="ml-1 text-xs text-base-content/50">
           {sub}
         </span>
       )}
     </span>
     <span
-      className={`text-sm font-bold ${large ? 'text-lg font-black' : ''}`}
-      style={{
-        color: green
-          ? 'var(--success)'
-          : highlight
-          ? 'var(--primary)'
-          : 'var(--base-content)',
-        textDecoration: strike ? 'line-through' : 'none',
-        opacity: strike ? 0.45 : 1,
-      }}
+      className={`text-sm font-bold ${large ? 'text-lg font-black' : ''} ${green ? 'text-success' : highlight ? 'text-primary' : 'text-base-content'} ${strike ? 'line-through opacity-45' : 'no-underline opacity-100'}`}
     >
       {value}
     </span>
@@ -456,15 +387,11 @@ PricingRow.displayName = 'PricingRow';
 
 const StoreInventoryCard = React.memo(({ inv }) => {
   const store = inv.storeId;
-  const storeName =
-    typeof store === 'object' ? store?.storeName : 'Store';
+  const storeName = typeof store === 'object' ? store?.storeName : 'Store';
   const storeType = typeof store === 'object' ? store?.storeType : '';
-  const city =
-    typeof store === 'object' ? store?.address?.city ?? '' : '';
-  const canDeliver =
-    typeof store === 'object' ? store?.deliverySettings?.canDeliver : false;
-  const express =
-    typeof store === 'object' ? store?.deliverySettings?.expressDelivery : false;
+  const city = typeof store === 'object' ? store?.address?.city ?? '' : '';
+  const canDeliver = typeof store === 'object' ? store?.deliverySettings?.canDeliver : false;
+  const express = typeof store === 'object' ? store?.deliverySettings?.expressDelivery : false;
   const stock = inv.availableStock ?? inv.stockQuantity ?? 0;
   const pb = inv.pricingBreakdown;
   const batch = inv.batchId;
@@ -478,78 +405,39 @@ const StoreInventoryCard = React.memo(({ inv }) => {
       : null;
 
   return (
-    <div
-      className="rounded-2xl border overflow-hidden"
-      style={{ borderColor: 'var(--base-300)', backgroundColor: 'var(--base-100)' }}
-    >
+    <div className="rounded-2xl border border-base-300 bg-base-100 overflow-hidden">
       {/* Header */}
-      <div
-        className="flex flex-wrap items-center justify-between gap-2 px-5 py-4"
-        style={{ backgroundColor: 'color-mix(in srgb, var(--base-200), transparent 0%)' }}
-      >
+      <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-4 bg-base-200">
         <div className="flex items-center gap-3 min-w-0">
-          <div
-            className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-            style={{ backgroundColor: 'color-mix(in srgb, var(--primary), transparent 88%)' }}
-          >
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-primary/10">
             <Building2 className="w-4 h-4 text-primary" />
           </div>
           <div className="min-w-0">
             <p className="text-sm font-black text-base-content truncate">{storeName}</p>
-            <p
-              className="text-xs font-medium"
-              style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}
-            >
+            <p className="text-xs font-medium text-base-content/50">
               {city && <span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{city}</span>}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {storeType && (
-            <span
-              className="badge badge-xs"
-              style={{
-                backgroundColor:
-                  storeType === 'Owned'
-                    ? 'color-mix(in srgb, var(--primary), transparent 88%)'
-                    : 'color-mix(in srgb, var(--secondary), transparent 88%)',
-                color: storeType === 'Owned' ? 'var(--primary)' : 'var(--secondary)',
-                border: 'none',
-              }}
-            >
+            <span className={`badge badge-xs border-none ${storeType === 'Owned' ? 'bg-primary/10 text-primary' : 'bg-secondary/10 text-secondary'}`}>
               {storeType}
             </span>
           )}
           {canDeliver && (
-            <span className="badge badge-xs badge-success" style={{ color: 'var(--success-content)' }}>
+            <span className="badge badge-xs badge-success text-success-content">
               <Truck className="w-2.5 h-2.5 mr-0.5" />
               Delivers
             </span>
           )}
           {express && (
-            <span className="badge badge-xs badge-warning" style={{ color: 'var(--warning-content)' }}>
+            <span className="badge badge-xs badge-warning text-warning-content">
               <Zap className="w-2.5 h-2.5 mr-0.5" />
               Express
             </span>
           )}
-          <span
-            className="badge badge-xs"
-            style={{
-              backgroundColor:
-                stock === 0
-                  ? 'color-mix(in srgb, var(--error), transparent 88%)'
-                  : stock < 20
-                  ? 'color-mix(in srgb, var(--warning), transparent 88%)'
-                  : 'color-mix(in srgb, var(--success), transparent 88%)',
-              color:
-                stock === 0
-                  ? 'var(--error)'
-                  : stock < 20
-                  ? 'var(--warning)'
-                  : 'var(--success)',
-              border: 'none',
-            }}
-          >
+          <span className={`badge badge-xs border-none ${stock === 0 ? 'bg-error/10 text-error' : stock < 20 ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'}`}>
             {stock} units
           </span>
         </div>
@@ -558,10 +446,7 @@ const StoreInventoryCard = React.memo(({ inv }) => {
       {/* Pricing Breakdown */}
       {pb && (
         <div className="px-5 py-4 space-y-1">
-          <p
-            className="text-xs font-black uppercase tracking-widest mb-3"
-            style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-          >
+          <p className="text-xs font-black uppercase tracking-widest mb-3 text-base-content/40">
             Pricing at this store
           </p>
           <PricingRow label="MRP" value={`₹${fmt(pb.mrp)}`} muted />
@@ -583,14 +468,8 @@ const StoreInventoryCard = React.memo(({ inv }) => {
             highlight
             large
           />
-          <div
-            className="mt-3 pt-3"
-            style={{ borderTop: '1px solid var(--base-300)' }}
-          >
-            <p
-              className="text-xs font-black uppercase tracking-widest mb-2"
-              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-            >
+          <div className="mt-3 pt-3 border-t border-base-300">
+            <p className="text-xs font-black uppercase tracking-widest mb-2 text-base-content/40">
               Platform breakdown
             </p>
             <PricingRow
@@ -605,10 +484,7 @@ const StoreInventoryCard = React.memo(({ inv }) => {
             />
           </div>
           {pb.note && (
-            <p
-              className="text-xs mt-2 italic"
-              style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-            >
+            <p className="text-xs mt-2 italic text-base-content/50">
               {pb.note}
             </p>
           )}
@@ -617,36 +493,21 @@ const StoreInventoryCard = React.memo(({ inv }) => {
 
       {/* Batch Info */}
       {(batchNo || expiry) && (
-        <div
-          className="flex flex-wrap gap-4 px-5 py-3"
-          style={{
-            borderTop: '1px solid var(--base-300)',
-            backgroundColor: 'color-mix(in srgb, var(--base-200), transparent 50%)',
-          }}
-        >
+        <div className="flex flex-wrap gap-4 px-5 py-3 border-t border-base-300 bg-base-200/50">
           {batchNo && (
-            <span
-              className="text-xs font-medium flex items-center gap-1"
-              style={{ color: 'color-mix(in oklch, var(--base-content) 55%, transparent)' }}
-            >
+            <span className="text-xs font-medium flex items-center gap-1 text-base-content/60">
               <Hash className="w-3 h-3" />
               Batch: <strong className="text-base-content ml-1">{batchNo}</strong>
             </span>
           )}
           {expiry && (
-            <span
-              className="text-xs font-medium flex items-center gap-1"
-              style={{ color: 'color-mix(in oklch, var(--base-content) 55%, transparent)' }}
-            >
+            <span className="text-xs font-medium flex items-center gap-1 text-base-content/60">
               <Clock className="w-3 h-3" />
               Expiry: <strong className="text-base-content ml-1">{expiry}</strong>
             </span>
           )}
           {inv.rackLocation && (
-            <span
-              className="text-xs font-medium flex items-center gap-1"
-              style={{ color: 'color-mix(in oklch, var(--base-content) 55%, transparent)' }}
-            >
+            <span className="text-xs font-medium flex items-center gap-1 text-base-content/60">
               <Boxes className="w-3 h-3" />
               <strong className="text-base-content">{inv.rackLocation}</strong>
             </span>
@@ -691,28 +552,19 @@ const PurchasePricingPanel = React.memo(({
       {/* Main price display */}
       <div className="flex flex-col sm:flex-row gap-6 items-start">
         <div className="flex-1">
-          <p
-            className="text-xs font-black uppercase tracking-widest mb-1"
-            style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-          >
+          <p className="text-xs font-black uppercase tracking-widest mb-1 text-base-content/50">
             You Pay
           </p>
           <div className="flex items-baseline gap-3 flex-wrap">
-            <span className="font-black tracking-tight text-primary" style={{ fontSize: '2.75rem', lineHeight: 1 }}>
+            <span className="font-black tracking-tight text-primary text-5xl leading-none">
               ₹{fmt(baseTotal)}
             </span>
             {mrpTotal > baseTotal && (
               <div className="flex flex-col">
-                <span
-                  className="text-base font-bold"
-                  style={{ textDecoration: 'line-through', color: 'color-mix(in oklch, var(--base-content) 35%, transparent)' }}
-                >
+                <span className="text-base font-bold line-through text-base-content/40">
                   ₹{fmt(mrpTotal)}
                 </span>
-                <span
-                  className="text-xs font-black"
-                  style={{ color: 'var(--success)' }}
-                >
+                <span className="text-xs font-black text-success">
                   {savingPct}% off
                 </span>
               </div>
@@ -722,30 +574,18 @@ const PurchasePricingPanel = React.memo(({
 
         {/* Savings pill */}
         {totalSaving > 0 && (
-          <div
-            className="flex items-center gap-2 px-4 py-2 rounded-xl border shrink-0"
-            style={{
-              backgroundColor: 'color-mix(in srgb, var(--success), transparent 90%)',
-              borderColor: 'color-mix(in srgb, var(--success), transparent 70%)',
-            }}
-          >
-            <TrendingDown className="w-4 h-4" style={{ color: 'var(--success)' }} />
+          <div className="flex items-center gap-2 px-4 py-2 rounded-xl border shrink-0 bg-success/10 border-success/30">
+            <TrendingDown className="w-4 h-4 text-success" />
             <div>
-              <p className="text-xs font-black" style={{ color: 'var(--success)' }}>You Save</p>
-              <p className="text-sm font-black" style={{ color: 'var(--success)' }}>₹{fmt(totalSaving)}</p>
+              <p className="text-xs font-black text-success">You Save</p>
+              <p className="text-sm font-black text-success">₹{fmt(totalSaving)}</p>
             </div>
           </div>
         )}
       </div>
 
       {/* Breakdown table */}
-      <div
-        className="rounded-2xl border p-5 space-y-0"
-        style={{
-          backgroundColor: 'color-mix(in srgb, var(--base-200), transparent 40%)',
-          borderColor: 'var(--base-300)',
-        }}
-      >
+      <div className="rounded-2xl border p-5 space-y-0 bg-base-200/40 border-base-300">
         <PricingRow
           label="MRP"
           sub={`× ${quantity} unit${quantity > 1 ? 's' : ''}`}
@@ -770,10 +610,7 @@ const PurchasePricingPanel = React.memo(({
           />
         )}
         <PricingRow label="Delivery" value="FREE" green />
-        <div
-          className="pt-3 mt-1"
-          style={{ borderTop: '2px solid var(--base-300)' }}
-        >
+        <div className="pt-3 mt-1 border-t-2 border-base-300">
           <PricingRow
             label="Total Payable"
             value={`₹${fmt(baseTotal)}`}
@@ -781,10 +618,7 @@ const PurchasePricingPanel = React.memo(({
             large
           />
         </div>
-        <div
-          className="pt-2 mt-1"
-          style={{ borderTop: '1px dashed color-mix(in srgb, var(--base-300), transparent 30%)' }}
-        >
+        <div className="pt-2 mt-1 border-t border-dashed border-base-300/60">
           <PricingRow
             label="Incl. GST"
             sub={`(${gstPct}% inclusive)`}
@@ -795,11 +629,8 @@ const PurchasePricingPanel = React.memo(({
       </div>
 
       {/* Per unit info */}
-      <p
-        className="text-xs font-medium flex items-center gap-1.5"
-        style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-      >
-        <Tag className="w-3.5 h-3.5 text-primary" style={{ opacity: 0.6 }} />
+      <p className="text-xs font-medium flex items-center gap-1.5 text-base-content/50">
+        <Tag className="w-3.5 h-3.5 text-primary opacity-60" />
         Unit price: ₹{fmt(storeUnit)} / {med?.packUnit || 'unit'} · MRP: ₹{fmt(mrpUnit)}
       </p>
     </div>
@@ -812,25 +643,16 @@ PurchasePricingPanel.displayName = 'PurchasePricingPanel';
 const SubscriptionBanner = React.memo(({ discount, planName }) => {
   if (!discount || discount === 0) return null;
   return (
-    <div
-      className="flex items-center gap-3 p-4 rounded-xl border mb-4"
-      style={{
-        backgroundColor: 'color-mix(in srgb, var(--success), transparent 90%)',
-        borderColor: 'color-mix(in srgb, var(--success), transparent 72%)',
-      }}
-    >
-      <div
-        className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
-        style={{ backgroundColor: 'color-mix(in srgb, var(--success), transparent 80%)' }}
-      >
-        <Star className="w-5 h-5" style={{ color: 'var(--success)', fill: 'var(--success)' }} />
+    <div className="flex items-center gap-3 p-4 rounded-xl border mb-4 bg-success/10 border-success/30">
+      <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0 bg-success/20">
+        <Star className="w-5 h-5 text-success fill-success" />
       </div>
       <div>
-        <p className="text-xs font-black uppercase tracking-wider" style={{ color: 'var(--success)' }}>
+        <p className="text-xs font-black uppercase tracking-wider text-success">
           {planName} Benefit Applied
         </p>
         <p className="text-sm text-base-content font-medium mt-0.5">
-          You save <strong style={{ color: 'var(--success)' }}>{discount}%</strong> with your active plan.
+          You save <strong className="text-success">{discount}%</strong> with your active plan.
         </p>
       </div>
     </div>
@@ -847,33 +669,11 @@ const PrescriptionUploader = React.memo(({
   showRequiredError = false,
 }) => (
   <div
-    className="p-5 rounded-xl border-2 transition-all"
-    style={{
-      borderStyle: 'dashed',
-      borderColor: prescriptionUrl
-        ? 'var(--success)'
-        : showRequiredError
-        ? 'var(--error)'
-        : 'color-mix(in srgb, var(--warning), transparent 50%)',
-      backgroundColor: prescriptionUrl
-        ? 'color-mix(in srgb, var(--success), transparent 93%)'
-        : showRequiredError
-        ? 'color-mix(in srgb, var(--error), transparent 93%)'
-        : 'color-mix(in srgb, var(--warning), transparent 93%)',
-      animation: showRequiredError && !prescriptionUrl ? 'pulse 2s infinite' : 'none',
-    }}
+    className={`p-5 rounded-xl border-2 border-dashed transition-all ${prescriptionUrl ? 'border-success bg-success/10' : showRequiredError ? 'border-error bg-error/10 animate-pulse' : 'border-warning/50 bg-warning/10'}`}
   >
     <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
       <div className="flex items-center gap-4 w-full">
-        <div
-          className="w-12 h-12 rounded-xl flex items-center justify-center shadow-sm shrink-0"
-          style={{
-            backgroundColor: prescriptionUrl
-              ? 'var(--success)'
-              : 'var(--warning)',
-            color: prescriptionUrl ? 'var(--success-content)' : 'var(--warning-content)',
-          }}
-        >
+        <div className={`w-12 h-12 rounded-xl flex items-center justify-center shadow-sm shrink-0 ${prescriptionUrl ? 'bg-success text-success-content' : 'bg-warning text-warning-content'}`}>
           {isUploading ? (
             <Loader2 className="w-5 h-5 animate-spin" />
           ) : prescriptionUrl ? (
@@ -886,21 +686,12 @@ const PrescriptionUploader = React.memo(({
           <h4 className="text-sm font-black text-base-content flex items-center gap-2">
             Prescription Required
             {!prescriptionUrl && (
-              <span
-                className="text-xs font-black px-2 py-0.5 rounded-md uppercase tracking-wider"
-                style={{
-                  backgroundColor: 'color-mix(in srgb, var(--warning), transparent 80%)',
-                  color: 'var(--warning)',
-                }}
-              >
+              <span className="text-xs font-black px-2 py-0.5 rounded-md uppercase tracking-wider bg-warning/20 text-warning">
                 Required
               </span>
             )}
           </h4>
-          <p
-            className="text-xs mt-0.5 font-medium"
-            style={{ color: 'color-mix(in oklch, var(--base-content) 60%, transparent)' }}
-          >
+          <p className="text-xs mt-0.5 font-medium text-base-content/60">
             {prescriptionUrl
               ? 'Prescription uploaded. You can replace it if needed.'
               : showRequiredError
@@ -912,8 +703,7 @@ const PrescriptionUploader = React.memo(({
               href={prescriptionUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs font-bold mt-1.5 inline-block"
-              style={{ color: 'var(--primary)' }}
+              className="text-xs font-bold mt-1.5 inline-block text-primary"
             >
               View uploaded prescription ↗
             </a>
@@ -922,16 +712,7 @@ const PrescriptionUploader = React.memo(({
       </div>
 
       <label
-        className="btn btn-sm shrink-0 w-full sm:w-auto cursor-pointer"
-        style={{
-          backgroundColor: isUploading
-            ? 'var(--base-200)'
-            : prescriptionUrl
-            ? 'var(--base-300)'
-            : 'var(--primary)',
-          color: isUploading || prescriptionUrl ? 'var(--base-content)' : 'var(--primary-content)',
-          cursor: isUploading ? 'not-allowed' : 'pointer',
-        }}
+        className={`btn btn-sm shrink-0 w-full sm:w-auto ${isUploading ? 'bg-base-200 text-base-content cursor-not-allowed' : prescriptionUrl ? 'bg-base-300 text-base-content cursor-pointer' : 'btn-primary cursor-pointer'}`}
       >
         {isUploading ? (
           <span className="flex items-center gap-2">
@@ -965,8 +746,7 @@ const QuantitySelector = React.memo(({ quantity, onDecrement, onIncrement, max }
       onClick={onDecrement}
       disabled={quantity <= 1}
       aria-label="Decrease quantity"
-      className="btn btn-sm btn-circle"
-      style={{ backgroundColor: 'var(--base-200)', border: '1px solid var(--base-300)' }}
+      className="btn btn-sm btn-circle bg-base-200 border border-base-300"
     >
       <Minus className="w-4 h-4" />
     </button>
@@ -975,8 +755,7 @@ const QuantitySelector = React.memo(({ quantity, onDecrement, onIncrement, max }
       onClick={onIncrement}
       disabled={max !== undefined && quantity >= max}
       aria-label="Increase quantity"
-      className="btn btn-sm btn-circle"
-      style={{ backgroundColor: 'var(--base-200)', border: '1px solid var(--base-300)' }}
+      className="btn btn-sm btn-circle bg-base-200 border border-base-300"
     >
       <Plus className="w-4 h-4" />
     </button>
@@ -1004,16 +783,12 @@ const FullscreenZoomModal = React.memo(({ images, activeIdx, onIdxChange, onClos
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 flex flex-col no-print"
-      style={{ zIndex: 9999, backgroundColor: 'var(--base-100)' }}
+      className="fixed inset-0 flex flex-col no-print bg-base-100 z-[9999]"
       role="dialog"
       aria-modal="true"
       aria-label={`${brandName} image viewer`}
     >
-      <div
-        className="flex items-center justify-between px-6 py-4 shadow-sm"
-        style={{ borderBottom: '1px solid var(--base-300)', backgroundColor: 'var(--base-100)' }}
-      >
+      <div className="flex items-center justify-between px-6 py-4 shadow-sm border-b border-base-300 bg-base-100">
         <span className="text-base font-black text-base-content">{brandName} — HD View</span>
         <div className="flex items-center gap-3">
           <button
@@ -1023,10 +798,7 @@ const FullscreenZoomModal = React.memo(({ images, activeIdx, onIdxChange, onClos
           >
             <Minus className="w-4 h-4" />
           </button>
-          <span
-            className="text-sm font-bold w-12 text-center"
-            style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}
-          >
+          <span className="text-sm font-bold w-12 text-center text-base-content/50">
             {Math.round(scale * 100)}%
           </span>
           <button
@@ -1059,19 +831,12 @@ const FullscreenZoomModal = React.memo(({ images, activeIdx, onIdxChange, onClos
       </div>
 
       {images.length > 1 && (
-        <div
-          className="flex justify-center gap-3 p-4 overflow-x-auto"
-          style={{ borderTop: '1px solid var(--base-300)', backgroundColor: 'var(--base-100)' }}
-        >
+        <div className="flex justify-center gap-3 p-4 overflow-x-auto border-t border-base-300 bg-base-100">
           {images.map((img, i) => (
             <button
               key={i}
               onClick={() => { onIdxChange(i); setScale(1); }}
-              className="shrink-0 w-16 h-16 rounded-xl overflow-hidden border-2 transition-all"
-              style={{
-                borderColor: i === activeIdx ? 'var(--primary)' : 'transparent',
-                opacity: i === activeIdx ? 1 : 0.5,
-              }}
+              className={`shrink-0 w-16 h-16 rounded-xl overflow-hidden border-2 transition-all ${i === activeIdx ? 'border-primary opacity-100' : 'border-transparent opacity-50'}`}
             >
               <img src={img.url} className="w-full h-full object-cover" alt="" />
             </button>
@@ -1079,10 +844,7 @@ const FullscreenZoomModal = React.memo(({ images, activeIdx, onIdxChange, onClos
         </div>
       )}
 
-      <p
-        className="text-center text-xs font-bold uppercase tracking-widest py-3"
-        style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-      >
+      <p className="text-center text-xs font-bold uppercase tracking-widest py-3 text-base-content/40">
         Double-click to zoom · Arrow keys to navigate
       </p>
     </motion.div>
@@ -1271,21 +1033,12 @@ export default function MedicineDetails() {
 
   if (medError || !med) {
     return (
-      <div
-        className="min-h-screen flex flex-col items-center justify-center p-6 text-center"
-        style={{ backgroundColor: 'var(--base-100)' }}
-      >
-        <div
-          className="w-24 h-24 rounded-2xl flex items-center justify-center mb-6"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--error), transparent 90%)' }}
-        >
-          <AlertCircle className="w-12 h-12" style={{ color: 'var(--error)' }} />
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center bg-base-100">
+        <div className="w-24 h-24 rounded-2xl flex items-center justify-center mb-6 bg-error/10">
+          <AlertCircle className="w-12 h-12 text-error" />
         </div>
         <h1 className="text-3xl font-black text-base-content mb-3">Product Unavailable</h1>
-        <p
-          className="text-sm mb-8 max-w-md font-medium leading-relaxed"
-          style={{ color: 'color-mix(in oklch, var(--base-content) 60%, transparent)' }}
-        >
+        <p className="text-sm mb-8 max-w-md font-medium leading-relaxed text-base-content/60">
           {medError ||
             'This medicine could not be found. It may have been removed or the link is invalid.'}
         </p>
@@ -1313,55 +1066,29 @@ export default function MedicineDetails() {
 
   return (
     <Container>
-      <div className="min-h-screen pb-20" style={{ backgroundColor: 'var(--base-100)' }}>
-
+      <div className="min-h-screen pb-20 bg-base-100">
         {/* ── Breadcrumb + Header ───────────────────────────────────── */}
-        <div
-          style={{
-            backgroundColor: 'color-mix(in srgb, var(--base-200), transparent 30%)',
-            borderBottom: '1px solid var(--base-300)',
-          }}
-        >
+        <div className="bg-base-200/30 border-b border-base-300">
           <div className="container-custom py-6">
             <nav
               aria-label="breadcrumb"
-              className="flex items-center gap-1.5 mb-5 overflow-x-auto"
-              style={{
-                fontSize: '0.625rem',
-                fontWeight: 700,
-                textTransform: 'uppercase',
-                letterSpacing: '0.1em',
-                color: 'color-mix(in oklch, var(--base-content) 40%, transparent)',
-                scrollbarWidth: 'none',
-                whiteSpace: 'nowrap',
-              }}
+              className="flex items-center gap-1.5 mb-5 overflow-x-auto text-[0.625rem] font-bold uppercase tracking-widest text-base-content/40 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] whitespace-nowrap"
             >
               <button
                 onClick={() => router.push('/pharmacy')}
-                className="hover-glow-primary transition-colors"
-                style={{ color: 'inherit' }}
-                onMouseEnter={(e) => (e.target.style.color = 'var(--primary)')}
-                onMouseLeave={(e) =>
-                  (e.target.style.color =
-                    'color-mix(in oklch, var(--base-content) 40%, transparent)')
-                }
+                className="hover:text-primary transition-colors text-inherit"
               >
                 Pharmacy
               </button>
               <ChevronRight className="w-3 h-3 shrink-0" />
               <button
                 onClick={() => router.push(`/pharmacy?category=${med.category}`)}
-                style={{ color: 'inherit' }}
-                onMouseEnter={(e) => (e.target.style.color = 'var(--primary)')}
-                onMouseLeave={(e) =>
-                  (e.target.style.color =
-                    'color-mix(in oklch, var(--base-content) 40%, transparent)')
-                }
+                className="hover:text-primary transition-colors text-inherit"
               >
                 {med.category}
               </button>
               <ChevronRight className="w-3 h-3 shrink-0" />
-              <span className="text-primary truncate" style={{ maxWidth: '180px' }}>
+              <span className="text-primary truncate max-w-[180px]">
                 {med.brandName}
               </span>
             </nav>
@@ -1371,40 +1098,25 @@ export default function MedicineDetails() {
                 <div className="flex flex-wrap gap-2 mb-3">
                   <span className={`badge ${Sched.colorClass}`}>{Sched.label}</span>
                   {med.isPrescriptionRequired && (
-                    <span
-                      className="badge badge-error flex items-center gap-1"
-                      style={{ color: 'var(--error-content)' }}
-                    >
+                    <span className="badge badge-error text-error flex items-center gap-1">
                       <ShieldCheck className="w-3 h-3" /> Rx Required
                     </span>
                   )}
                   {med.isDiscontinued && (
-                    <span
-                      className="badge badge-warning"
-                      style={{ color: 'var(--warning-content)' }}
-                    >
+                    <span className="badge badge-warning text-warning">
                       Discontinued
                     </span>
                   )}
                   <StockBadge storeInventory={med.storeInventory} />
                 </div>
 
-                <h1
-                  className="font-black tracking-tight"
-                  style={{ fontSize: 'clamp(1.75rem, 4vw, 2.5rem)', lineHeight: 1.1 }}
-                >
+                <h1 className="font-black tracking-tight text-3xl md:text-4xl lg:text-5xl leading-[1.1]">
                   {med.brandName}
                 </h1>
-                <p
-                  className="text-base font-medium italic mt-2"
-                  style={{ color: 'color-mix(in oklch, var(--base-content) 60%, transparent)' }}
-                >
+                <p className="text-base font-medium italic mt-2 text-base-content/60">
                   {med.genericName} · {med.dosage}
                 </p>
-                <p
-                  className="text-xs font-bold mt-2 uppercase tracking-wider flex items-center gap-1.5"
-                  style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-                >
+                <p className="text-xs font-bold mt-2 uppercase tracking-wider flex items-center gap-1.5 text-base-content/50">
                   <Building2 className="w-4 h-4" /> by {med.manufacturer}
                 </p>
               </div>
@@ -1413,16 +1125,14 @@ export default function MedicineDetails() {
                 <button
                   onClick={handleShare}
                   aria-label="Share"
-                  className="btn btn-ghost flex-1 md:flex-none flex items-center justify-center"
-                  style={{ border: '2px solid var(--base-300)' }}
+                  className="btn btn-ghost flex-1 md:flex-none flex items-center justify-center border-2 border-base-300"
                 >
                   <Share2 className="w-5 h-5" />
                 </button>
                 <button
                   onClick={() => window.print()}
                   aria-label="Print"
-                  className="btn btn-ghost flex-1 md:flex-none flex items-center justify-center"
-                  style={{ border: '2px solid var(--base-300)' }}
+                  className="btn btn-ghost flex-1 md:flex-none flex items-center justify-center border-2 border-base-300"
                 >
                   <Printer className="w-5 h-5" />
                 </button>
@@ -1434,9 +1144,8 @@ export default function MedicineDetails() {
         {/* ── Main Grid ────────────────────────────────────────────── */}
         <div className="container-custom py-8 lg:py-12">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12">
-
             {/* LEFT: Gallery */}
-            <div className="lg:col-span-5" style={{ position: 'relative', zIndex: 10 }}>
+            <div className="lg:col-span-5 relative z-10">
               <ImageGallery
                 images={med.images ?? []}
                 activeIdx={imgIdx}
@@ -1445,23 +1154,14 @@ export default function MedicineDetails() {
               />
 
               {/* Quality assurance block */}
-              <div
-                className="mt-6 p-5 rounded-2xl border"
-                style={{
-                  backgroundColor: 'color-mix(in srgb, var(--primary), transparent 94%)',
-                  borderColor: 'color-mix(in srgb, var(--primary), transparent 80%)',
-                }}
-              >
+              <div className="mt-6 p-5 rounded-2xl border bg-primary/5 border-primary/20">
                 <div className="flex gap-4">
                   <ShieldCheck className="w-6 h-6 text-primary shrink-0 mt-0.5" />
                   <div>
                     <p className="text-xs font-black uppercase tracking-wider text-primary mb-1.5">
                       Quality Assured
                     </p>
-                    <p
-                      className="text-sm leading-relaxed font-medium"
-                      style={{ color: 'color-mix(in oklch, var(--base-content) 70%, transparent)' }}
-                    >
+                    <p className="text-sm leading-relaxed font-medium text-base-content/70">
                       Sourced directly from <strong className="text-base-content">{med.manufacturer}</strong>.
                       Verified by licensed pharmacists before dispatch.
                     </p>
@@ -1471,27 +1171,15 @@ export default function MedicineDetails() {
 
               {/* Fulfillment info */}
               {bestInv && (
-                <div
-                  className="mt-4 p-5 rounded-2xl border space-y-3"
-                  style={{
-                    backgroundColor: 'var(--base-200)',
-                    borderColor: 'var(--base-300)',
-                  }}
-                >
-                  <p
-                    className="text-xs font-black uppercase tracking-widest"
-                    style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                  >
+                <div className="mt-4 p-5 rounded-2xl border space-y-3 bg-base-200 border-base-300">
+                  <p className="text-xs font-black uppercase tracking-widest text-base-content/40">
                     Fulfillment
                   </p>
                   <div className="grid grid-cols-2 gap-3">
                     {(typeof bestInv.batchId === 'object'
                       ? bestInv.batchId?.batchNumber
                       : bestInv.batchNumber) && (
-                      <div
-                        className="flex items-center gap-2 text-xs font-medium"
-                        style={{ color: 'color-mix(in oklch, var(--base-content) 65%, transparent)' }}
-                      >
+                      <div className="flex items-center gap-2 text-xs font-medium text-base-content/60">
                         <Hash className="w-4 h-4 text-primary shrink-0" />
                         <span className="truncate">
                           Batch:{' '}
@@ -1506,10 +1194,7 @@ export default function MedicineDetails() {
                     {(typeof bestInv.batchId === 'object'
                       ? bestInv.batchId?.expiryDate
                       : bestInv.expiryDate) && (
-                      <div
-                        className="flex items-center gap-2 text-xs font-medium"
-                        style={{ color: 'color-mix(in oklch, var(--base-content) 65%, transparent)' }}
-                      >
+                      <div className="flex items-center gap-2 text-xs font-medium text-base-content/60">
                         <Clock className="w-4 h-4 text-primary shrink-0" />
                         <span className="truncate">
                           Exp:{' '}
@@ -1529,30 +1214,21 @@ export default function MedicineDetails() {
                   </div>
                   {/* Delivery info */}
                   {typeof bestInv.storeId === 'object' && (
-                    <div className="flex flex-wrap gap-3 pt-2" style={{ borderTop: '1px solid var(--base-300)' }}>
+                    <div className="flex flex-wrap gap-3 pt-2 border-t border-base-300">
                       {bestInv.storeId?.deliverySettings?.canDeliver && (
-                        <span
-                          className="text-xs font-medium flex items-center gap-1"
-                          style={{ color: 'var(--success)' }}
-                        >
+                        <span className="text-xs font-medium flex items-center gap-1 text-success">
                           <Truck className="w-3.5 h-3.5" />
                           Home Delivery Available
                         </span>
                       )}
                       {bestInv.storeId?.deliverySettings?.expressDelivery && (
-                        <span
-                          className="text-xs font-medium flex items-center gap-1"
-                          style={{ color: 'var(--warning)' }}
-                        >
+                        <span className="text-xs font-medium flex items-center gap-1 text-warning">
                           <Zap className="w-3.5 h-3.5" />
                           Express in {bestInv.storeId.deliverySettings.expressEtaMinutes} min
                         </span>
                       )}
                       {bestInv.storeId?.deliverySettings?.codAvailable && (
-                        <span
-                          className="text-xs font-medium flex items-center gap-1"
-                          style={{ color: 'color-mix(in oklch, var(--base-content) 60%, transparent)' }}
-                        >
+                        <span className="text-xs font-medium flex items-center gap-1 text-base-content/60">
                           <IndianRupee className="w-3.5 h-3.5" />
                           COD Available
                         </span>
@@ -1564,18 +1240,12 @@ export default function MedicineDetails() {
             </div>
 
             {/* RIGHT: Purchase + Tabs */}
-            <div className="lg:col-span-7 space-y-6" style={{ position: 'relative', zIndex: 0 }}>
+            <div className="lg:col-span-7 space-y-6 relative z-0">
               <SubscriptionBanner discount={subscriptionDiscount} planName={subscriptionPlanName} />
 
               {/* ── Purchase Card ── */}
-              <div
-                className="glass-card p-6 md:p-8 rounded-3xl"
-                style={{ border: '2px solid color-mix(in srgb, var(--base-300), transparent 30%)' }}
-              >
-                <div
-                  className="pb-6 mb-6"
-                  style={{ borderBottom: '1px solid var(--base-300)' }}
-                >
+              <div className="glass-card p-6 md:p-8 rounded-3xl border-2 border-base-300/30">
+                <div className="pb-6 mb-6 border-b border-base-300">
                   <div className="flex flex-col sm:flex-row gap-6 items-start">
                     <div className="flex-1 min-w-0">
                       <PurchasePricingPanel
@@ -1588,18 +1258,8 @@ export default function MedicineDetails() {
                     </div>
 
                     {/* Quantity */}
-                    <div
-                      className="flex flex-col items-center gap-3 p-5 rounded-2xl border self-start sm:self-auto shrink-0"
-                      style={{
-                        backgroundColor: 'color-mix(in srgb, var(--base-200), transparent 40%)',
-                        borderColor: 'var(--base-200)',
-                        minWidth: '160px',
-                      }}
-                    >
-                      <p
-                        className="text-xs font-black uppercase tracking-widest text-center"
-                        style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                      >
+                    <div className="flex flex-col items-center gap-3 p-5 rounded-2xl border self-start sm:self-auto shrink-0 bg-base-200/40 border-base-200 min-w-[160px]">
+                      <p className="text-xs font-black uppercase tracking-widest text-center text-base-content/40">
                         Quantity
                       </p>
                       <QuantitySelector
@@ -1608,14 +1268,7 @@ export default function MedicineDetails() {
                         onIncrement={increment}
                         max={maxStock || undefined}
                       />
-                      <p
-                        className="text-xs font-black uppercase tracking-wider text-center px-3 py-1.5 rounded-lg w-full text-center"
-                        style={{
-                          backgroundColor: 'color-mix(in srgb, var(--primary), transparent 90%)',
-                          color: 'var(--primary)',
-                          border: '1px solid color-mix(in srgb, var(--primary), transparent 80%)',
-                        }}
-                      >
+                      <p className="text-xs font-black uppercase tracking-wider text-center px-3 py-1.5 rounded-lg w-full bg-primary/10 text-primary border border-primary/20">
                         {med.packaging}
                       </p>
                     </div>
@@ -1623,7 +1276,7 @@ export default function MedicineDetails() {
                 </div>
 
                 {/* ── Cart Button ── */}
-                <div className="w-full relative" style={{ zIndex: 10 }}>
+                <div className="w-full relative z-10">
                   <AnimatePresence>
                     {cartState === 'success' && (
                       <>
@@ -1631,13 +1284,7 @@ export default function MedicineDetails() {
                           initial={{ opacity: 0, y: 0, scale: 0.5 }}
                           animate={{ opacity: [0, 1, 0], y: -70, scale: [0.5, 1.2, 1] }}
                           transition={{ duration: 0.8, ease: 'easeOut' }}
-                          className="absolute top-0 left-1/2 flex items-center gap-1.5 px-4 py-1.5 rounded-full font-black text-sm shadow-xl pointer-events-none"
-                          style={{
-                            zIndex: 50,
-                            transform: 'translateX(-50%)',
-                            backgroundColor: 'var(--primary)',
-                            color: 'var(--primary-content)',
-                          }}
+                          className="absolute top-0 left-1/2 flex items-center gap-1.5 px-4 py-1.5 rounded-full font-black text-sm shadow-xl pointer-events-none z-50 -translate-x-1/2 bg-primary text-primary-content"
                         >
                           <Package className="w-4 h-4" /> +{quantity}
                         </motion.div>
@@ -1645,8 +1292,7 @@ export default function MedicineDetails() {
                           initial={{ opacity: 0.6, scale: 0.95 }}
                           animate={{ opacity: 0, scale: 1.4 }}
                           transition={{ duration: 0.6, ease: 'easeOut' }}
-                          className="absolute inset-0 rounded-xl pointer-events-none"
-                          style={{ border: '2px solid var(--primary)', zIndex: 0 }}
+                          className="absolute inset-0 rounded-xl pointer-events-none border-2 border-primary z-0"
                         />
                       </>
                     )}
@@ -1657,45 +1303,16 @@ export default function MedicineDetails() {
                     whileTap={cartState === 'idle' && !isOutOfStock ? { scale: 0.98 } : {}}
                     onClick={handleAddToCart}
                     disabled={cartState !== 'idle' || isOutOfStock}
-                    className={`w-full relative overflow-hidden flex items-center justify-center py-4 text-sm font-bold shadow-md rounded-xl border-none ${
-                      cartState === 'idle' && !isOutOfStock ? 'btn-primary-cta' : ''
-                    }`}
-                    animate={{
-                      backgroundColor:
-                        cartState === 'success'
-                          ? 'var(--success)'
-                          : cartState === 'adding'
-                          ? 'var(--base-200)'
-                          : undefined,
-                    }}
-                    transition={{ duration: 0.3 }}
-                    style={{
-                      opacity: isOutOfStock ? 0.5 : 1,
-                      filter: isOutOfStock ? 'grayscale(1)' : 'none',
-                      cursor: cartState !== 'idle' || isOutOfStock ? 'not-allowed' : 'pointer',
-                    }}
+                    className={`w-full relative group overflow-hidden flex items-center justify-center py-4 text-sm font-bold shadow-md rounded-xl border-none transition-colors duration-300 ${
+                      cartState === 'idle' && !isOutOfStock ? 'btn-primary-cta' : cartState === 'success' ? 'bg-success text-success-content' : 'bg-base-200 text-base-content'
+                    } ${isOutOfStock ? 'opacity-50 grayscale cursor-not-allowed' : cartState !== 'idle' ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                   >
-                    {/* Shine */}
+                    {/* Shine Effect */}
                     {cartState === 'idle' && !isOutOfStock && (
-                      <span
-                        className="absolute inset-0 w-full h-full pointer-events-none"
-                        style={{
-                          background:
-                            'linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.2) 50%, transparent 70%)',
-                          transform: 'translateX(-100%) skewX(-12deg)',
-                          transition: 'transform 0.7s ease',
-                          zIndex: 0,
-                        }}
-                        onMouseEnter={(e) =>
-                          (e.currentTarget.style.transform = 'translateX(200%) skewX(-12deg)')
-                        }
-                        onMouseLeave={(e) =>
-                          (e.currentTarget.style.transform = 'translateX(-100%) skewX(-12deg)')
-                        }
-                      />
+                      <span className="absolute inset-0 w-full h-full pointer-events-none bg-[linear-gradient(120deg,transparent_30%,rgba(255,255,255,0.2)_50%,transparent_70%)] -translate-x-full skew-x-[-12deg] transition-transform duration-700 z-0 group-hover:translate-x-[200%]" />
                     )}
 
-                    <span className="relative flex items-center justify-center gap-2.5" style={{ zIndex: 1 }}>
+                    <span className="relative flex items-center justify-center gap-2.5 z-[1]">
                       <AnimatePresence mode="wait">
                         {cartState === 'idle' && (
                           <motion.span
@@ -1716,8 +1333,7 @@ export default function MedicineDetails() {
                             initial={{ opacity: 0, scale: 0.8 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.8 }}
-                            className="flex items-center gap-2.5"
-                            style={{ color: 'var(--primary)' }}
+                            className="flex items-center gap-2.5 text-primary"
                           >
                             <Loader2 className="w-5 h-5 animate-spin" />
                             Processing...
@@ -1729,8 +1345,7 @@ export default function MedicineDetails() {
                             initial={{ opacity: 0, scale: 0.5, rotate: -45 }}
                             animate={{ opacity: 1, scale: 1, rotate: 0 }}
                             transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-                            className="flex items-center gap-2.5"
-                            style={{ color: 'var(--success-content)' }}
+                            className="flex items-center gap-2.5 text-success-content"
                           >
                             <CheckCircle2 className="w-5 h-5" />
                             Added to Cart!
@@ -1743,15 +1358,9 @@ export default function MedicineDetails() {
 
                 {/* Out of stock notice */}
                 {isOutOfStock && (
-                  <div
-                    className="mt-4 p-4 rounded-xl flex items-center justify-center gap-2.5"
-                    style={{
-                      backgroundColor: 'color-mix(in srgb, var(--error), transparent 90%)',
-                      border: '1px solid color-mix(in srgb, var(--error), transparent 75%)',
-                    }}
-                  >
-                    <AlertCircle className="w-5 h-5" style={{ color: 'var(--error)' }} />
-                    <p className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--error)' }}>
+                  <div className="mt-4 p-4 rounded-xl flex items-center justify-center gap-2.5 bg-error/10 border border-error/30">
+                    <AlertCircle className="w-5 h-5 text-error" />
+                    <p className="text-xs font-bold uppercase tracking-wider text-error">
                       Currently out of stock across all stores
                     </p>
                   </div>
@@ -1766,15 +1375,9 @@ export default function MedicineDetails() {
                       exit={{ opacity: 0, height: 0 }}
                       className="overflow-hidden"
                     >
-                      <div
-                        className="mt-4 p-4 rounded-xl flex items-center gap-2.5"
-                        style={{
-                          backgroundColor: 'color-mix(in srgb, var(--error), transparent 90%)',
-                          border: '1px solid color-mix(in srgb, var(--error), transparent 75%)',
-                        }}
-                      >
-                        <ShieldCheck className="w-5 h-5 shrink-0" style={{ color: 'var(--error)' }} />
-                        <p className="text-xs font-bold" style={{ color: 'var(--error)' }}>
+                      <div className="mt-4 p-4 rounded-xl flex items-center gap-2.5 bg-error/10 border border-error/30">
+                        <ShieldCheck className="w-5 h-5 shrink-0 text-error" />
+                        <p className="text-xs font-bold text-error">
                           Upload a valid prescription below before adding to cart.
                         </p>
                       </div>
@@ -1785,7 +1388,7 @@ export default function MedicineDetails() {
 
               {/* Prescription Uploader */}
               {med.isPrescriptionRequired && (
-                <div id="rx-uploader" style={{ scrollMarginTop: '8rem' }}>
+                <div id="rx-uploader" className="scroll-mt-32">
                   <PrescriptionUploader
                     prescriptionUrl={prescriptionUrl}
                     isUploading={isUploading}
@@ -1798,7 +1401,7 @@ export default function MedicineDetails() {
               {/* Regulatory Notice */}
               {med.schedule !== 'None' && (
                 <div className="alert alert-warning rounded-2xl p-5">
-                  <Info className="w-6 h-6 shrink-0" style={{ color: 'var(--warning)' }} />
+                  <Info className="w-6 h-6 shrink-0 text-warning" />
                   <p className="text-xs font-medium leading-relaxed">
                     <strong className="font-black uppercase tracking-wider">{Sched.label}:</strong>{' '}
                     {Sched.desc}
@@ -1809,12 +1412,8 @@ export default function MedicineDetails() {
               {/* ── Tabs ── */}
               <div className="pt-2">
                 <div
-                  className="flex gap-0 overflow-x-auto"
+                  className="flex gap-0 overflow-x-auto border-b-2 border-base-300 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
                   role="tablist"
-                  style={{
-                    borderBottom: '2px solid var(--base-300)',
-                    scrollbarWidth: 'none',
-                  }}
                 >
                   {TABS.map((tab) => {
                     const key = tab.toLowerCase();
@@ -1825,20 +1424,13 @@ export default function MedicineDetails() {
                         role="tab"
                         aria-selected={isActive}
                         onClick={() => setActiveTab(key)}
-                        className="relative pb-4 px-4 sm:px-6 font-black uppercase tracking-widest whitespace-nowrap transition-all"
-                        style={{
-                          fontSize: '0.65rem',
-                          color: isActive
-                            ? 'var(--primary)'
-                            : 'color-mix(in oklch, var(--base-content) 45%, transparent)',
-                        }}
+                        className={`relative pb-4 px-4 sm:px-6 font-black uppercase tracking-widest whitespace-nowrap transition-all text-[0.65rem] ${isActive ? 'text-primary' : 'text-base-content/50'}`}
                       >
                         {tab}
                         {isActive && (
                           <motion.div
                             layoutId="tabIndicator"
-                            className="absolute bottom-0 left-0 right-0 rounded-t-md"
-                            style={{ height: '2px', backgroundColor: 'var(--primary)' }}
+                            className="absolute bottom-0 left-0 right-0 rounded-t-md h-0.5 bg-primary"
                           />
                         )}
                       </button>
@@ -1854,31 +1446,17 @@ export default function MedicineDetails() {
                     exit={{ opacity: 0, y: -8 }}
                     transition={{ duration: 0.2 }}
                     role="tabpanel"
-                    className="pt-8"
-                    style={{ minHeight: '280px' }}
+                    className="pt-8 min-h-[280px]"
                   >
-
                     {/* ── OVERVIEW ── */}
                     {activeTabKey === 'overview' && (
                       <div className="space-y-6">
                         {med.description && (
-                          <div
-                            className="p-6 rounded-2xl border"
-                            style={{
-                              backgroundColor: 'color-mix(in srgb, var(--base-200), transparent 40%)',
-                              borderColor: 'var(--base-300)',
-                            }}
-                          >
-                            <p
-                              className="text-xs font-black uppercase tracking-widest flex items-center gap-2 mb-3"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                            >
+                          <div className="p-6 rounded-2xl border bg-base-200/40 border-base-300">
+                            <p className="text-xs font-black uppercase tracking-widest flex items-center gap-2 mb-3 text-base-content/40">
                               <BookOpen className="w-4 h-4 text-primary" /> Description
                             </p>
-                            <p
-                              className="text-sm leading-relaxed font-medium"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 75%, transparent)' }}
-                            >
+                            <p className="text-sm leading-relaxed font-medium text-base-content/75">
                               {med.description}
                             </p>
                           </div>
@@ -1907,10 +1485,7 @@ export default function MedicineDetails() {
 
                         {med.indications?.length > 0 && (
                           <div className="pt-2">
-                            <p
-                              className="text-xs font-black uppercase tracking-widest mb-3"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                            >
+                            <p className="text-xs font-black uppercase tracking-widest mb-3 text-base-content/40">
                               Common Indications
                             </p>
                             <div className="flex flex-wrap gap-2">
@@ -1924,30 +1499,17 @@ export default function MedicineDetails() {
                         )}
 
                         {med.warnings?.length > 0 && (
-                          <div
-                            className="p-4 rounded-xl border"
-                            style={{
-                              backgroundColor: 'color-mix(in srgb, var(--warning), transparent 92%)',
-                              borderColor: 'color-mix(in srgb, var(--warning), transparent 70%)',
-                            }}
-                          >
-                            <p
-                              className="text-xs font-black uppercase tracking-widest flex items-center gap-2 mb-3"
-                              style={{ color: 'var(--warning)' }}
-                            >
+                          <div className="p-4 rounded-xl border bg-warning/10 border-warning/30">
+                            <p className="text-xs font-black uppercase tracking-widest flex items-center gap-2 mb-3 text-warning">
                               <AlertTriangle className="w-4 h-4" /> Warnings
                             </p>
                             <ul className="space-y-1.5">
                               {med.warnings.map((w, i) => (
                                 <li
                                   key={i}
-                                  className="text-xs font-medium flex items-start gap-2"
-                                  style={{ color: 'color-mix(in oklch, var(--base-content) 70%, transparent)' }}
+                                  className="text-xs font-medium flex items-start gap-2 text-base-content/70"
                                 >
-                                  <span
-                                    className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0"
-                                    style={{ backgroundColor: 'var(--warning)' }}
-                                  />
+                                  <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-warning" />
                                   {w}
                                 </li>
                               ))}
@@ -1957,19 +1519,12 @@ export default function MedicineDetails() {
 
                         {med.interactions?.length > 0 && (
                           <div>
-                            <p
-                              className="text-xs font-black uppercase tracking-widest mb-3"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                            >
+                            <p className="text-xs font-black uppercase tracking-widest mb-3 text-base-content/40">
                               Drug Interactions
                             </p>
                             <div className="flex flex-wrap gap-2">
                               {med.interactions.map((int, i) => (
-                                <span
-                                  key={i}
-                                  className="badge badge-warning"
-                                  style={{ color: 'color-mix(in oklch, var(--warning) 80%, oklch(20% 0.04 72))' }}
-                                >
+                                <span key={i} className="badge badge-warning">
                                   {int}
                                 </span>
                               ))}
@@ -1978,26 +1533,15 @@ export default function MedicineDetails() {
                         )}
 
                         {med.searchKeywords?.length > 0 && (
-                          <div
-                            className="pt-4"
-                            style={{ borderTop: '1px solid var(--base-300)' }}
-                          >
-                            <p
-                              className="text-xs font-black uppercase tracking-widest mb-3"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                            >
+                          <div className="pt-4 border-t border-base-300">
+                            <p className="text-xs font-black uppercase tracking-widest mb-3 text-base-content/40">
                               Also Known As
                             </p>
                             <div className="flex flex-wrap gap-2">
                               {med.searchKeywords.map((kw, i) => (
                                 <span
                                   key={i}
-                                  className="px-3 py-1.5 rounded-xl text-xs font-bold border"
-                                  style={{
-                                    backgroundColor: 'var(--base-200)',
-                                    color: 'color-mix(in oklch, var(--base-content) 55%, transparent)',
-                                    borderColor: 'var(--base-300)',
-                                  }}
+                                  className="px-3 py-1.5 rounded-xl text-xs font-bold border bg-base-200 text-base-content/50 border-base-300"
                                 >
                                   #{kw}
                                 </span>
@@ -2012,31 +1556,19 @@ export default function MedicineDetails() {
                     {activeTabKey === 'composition' && (
                       <div>
                         {!med.saltComposition?.length ? (
-                          <div
-                            className="p-8 text-center rounded-2xl border-2"
-                            style={{
-                              borderStyle: 'dashed',
-                              borderColor: 'var(--base-300)',
-                            }}
-                          >
-                            <p
-                              className="text-sm font-bold uppercase tracking-wider"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                            >
+                          <div className="p-8 text-center rounded-2xl border-2 border-dashed border-base-300">
+                            <p className="text-sm font-bold uppercase tracking-wider text-base-content/40">
                               No composition data available.
                             </p>
                           </div>
                         ) : (
-                          <div
-                            className="rounded-2xl border-2 overflow-hidden shadow-sm"
-                            style={{ borderColor: 'var(--base-300)' }}
-                          >
+                          <div className="rounded-2xl border-2 overflow-hidden shadow-sm border-base-300">
                             <table className="table" aria-label="Salt Composition">
                               <thead>
                                 <tr>
                                   <th>Ingredient</th>
-                                  <th style={{ textAlign: 'right' }}>Strength</th>
-                                  <th style={{ textAlign: 'right' }}>Unit</th>
+                                  <th className="text-right">Strength</th>
+                                  <th className="text-right">Unit</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -2045,16 +1577,10 @@ export default function MedicineDetails() {
                                     <td className="text-sm font-bold text-base-content">
                                       {salt.ingredient}
                                     </td>
-                                    <td
-                                      className="text-sm font-black italic text-right"
-                                      style={{ color: 'var(--primary)' }}
-                                    >
+                                    <td className="text-sm font-black italic text-right text-primary">
                                       {salt.strength}
                                     </td>
-                                    <td
-                                      className="text-xs font-bold text-right"
-                                      style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}
-                                    >
+                                    <td className="text-xs font-bold text-right text-base-content/50">
                                       {salt.unit ?? '—'}
                                     </td>
                                   </tr>
@@ -2098,26 +1624,14 @@ export default function MedicineDetails() {
                         </div>
 
                         {med.storageConditions && (
-                          <div
-                            className="p-5 rounded-xl border"
-                            style={{
-                              backgroundColor: 'color-mix(in srgb, var(--info), transparent 92%)',
-                              borderColor: 'color-mix(in srgb, var(--info), transparent 72%)',
-                            }}
-                          >
-                            <p
-                              className="text-xs font-black uppercase tracking-widest flex items-center gap-2 mb-3"
-                              style={{ color: 'var(--info)' }}
-                            >
+                          <div className="p-5 rounded-xl border bg-info/10 border-info/30">
+                            <p className="text-xs font-black uppercase tracking-widest flex items-center gap-2 mb-3 text-info">
                               <Thermometer className="w-4 h-4" /> Storage Conditions
                             </p>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
                               {med.storageConditions.temperature?.label && (
                                 <div>
-                                  <p
-                                    className="text-xs font-bold"
-                                    style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}
-                                  >
+                                  <p className="text-xs font-bold text-base-content/50">
                                     Temperature
                                   </p>
                                   <p className="font-black text-base-content">
@@ -2126,10 +1640,7 @@ export default function MedicineDetails() {
                                 </div>
                               )}
                               <div>
-                                <p
-                                  className="text-xs font-bold"
-                                  style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}
-                                >
+                                <p className="text-xs font-bold text-base-content/50">
                                   Light Sensitive
                                 </p>
                                 <p className="font-black text-base-content">
@@ -2137,10 +1648,7 @@ export default function MedicineDetails() {
                                 </p>
                               </div>
                               <div>
-                                <p
-                                  className="text-xs font-bold"
-                                  style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}
-                                >
+                                <p className="text-xs font-bold text-base-content/50">
                                   Cold Chain
                                 </p>
                                 <p className="font-black text-base-content">
@@ -2156,63 +1664,39 @@ export default function MedicineDetails() {
                     {/* ── PRICING ── */}
                     {activeTabKey === 'pricing' && (
                       <div className="space-y-5">
-                        <div
-                          className="p-5 rounded-2xl border"
-                          style={{
-                            backgroundColor: 'color-mix(in srgb, var(--primary), transparent 94%)',
-                            borderColor: 'color-mix(in srgb, var(--primary), transparent 78%)',
-                          }}
-                        >
+                        <div className="p-5 rounded-2xl border bg-primary/5 border-primary/20">
                           <div className="flex items-center gap-3 mb-4">
-                            <div
-                              className="w-9 h-9 rounded-lg flex items-center justify-center"
-                              style={{ backgroundColor: 'color-mix(in srgb, var(--primary), transparent 80%)' }}
-                            >
+                            <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-primary/20">
                               <Receipt className="w-4 h-4 text-primary" />
                             </div>
                             <div>
                               <p className="text-sm font-black text-base-content">Reference Pricing</p>
-                              <p
-                                className="text-xs"
-                                style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}
-                              >
+                              <p className="text-xs text-base-content/50">
                                 Government issued MRP
                               </p>
                             </div>
                           </div>
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                             <div>
-                              <p
-                                className="text-xs font-bold uppercase tracking-wider"
-                                style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-                              >
+                              <p className="text-xs font-bold uppercase tracking-wider text-base-content/50">
                                 MRP
                               </p>
                               <p className="text-xl font-black text-primary">₹{fmt(med.referenceMrp)}</p>
                             </div>
                             <div>
-                              <p
-                                className="text-xs font-bold uppercase tracking-wider"
-                                style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-                              >
+                              <p className="text-xs font-bold uppercase tracking-wider text-base-content/50">
                                 PTR
                               </p>
                               <p className="text-xl font-black text-base-content">₹{fmt(med.ptr)}</p>
                             </div>
                             <div>
-                              <p
-                                className="text-xs font-bold uppercase tracking-wider"
-                                style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-                              >
+                              <p className="text-xs font-bold uppercase tracking-wider text-base-content/50">
                                 PTS
                               </p>
                               <p className="text-xl font-black text-base-content">₹{fmt(med.pts)}</p>
                             </div>
                             <div>
-                              <p
-                                className="text-xs font-bold uppercase tracking-wider"
-                                style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-                              >
+                              <p className="text-xs font-bold uppercase tracking-wider text-base-content/50">
                                 GST
                               </p>
                               <p className="text-xl font-black text-base-content">{med.gstPercentage ?? 12}%</p>
@@ -2221,15 +1705,9 @@ export default function MedicineDetails() {
                         </div>
 
                         {/* GST breakdown */}
-                        <div
-                          className="rounded-2xl border overflow-hidden"
-                          style={{ borderColor: 'var(--base-300)' }}
-                        >
-                          <div
-                            className="px-5 py-3"
-                            style={{ backgroundColor: 'var(--base-200)' }}
-                          >
-                            <p className="text-xs font-black uppercase tracking-widest" style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}>
+                        <div className="rounded-2xl border overflow-hidden border-base-300">
+                          <div className="px-5 py-3 bg-base-200">
+                            <p className="text-xs font-black uppercase tracking-widest text-base-content/50">
                               GST Split
                             </p>
                           </div>
@@ -2241,10 +1719,7 @@ export default function MedicineDetails() {
                               { label: 'Total', val: med.gstPercentage },
                             ].map(({ label, val }) => (
                               <div key={label}>
-                                <p
-                                  className="text-xs font-bold uppercase tracking-wider"
-                                  style={{ color: 'color-mix(in oklch, var(--base-content) 45%, transparent)' }}
-                                >
+                                <p className="text-xs font-bold uppercase tracking-wider text-base-content/50">
                                   {label}
                                 </p>
                                 <p className="text-lg font-black text-base-content">
@@ -2258,10 +1733,7 @@ export default function MedicineDetails() {
                         {/* Per-store inventory pricing */}
                         {med.storeInventory?.length > 0 && (
                           <div className="space-y-4">
-                            <p
-                              className="text-xs font-black uppercase tracking-widest"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                            >
+                            <p className="text-xs font-black uppercase tracking-widest text-base-content/40">
                               Pricing by Store ({med.storeInventory.length} store{med.storeInventory.length > 1 ? 's' : ''})
                             </p>
                             {med.storeInventory.map((inv, i) => (
@@ -2313,17 +1785,8 @@ export default function MedicineDetails() {
 
                         {/* Regulatory info */}
                         {med.regulatoryInfo?.cdscoDrugLicenceNo && (
-                          <div
-                            className="p-5 rounded-xl border"
-                            style={{
-                              backgroundColor: 'color-mix(in srgb, var(--base-200), transparent 40%)',
-                              borderColor: 'var(--base-300)',
-                            }}
-                          >
-                            <p
-                              className="text-xs font-black uppercase tracking-widest mb-1"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                            >
+                          <div className="p-5 rounded-xl border bg-base-200/40 border-base-300">
+                            <p className="text-xs font-black uppercase tracking-widest mb-1 text-base-content/40">
                               CDSCO Drug Licence
                             </p>
                             <p className="font-mono text-sm font-bold text-base-content">
@@ -2332,18 +1795,9 @@ export default function MedicineDetails() {
                           </div>
                         )}
 
-                        <div
-                          className="p-6 rounded-2xl border space-y-4"
-                          style={{
-                            backgroundColor: 'color-mix(in srgb, var(--base-200), transparent 50%)',
-                            borderColor: 'var(--base-300)',
-                          }}
-                        >
+                        <div className="p-6 rounded-2xl border space-y-4 bg-base-200/50 border-base-300">
                           <div>
-                            <p
-                              className="text-xs font-black uppercase tracking-widest mb-1"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                            >
+                            <p className="text-xs font-black uppercase tracking-widest mb-1 text-base-content/40">
                               Database ID
                             </p>
                             <p className="font-mono text-xs font-bold text-base-content break-all">
@@ -2351,10 +1805,7 @@ export default function MedicineDetails() {
                             </p>
                           </div>
                           <div>
-                            <p
-                              className="text-xs font-black uppercase tracking-widest mb-1"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                            >
+                            <p className="text-xs font-black uppercase tracking-widest mb-1 text-base-content/40">
                               Country of Origin
                             </p>
                             <p className="text-sm font-bold text-base-content">
@@ -2362,10 +1813,7 @@ export default function MedicineDetails() {
                             </p>
                           </div>
                           <div>
-                            <p
-                              className="text-xs font-black uppercase tracking-widest mb-1"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 40%, transparent)' }}
-                            >
+                            <p className="text-xs font-black uppercase tracking-widest mb-1 text-base-content/40">
                               Last Updated
                             </p>
                             <p className="text-xs font-bold text-base-content">
@@ -2380,31 +1828,19 @@ export default function MedicineDetails() {
 
                           {med.isDiscontinued && (
                             <div className="alert alert-error rounded-xl py-3 px-5 flex items-center gap-2">
-                              <AlertCircle className="w-5 h-5 shrink-0" style={{ color: 'var(--error)' }} />
-                              <p className="text-xs font-bold" style={{ color: 'var(--error)' }}>
+                              <AlertCircle className="w-5 h-5 shrink-0 text-error" />
+                              <p className="text-xs font-bold text-error">
                                 This product has been marked as discontinued.
                               </p>
                             </div>
                           )}
                         </div>
 
-                        <div
-                          className="p-6 rounded-2xl border"
-                          style={{
-                            backgroundColor: 'color-mix(in srgb, var(--warning), transparent 90%)',
-                            borderColor: 'color-mix(in srgb, var(--warning), transparent 65%)',
-                          }}
-                        >
-                          <p
-                            className="text-xs font-black uppercase tracking-wider flex items-center gap-1.5 mb-2"
-                            style={{ color: 'var(--warning)' }}
-                          >
+                        <div className="p-6 rounded-2xl border bg-warning/10 border-warning/30">
+                          <p className="text-xs font-black uppercase tracking-wider flex items-center gap-1.5 mb-2 text-warning">
                             <ShieldCheck className="w-4 h-4" /> Regulatory Notice
                           </p>
-                          <p
-                            className="text-xs font-medium leading-relaxed"
-                            style={{ color: 'color-mix(in oklch, var(--base-content) 70%, transparent)' }}
-                          >
+                          <p className="text-xs font-medium leading-relaxed text-base-content/70">
                             {Sched.desc}
                           </p>
                         </div>
@@ -2419,19 +1855,13 @@ export default function MedicineDetails() {
 
         {/* ── Similar Medicines ─────────────────────────────────────── */}
         {(similarMedicinesLoading || similarMedicines.length > 0) && (
-          <div
-            className="container-custom pb-16 pt-12"
-            style={{ borderTop: '1px solid var(--base-300)' }}
-          >
+          <div className="container-custom pb-16 pt-12 border-t border-base-300">
             <h2 className="text-xl font-black text-base-content uppercase tracking-widest mb-2 flex items-center gap-2">
               <RefreshCw className="w-6 h-6 text-primary" /> Similar Medicines
             </h2>
 
             {!similarMedicinesLoading && similarMedicines.length > 0 && (
-              <p
-                className="text-xs font-medium mb-8 max-w-3xl"
-                style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}
-              >
+              <p className="text-xs font-medium mb-8 max-w-3xl text-base-content/50">
                 Medicines with similar composition to{' '}
                 <span className="font-black text-primary">{med.brandName}</span>
                 {med.genericName ? (
@@ -2477,16 +1907,9 @@ export default function MedicineDetails() {
                       key={item._id}
                       whileHover={{ y: -6 }}
                       onClick={() => router.push(`/pharmacy/buy-medicines/${item?.slug}`)}
-                      className="glass-card p-3 text-left flex flex-col gap-3 transition-all rounded-3xl"
-                      style={{ border: '2px solid var(--base-300)' }}
+                      className="glass-card p-3 text-left flex flex-col gap-3 transition-all rounded-3xl border-2 border-base-300"
                     >
-                      <div
-                        className="aspect-square rounded-2xl border overflow-hidden flex items-center justify-center relative"
-                        style={{
-                          backgroundColor: 'var(--base-100)',
-                          borderColor: 'var(--base-200)',
-                        }}
-                      >
+                      <div className="aspect-square rounded-2xl border overflow-hidden flex items-center justify-center relative bg-base-100 border-base-200">
                         {item.images?.[0]?.url ? (
                           <img
                             src={item.images[0].url}
@@ -2495,23 +1918,10 @@ export default function MedicineDetails() {
                             loading="lazy"
                           />
                         ) : (
-                          <Pill className="w-12 h-12 text-primary" style={{ opacity: 0.2 }} />
+                          <Pill className="w-12 h-12 text-primary opacity-20" />
                         )}
                         <span
-                          className="absolute top-2 right-2 text-xs font-black uppercase tracking-wider px-2 py-1 rounded-md shadow-sm"
-                          style={{
-                            backgroundColor: isOut
-                              ? 'var(--error)'
-                              : isLow
-                              ? 'var(--warning)'
-                              : 'var(--success)',
-                            color: isOut
-                              ? 'var(--error-content)'
-                              : isLow
-                              ? 'var(--warning-content)'
-                              : 'var(--success-content)',
-                            fontSize: '0.6rem',
-                          }}
+                          className={`absolute top-2 right-2 text-[0.6rem] font-black uppercase tracking-wider px-2 py-1 rounded-md shadow-sm ${isOut ? 'bg-error text-error-content' : isLow ? 'bg-warning text-warning-content' : 'bg-success text-success-content'}`}
                         >
                           {isOut ? 'Out' : isLow ? 'Low' : 'In'}
                         </span>
@@ -2522,57 +1932,36 @@ export default function MedicineDetails() {
                           <p className="text-sm font-black text-base-content truncate">
                             {item.brandName}
                           </p>
-                          <p
-                            className="text-xs font-bold uppercase tracking-wider truncate mt-0.5"
-                            style={{ color: 'color-mix(in oklch, var(--base-content) 50%, transparent)' }}
-                          >
+                          <p className="text-xs font-bold uppercase tracking-wider truncate mt-0.5 text-base-content/50">
                             {item.genericName}
                           </p>
                         </div>
 
                         <div className="space-y-1">
                           {item.dosage && (
-                            <p
-                              className="text-xs font-medium flex items-center gap-1.5"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 60%, transparent)' }}
-                            >
-                              <Pill className="w-3 h-3 text-primary shrink-0" style={{ opacity: 0.5 }} />
+                            <p className="text-xs font-medium flex items-center gap-1.5 text-base-content/60">
+                              <Pill className="w-3 h-3 text-primary shrink-0 opacity-50" />
                               {item.dosage}
                             </p>
                           )}
                           {expiry && (
-                            <p
-                              className="text-xs font-medium flex items-center gap-1.5"
-                              style={{ color: 'color-mix(in oklch, var(--base-content) 60%, transparent)' }}
-                            >
-                              <Clock className="w-3 h-3 text-primary shrink-0" style={{ opacity: 0.5 }} />
+                            <p className="text-xs font-medium flex items-center gap-1.5 text-base-content/60">
+                              <Clock className="w-3 h-3 text-primary shrink-0 opacity-50" />
                               Exp: <strong className="text-base-content ml-0.5">{expiry}</strong>
                             </p>
                           )}
                         </div>
 
-                        <div
-                          className="flex items-end justify-between mt-auto pt-3"
-                          style={{ borderTop: '1px solid var(--base-300)' }}
-                        >
+                        <div className="flex items-end justify-between mt-auto pt-3 border-t border-base-300">
                           <div>
                             <p className="text-sm font-black text-primary">₹{fmt(price)}</p>
                             {item.referenceMrp && item.referenceMrp !== price && (
-                              <p
-                                className="text-xs font-bold"
-                                style={{
-                                  textDecoration: 'line-through',
-                                  color: 'color-mix(in oklch, var(--base-content) 30%, transparent)',
-                                }}
-                              >
+                              <p className="text-xs font-bold line-through text-base-content/30">
                                 ₹{fmt(item.referenceMrp)}
                               </p>
                             )}
                           </div>
-                          <div
-                            className="w-7 h-7 rounded-lg flex items-center justify-center transition-all"
-                            style={{ backgroundColor: 'var(--base-200)' }}
-                          >
+                          <div className="w-7 h-7 rounded-lg flex items-center justify-center transition-all bg-base-200">
                             <ChevronRight className="w-4 h-4 text-primary" />
                           </div>
                         </div>

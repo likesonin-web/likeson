@@ -8,7 +8,8 @@ import socketService, { DRIVER_STATUS } from "@/services/socketService";
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BASE = "/bookings";
+const BASE      = "/bookings";
+const RIDE_OPS  = "/ride-ops";
 
 const mkThunk = (type, fn) =>
   createAsyncThunk(type, async (arg, api) => {
@@ -34,11 +35,11 @@ const downloadBlob = (data, filename, mime = "application/octet-stream") => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INITIAL CARE RIDE STATUS SHAPE — always object, never string/null
+// INITIAL CARE RIDE STATUS SHAPE
 // ─────────────────────────────────────────────────────────────────────────────
 
 const INITIAL_CARE_RIDE_STATUS = {
-  status: null, // 'not_joined'|'en_route_to_pickup'|'at_pickup'|'in_ride'|'departed'
+  status: null,
   activeTarget: null,
   activeNavigationTarget: null,
   rideStage: null,
@@ -61,6 +62,13 @@ const initialState = {
 
   adminOps: [],
   adminOpsMeta: { total: 0, page: 1, pages: 1 },
+
+  // SOS
+  adminActiveSos: [],
+  adminActiveSosMeta: { total: 0, page: 1, pages: 1 },
+
+  // Destination audit
+  destinationAudit: [],
 
   tpAssignedBookings: [],
   tpAvailableDrivers: [],
@@ -85,17 +93,26 @@ const initialState = {
   nearbyHospitals: [],
   careRideNearby: null,
 
+  // ── Ride Operations (rideOperationsRouter) ─────────────────────────────────
+  rideParticipants: [],
+  rideStops: [],
+  rideJoinPoints: [],
+  rideRouteVersions: [],
+  activeRouteVersion: null,
+  bookingAssignmentHistory: [],
+  rideAssignmentHistory: [],
+  bookingSosEvents: [],
+
   // ── Consultation ───────────────────────────────────────────────────────────
-  consultation: null, // active consultation document
-  consultationJoinToken: null, // Agora token + room info for join
-  consultationChat: [], // chat messages array
+  consultation: null,
+  consultationJoinToken: null,
+  consultationChat: [],
 
   // ── CA tracking state ──────────────────────────────────────────────────────
   careTrackingSnapshot: null,
   careAssistantLocation: null,
   careAssistantStatus: null,
   careAssistantJoined: null,
-  // Always OBJECT — never string/null
   careRideStatus: { ...INITIAL_CARE_RIDE_STATUS },
   caJoinPoint: null,
 
@@ -106,14 +123,9 @@ const initialState = {
   bookingSnapshot: null,
   activeRide: null,
 
-  // Full care ride view mode for CA
-  // 'navigate_to_jp' | 'driver_tracking_only'
+  // CA view mode
   caViewMode: null,
-
-  // Whether CA has joined the ride vehicle
   caHasJoined: false,
-
-  // Whether CA is waiting at join point
   caAtJoinPoint: false,
 
   // ── Admin operation results ────────────────────────────────────────────────
@@ -139,16 +151,16 @@ const initialState = {
   errors: {},
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — TRANSPORT PARTNER
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — TRANSPORT PARTNER  (bookingRouter2)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const fetchTpAssignedBookings = mkThunk(
   "operations/fetchTpAssignedBookings",
   async () => {
     const { data } = await API.get(`${BASE}/tp/assigned`);
     return data.data;
-  },
+  }
 );
 
 export const fetchTpAvailableDrivers = mkThunk(
@@ -156,7 +168,7 @@ export const fetchTpAvailableDrivers = mkThunk(
   async () => {
     const { data } = await API.get(`${BASE}/tp/drivers/available`);
     return data.data;
-  },
+  }
 );
 
 export const tpAssignDriver = mkThunk(
@@ -167,7 +179,7 @@ export const tpAssignDriver = mkThunk(
     });
     toast.success("Driver assigned");
     return data.data;
-  },
+  }
 );
 
 export const tpReassignDriver = mkThunk(
@@ -175,153 +187,121 @@ export const tpReassignDriver = mkThunk(
   async ({ bookingId, newDriverId }) => {
     const { data } = await API.patch(
       `${BASE}/${bookingId}/tp/reassign-driver`,
-      { newDriverId },
+      { newDriverId }
     );
     toast.success("Driver reassigned");
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — CONSULTATION  (routes from bookingRouter2)
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — CONSULTATION  (bookingRouter2)
+// ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /consultations/:bookingId
- * Fetch Consultation document linked to a booking.
- * Roles: customer (own), doctor (assigned), hospital, admin.
- */
+/** GET /consultations/:bookingId */
 export const fetchConsultation = mkThunk(
   "operations/fetchConsultation",
   async ({ bookingId }) => {
     const { data } = await API.get(`${BASE}/consultations/${bookingId}`);
     return data.data;
-  },
+  }
 );
 
-/**
- * PATCH /consultations/:consultationId/confirm
- * Doctor or admin confirms / schedules consultation. Sends OP card to patient.
- * Body: { consentAccepted?: boolean }
- */
+/** PATCH /consultations/:consultationId/confirm */
 export const confirmConsultation = mkThunk(
   "operations/confirmConsultation",
   async ({ consultationId, consentAccepted = false }) => {
     const { data } = await API.patch(
       `${BASE}/consultations/${consultationId}/confirm`,
-      { consentAccepted },
+      { consentAccepted }
     );
     toast.success("Consultation confirmed — OP sent to patient");
     return data.data;
-  },
+  }
 );
 
-/**
- * PATCH /consultations/:consultationId/accept
- * Doctor explicitly accepts incoming consultation (created/scheduled → waiting).
- * Sends OP card to patient.
- */
+/** PATCH /consultations/:consultationId/accept */
 export const acceptConsultation = mkThunk(
   "operations/acceptConsultation",
   async ({ consultationId }) => {
     const { data } = await API.patch(
-      `${BASE}/consultations/${consultationId}/accept`,
+      `${BASE}/consultations/${consultationId}/accept`
     );
     toast.success("Consultation accepted — patient notified");
     return data.data;
-  },
+  }
 );
 
-/**
- * PATCH /consultations/:consultationId/start
- * Doctor starts active session (waiting → active).
- * Requires telemedicine consent accepted.
- */
+/** PATCH /consultations/:consultationId/start */
 export const startConsultation = mkThunk(
   "operations/startConsultation",
   async ({ consultationId }) => {
     const { data } = await API.patch(
-      `${BASE}/consultations/${consultationId}/start`,
+      `${BASE}/consultations/${consultationId}/start`
     );
     toast.success("Consultation started");
     return data.data;
-  },
+  }
 );
 
-/**
- * PATCH /consultations/:consultationId/end
- * End active/paused consultation.
- * Body: { reason?: string, prescriptionUploaded?: boolean }
- */
+/** PATCH /consultations/:consultationId/end */
 export const endConsultation = mkThunk(
   "operations/endConsultation",
   async ({ consultationId, reason, prescriptionUploaded = false }) => {
     const { data } = await API.patch(
       `${BASE}/consultations/${consultationId}/end`,
-      { reason, prescriptionUploaded },
+      { reason, prescriptionUploaded }
     );
     toast.success("Consultation ended");
     return data.data;
-  },
+  }
 );
 
-/**
- * PATCH /consultations/:consultationId/consent
- * Patient submits telemedicine / recording / ai_analysis consent.
- * Body: { consentType: string, accepted: boolean }
- */
+/** PATCH /consultations/:consultationId/consent */
 export const submitConsultationConsent = mkThunk(
   "operations/submitConsultationConsent",
   async ({ consultationId, consentType = "telemedicine", accepted = true }) => {
     const { data } = await API.patch(
       `${BASE}/consultations/${consultationId}/consent`,
-      { consentType, accepted },
+      { consentType, accepted }
     );
-    return data.data; // { consentType, accepted }
-  },
+    return data.data;
+  }
 );
 
-/**
- * POST /consultations/:consultationId/chat
- * Send chat message inside active consultation.
- * Body: { message: string, messageType?: string }
- */
+/** POST /consultations/:consultationId/chat */
 export const sendConsultationChat = mkThunk(
   "operations/sendConsultationChat",
   async ({ consultationId, message, messageType = "text" }) => {
     const { data } = await API.post(
       `${BASE}/consultations/${consultationId}/chat`,
-      { message, messageType },
+      { message, messageType }
     );
-    return data.data; // { message: chatEntry }
-  },
+    return data.data;
+  }
 );
 
-/**
- * GET /consultations/:consultationId/join-token
- * Get Agora room token for doctor or patient.
- * Returns: { token, role, uid, channelName, roomId, meetingId, appId, ... }
- */
+/** GET /consultations/:consultationId/join-token */
 export const fetchConsultationJoinToken = mkThunk(
   "operations/fetchConsultationJoinToken",
   async ({ consultationId }) => {
     const { data } = await API.get(
-      `${BASE}/consultations/${consultationId}/join-token`,
+      `${BASE}/consultations/${consultationId}/join-token`
     );
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — CARE ASSISTANT
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — CARE ASSISTANT  (bookingRouter2 + bookingRouter3)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const fetchCareAssignedBookings = mkThunk(
   "operations/fetchCareAssignedBookings",
   async () => {
     const { data } = await API.get(`${BASE}/care/assigned`);
     return data.data;
-  },
+  }
 );
 
 export const markCareArrived = mkThunk(
@@ -330,7 +310,7 @@ export const markCareArrived = mkThunk(
     const { data } = await API.patch(`${BASE}/${bookingId}/care/arrived`);
     toast.success("Arrival marked");
     return data;
-  },
+  }
 );
 
 export const markCareStart = mkThunk(
@@ -339,7 +319,7 @@ export const markCareStart = mkThunk(
     const { data } = await API.patch(`${BASE}/${bookingId}/care/start`);
     toast.success("Task started");
     return data;
-  },
+  }
 );
 
 export const markCareComplete = mkThunk(
@@ -348,7 +328,7 @@ export const markCareComplete = mkThunk(
     const { data } = await API.patch(`${BASE}/${bookingId}/care/complete`);
     toast.success("Task completed");
     return data;
-  },
+  }
 );
 
 export const updateCareLocation = mkThunk(
@@ -361,9 +341,10 @@ export const updateCareLocation = mkThunk(
       status,
     });
     return data;
-  },
+  }
 );
 
+/** POST /:id/care/request-ride (care_assistant role — bookingRouter3) */
 export const careRequestRide = mkThunk(
   "operations/careRequestRide",
   async ({ bookingId, pickupLocation, destinationLocation }) => {
@@ -373,15 +354,10 @@ export const careRequestRide = mkThunk(
     });
     toast.success("Ride requested");
     return data.data;
-  },
+  }
 );
 
-/**
- * POST /:id/care/join-ride  (bookingRouter2 — care assistant routes)
- * CA attaches to an in-progress RideTracking doc at any stage. Does NOT
- * switch CA view mode — CA keeps navigating to the join point themselves.
- * Body: { currentLat, currentLng }
- */
+/** POST /:id/care/join-ride — CA attaches to RideTracking doc */
 export const careJoinRide = mkThunk(
   "operations/careJoinRide",
   async ({ bookingId, currentLat, currentLng }) => {
@@ -391,17 +367,10 @@ export const careJoinRide = mkThunk(
     });
     toast.success("Joined ride session");
     return data.data;
-  },
+  }
 );
 
-/**
- * PATCH /:id/care/join-ride  (driver-side router — DISTINCT route, same
- * path as above but different HTTP verb + different handler).
- * CA boards the vehicle mid-ride: marks the care_assistant_join waypoint
- * completed, flips CA status straight to 'in_ride', and switches CA view
- * to driver-tracking-only mode immediately.
- * Body: { currentLat, currentLng }
- */
+/** PATCH /:id/care/join-ride — CA boards vehicle mid-ride */
 export const caJoinRideAndTrackDriver = mkThunk(
   "operations/caJoinRideAndTrackDriver",
   async ({ bookingId, currentLat, currentLng }) => {
@@ -410,10 +379,24 @@ export const caJoinRideAndTrackDriver = mkThunk(
       currentLng,
     });
     toast.success(data.message || "Joined ride — tracking driver");
-    return data.data; // { rideId, bookingId, careAssistantStatus, caViewMode, jpCompleted, socketRoom, socketEvents }
-  },
+    return data.data;
+  }
 );
 
+/** PATCH /:id/care/reached-jp — CA signals arrived at join point */
+export const careReachedJoinPoint = mkThunk(
+  "operations/careReachedJoinPoint",
+  async ({ bookingId, lat, lng }) => {
+    const { data } = await API.patch(`${BASE}/${bookingId}/care/reached-jp`, {
+      lat,
+      lng,
+    });
+    toast.success("Marked as reached join point");
+    return data.data;
+  }
+);
+
+/** PATCH /:id/care/ride-status */
 export const careUpdateRideStatus = mkThunk(
   "operations/careUpdateRideStatus",
   async ({ bookingId, status, lat, lng }) => {
@@ -423,29 +406,30 @@ export const careUpdateRideStatus = mkThunk(
       lng,
     });
     return data.data;
-  },
+  }
 );
 
+/** GET /:id/care/tracking-snapshot */
 export const fetchCareTrackingSnapshot = mkThunk(
   "operations/fetchCareTrackingSnapshot",
   async ({ bookingId }) => {
     const { data } = await API.get(
-      `${BASE}/${bookingId}/care/tracking-snapshot`,
+      `${BASE}/${bookingId}/care/tracking-snapshot`
     );
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — HOSPITAL
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — HOSPITAL  (bookingRouter2)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const fetchHospitalUpcoming = mkThunk(
   "operations/fetchHospitalUpcoming",
   async () => {
     const { data } = await API.get(`${BASE}/hospital/upcoming`);
     return data.data;
-  },
+  }
 );
 
 export const hospitalConfirmBooking = mkThunk(
@@ -454,7 +438,7 @@ export const hospitalConfirmBooking = mkThunk(
     const { data } = await API.patch(`${BASE}/${bookingId}/hospital/confirm`);
     toast.success("Appointment confirmed");
     return data;
-  },
+  }
 );
 
 export const fetchHospitalOps = mkThunk(
@@ -464,7 +448,7 @@ export const fetchHospitalOps = mkThunk(
       params: { status, doctorId, date, page, limit },
     });
     return data.data;
-  },
+  }
 );
 
 export const fetchHospitalValidOps = mkThunk(
@@ -474,12 +458,12 @@ export const fetchHospitalValidOps = mkThunk(
       params: { doctorId, patientId, page, limit },
     });
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — DOCTOR
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — DOCTOR  (bookingRouter2)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const fetchDoctorOps = mkThunk(
   "operations/fetchDoctorOps",
@@ -495,7 +479,7 @@ export const fetchDoctorOps = mkThunk(
       params: { status, hospitalId, patientId, date, page, limit },
     });
     return data.data;
-  },
+  }
 );
 
 export const fetchDoctorOpByNumber = mkThunk(
@@ -503,7 +487,7 @@ export const fetchDoctorOpByNumber = mkThunk(
   async ({ opNumber }) => {
     const { data } = await API.get(`${BASE}/doctor/ops/${opNumber}`);
     return data.data;
-  },
+  }
 );
 
 export const completeOp = mkThunk(
@@ -523,19 +507,19 @@ export const completeOp = mkThunk(
     });
     toast.success("OP completed — sent to patient");
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — OP CARD
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — OP CARD  (bookingRouter2)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const fetchOpByNumber = mkThunk(
   "operations/fetchOpByNumber",
   async ({ opNumber }) => {
     const { data } = await API.get(`${BASE}/op/${opNumber}`);
     return data.data;
-  },
+  }
 );
 
 export const fetchOpFollowUps = mkThunk(
@@ -543,7 +527,7 @@ export const fetchOpFollowUps = mkThunk(
   async ({ opNumber }) => {
     const { data } = await API.get(`${BASE}/op/${opNumber}/follow-ups`);
     return data.data;
-  },
+  }
 );
 
 export const downloadOpCard = mkThunk(
@@ -554,19 +538,19 @@ export const downloadOpCard = mkThunk(
     });
     downloadBlob(data, `${opNumber}.zip`, "application/zip");
     return { opNumber };
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — DRIVER
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — DRIVER  (bookingRouter3)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const fetchDriverAssignedRides = mkThunk(
   "operations/fetchDriverAssignedRides",
   async () => {
     const { data } = await API.get(`${BASE}/driver/assigned`);
     return data.data;
-  },
+  }
 );
 
 export const acceptRide = mkThunk(
@@ -575,7 +559,7 @@ export const acceptRide = mkThunk(
     const { data } = await API.patch(`${BASE}/${bookingId}/ride/accept`);
     toast.success("Ride accepted");
     return data.data;
-  },
+  }
 );
 
 export const rejectRide = mkThunk(
@@ -586,7 +570,7 @@ export const rejectRide = mkThunk(
     });
     toast.success("Ride rejected");
     return data;
-  },
+  }
 );
 
 export const markDriverArrived = mkThunk(
@@ -595,7 +579,43 @@ export const markDriverArrived = mkThunk(
     const { data } = await API.patch(`${BASE}/${bookingId}/ride/arrived`);
     toast.success("Arrival marked — OTP sent to customer");
     return data;
-  },
+  }
+);
+
+/** PATCH /:id/ride/verify-otp */
+export const verifyRideOtp = mkThunk(
+  "operations/verifyRideOtp",
+  async ({ bookingId, otp }) => {
+    const { data } = await API.patch(`${BASE}/${bookingId}/ride/verify-otp`, {
+      otp,
+    });
+    toast.success("OTP verified — ride started");
+    return data.data;
+  }
+);
+
+/** PATCH /:id/ride/arrived-stop — driver marks arrival at any stop */
+export const markArrivedStop = mkThunk(
+  "operations/markArrivedStop",
+  async ({ bookingId, stopId }) => {
+    const { data } = await API.patch(`${BASE}/${bookingId}/ride/arrived-stop`, {
+      stopId,
+    });
+    toast.success(`Arrived at stop`);
+    return data.data;
+  }
+);
+
+/** PATCH /:id/ride/depart-stop — driver departs from current stop */
+export const departStop = mkThunk(
+  "operations/departStop",
+  async ({ bookingId, stopId }) => {
+    const { data } = await API.patch(`${BASE}/${bookingId}/ride/depart-stop`, {
+      stopId,
+    });
+    toast.success("Departed from stop");
+    return data.data;
+  }
 );
 
 export const endRide = mkThunk(
@@ -607,7 +627,7 @@ export const endRide = mkThunk(
     });
     toast.success(data.message || "Ride completed");
     return data.data;
-  },
+  }
 );
 
 export const updateDriverLocationHttp = mkThunk(
@@ -621,12 +641,26 @@ export const updateDriverLocationHttp = mkThunk(
       bookingId,
     });
     return data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — CUSTOMER
-// ─────────────────────────────────────────────────────────────────────────────
+/** POST /:id/ride/sos — driver triggers SOS */
+export const driverTriggerSos = mkThunk(
+  "operations/driverTriggerSos",
+  async ({ bookingId, sosType, description, coordinates }) => {
+    const { data } = await API.post(`${BASE}/${bookingId}/ride/sos`, {
+      sosType,
+      description,
+      coordinates,
+    });
+    toast.error("SOS triggered — admin notified");
+    return data.data;
+  }
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — CUSTOMER  (bookingRouter3)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const customerRequestRide = mkThunk(
   "operations/customerRequestRide",
@@ -637,12 +671,12 @@ export const customerRequestRide = mkThunk(
     });
     toast.success(data.message || "Ride requested");
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — ADMIN BOOKINGS
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — ADMIN BOOKINGS  (bookingRouter2)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const fetchAdminBookings = mkThunk(
   "operations/fetchAdminBookings",
@@ -658,20 +692,10 @@ export const fetchAdminBookings = mkThunk(
     to,
   } = {}) => {
     const { data } = await API.get(`${BASE}/admin/bookings`, {
-      params: {
-        status,
-        bookingType,
-        city,
-        date,
-        page,
-        limit,
-        search,
-        from,
-        to,
-      },
+      params: { status, bookingType, city, date, page, limit, search, from, to },
     });
     return data.data;
-  },
+  }
 );
 
 export const fetchAdminBookingStats = mkThunk(
@@ -681,7 +705,7 @@ export const fetchAdminBookingStats = mkThunk(
       params: { from, to },
     });
     return data.data;
-  },
+  }
 );
 
 export const exportAdminBookings = mkThunk(
@@ -693,7 +717,7 @@ export const exportAdminBookings = mkThunk(
     });
     downloadBlob(data, `bookings-${Date.now()}.csv`, "text/csv");
     return { exported: true };
-  },
+  }
 );
 
 export const fetchAdminBookingById = mkThunk(
@@ -701,7 +725,7 @@ export const fetchAdminBookingById = mkThunk(
   async ({ bookingId }) => {
     const { data } = await API.get(`${BASE}/admin/bookings/${bookingId}`);
     return data.data;
-  },
+  }
 );
 
 export const updateAdminBookingStatus = mkThunk(
@@ -709,71 +733,88 @@ export const updateAdminBookingStatus = mkThunk(
   async ({ bookingId, status, note }) => {
     const { data } = await API.patch(
       `${BASE}/admin/bookings/${bookingId}/status`,
-      { status, note },
+      { status, note }
     );
     toast.success("Status updated");
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — ADMIN NEARBY
-// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * PATCH /admin/bookings/:id/destination
+ * bookingRouter2 version — changes destination, recalculates route, creates new RouteVersion.
+ * Body: { newDestination: { coordinates, address, city }, reason }
+ */
+export const adminChangeDestination = mkThunk(
+  "operations/adminChangeDestination",
+  async ({ bookingId, newDestination, reason }) => {
+    const { data } = await API.patch(
+      `${BASE}/admin/bookings/${bookingId}/destination`,
+      { newDestination, reason }
+    );
+    toast.success("Destination updated");
+    return data.data;
+  }
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — ADMIN NEARBY  (bookingRouter2)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const fetchNearbyCareAssistants = mkThunk(
   "operations/fetchNearbyCareAssistants",
   async ({ bookingId }) => {
     const { data } = await API.get(
-      `${BASE}/admin/bookings/${bookingId}/nearby/care-assistants`,
+      `${BASE}/admin/bookings/${bookingId}/nearby/care-assistants`
     );
     return data.data;
-  },
+  }
 );
 
 export const fetchNearbySoloDrivers = mkThunk(
   "operations/fetchNearbySoloDrivers",
   async ({ bookingId }) => {
     const { data } = await API.get(
-      `${BASE}/admin/bookings/${bookingId}/nearby/solo-drivers`,
+      `${BASE}/admin/bookings/${bookingId}/nearby/solo-drivers`
     );
     return data.data;
-  },
+  }
 );
 
 export const fetchNearbyTransportPartners = mkThunk(
   "operations/fetchNearbyTransportPartners",
   async ({ bookingId }) => {
     const { data } = await API.get(
-      `${BASE}/admin/bookings/${bookingId}/nearby/transport-partners`,
+      `${BASE}/admin/bookings/${bookingId}/nearby/transport-partners`
     );
     return data.data;
-  },
+  }
 );
 
 export const fetchNearbyHospitals = mkThunk(
   "operations/fetchNearbyHospitals",
   async ({ bookingId }) => {
     const { data } = await API.get(
-      `${BASE}/admin/bookings/${bookingId}/nearby/hospitals`,
+      `${BASE}/admin/bookings/${bookingId}/nearby/hospitals`
     );
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — ADMIN ASSIGN / REASSIGN
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — ADMIN ASSIGN / REASSIGN  (bookingRouter2)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const adminAssignSoloDriver = mkThunk(
   "operations/adminAssignSoloDriver",
   async ({ bookingId, soloDriverPartnerId }) => {
     const { data } = await API.post(
       `${BASE}/admin/bookings/${bookingId}/assign/solo-driver`,
-      { soloDriverPartnerId },
+      { soloDriverPartnerId }
     );
     toast.success("Solo driver assigned");
     return data.data;
-  },
+  }
 );
 
 export const adminAssignTransportPartner = mkThunk(
@@ -781,11 +822,11 @@ export const adminAssignTransportPartner = mkThunk(
   async ({ bookingId, transportPartnerId }) => {
     const { data } = await API.post(
       `${BASE}/admin/bookings/${bookingId}/assign/transport-partner`,
-      { transportPartnerId },
+      { transportPartnerId }
     );
     toast.success("Transport partner assigned");
     return data.data;
-  },
+  }
 );
 
 export const adminAssignCareAssistant = mkThunk(
@@ -793,11 +834,11 @@ export const adminAssignCareAssistant = mkThunk(
   async ({ bookingId, careAssistantId }) => {
     const { data } = await API.post(
       `${BASE}/admin/bookings/${bookingId}/assign/care-assistant`,
-      { careAssistantId },
+      { careAssistantId }
     );
     toast.success("Care assistant assigned");
-    return data.data; // { booking, caJoinPoint }
-  },
+    return data.data;
+  }
 );
 
 export const adminAssignHospital = mkThunk(
@@ -805,32 +846,28 @@ export const adminAssignHospital = mkThunk(
   async ({ bookingId, hospitalId }) => {
     const { data } = await API.post(
       `${BASE}/admin/bookings/${bookingId}/assign/hospital`,
-      { hospitalId },
+      { hospitalId }
     );
     toast.success("Hospital linked");
     return data.data;
-  },
+  }
 );
 
 /**
- * NOTE — NO BACKEND ROUTE EXISTS FOR THIS.
- * Both router files explicitly state: "There is intentionally no admin
- * 'reassign driver' route" — admin can only reassign via TransportPartner
- * (tpReassignDriver, PATCH /:id/tp/reassign-driver) or by re-running
- * adminAssignSoloDriver for a solo driver. Calling this thunk will 404.
- * Kept here only so existing imports don't break; do not wire to new UI.
- * Use tpReassignDriver or adminAssignSoloDriver instead.
+ * NOTE: No backend route for admin direct driver reassign.
+ * Use tpReassignDriver (TP fleet) or adminAssignSoloDriver (solo).
+ * Kept to avoid import breaks; will 404 if called.
  */
 export const adminReassignDriver = mkThunk(
   "operations/adminReassignDriver",
   async ({ bookingId, newDriverId, reason }) => {
     const { data } = await API.patch(
       `${BASE}/admin/bookings/${bookingId}/reassign/driver`,
-      { newDriverId, reason },
+      { newDriverId, reason }
     );
     toast.success("Driver reassigned");
     return data.data;
-  },
+  }
 );
 
 export const adminReassignCareAssistant = mkThunk(
@@ -838,11 +875,11 @@ export const adminReassignCareAssistant = mkThunk(
   async ({ bookingId, newCareAssistantId }) => {
     const { data } = await API.patch(
       `${BASE}/admin/bookings/${bookingId}/reassign/care`,
-      { newCareAssistantId },
+      { newCareAssistantId }
     );
     toast.success("Care assistant reassigned");
     return data;
-  },
+  }
 );
 
 export const adminProcessRefund = mkThunk(
@@ -850,16 +887,16 @@ export const adminProcessRefund = mkThunk(
   async ({ bookingId, refundAmount, reason }) => {
     const { data } = await API.post(
       `${BASE}/admin/bookings/${bookingId}/refund`,
-      { refundAmount, reason },
+      { refundAmount, reason }
     );
     toast.success("Refund initiated");
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — ADMIN OPS
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — ADMIN OPS  (bookingRouter2)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const fetchAdminOps = mkThunk(
   "operations/fetchAdminOps",
@@ -876,7 +913,7 @@ export const fetchAdminOps = mkThunk(
       params: { doctorId, hospitalId, date, page, limit, status, patientId },
     });
     return data.data;
-  },
+  }
 );
 
 export const updateAdminOpStatus = mkThunk(
@@ -888,12 +925,49 @@ export const updateAdminOpStatus = mkThunk(
     });
     toast.success("OP status updated");
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — ADMIN CARE-RIDE
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — ADMIN SOS  (bookingRouter2)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** GET /admin/sos/active — bookingRouter2 version (no pagination) */
+export const fetchAdminActiveSos = mkThunk(
+  "operations/fetchAdminActiveSos",
+  async () => {
+    const { data } = await API.get(`${BASE}/admin/sos/active`);
+    return data.data;
+  }
+);
+
+/** PATCH /admin/sos/:sosEventId/resolve — bookingRouter2 */
+export const resolveAdminSos = mkThunk(
+  "operations/resolveAdminSos",
+  async ({ sosEventId, resolutionNotes }) => {
+    const { data } = await API.patch(
+      `${BASE}/admin/sos/${sosEventId}/resolve`,
+      { resolutionNotes }
+    );
+    toast.success("SOS resolved");
+    return data.data;
+  }
+);
+
+/** GET /admin/destination-audit/:bookingId — bookingRouter2 */
+export const fetchAdminDestinationAudit = mkThunk(
+  "operations/fetchAdminDestinationAudit",
+  async ({ bookingId }) => {
+    const { data } = await API.get(
+      `${BASE}/admin/destination-audit/${bookingId}`
+    );
+    return data.data;
+  }
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — ADMIN CARE-RIDE  (bookingRouter3)
+// ═════════════════════════════════════════════════════════════════════════════
 
 export const adminRequestCareRide = mkThunk(
   "operations/adminRequestCareRide",
@@ -915,161 +989,316 @@ export const adminRequestCareRide = mkThunk(
     });
     toast.success(data.message || "Care-ride created");
     return data.data;
-  },
+  }
 );
 
 export const fetchAdminCareRideNearby = mkThunk(
   "operations/fetchAdminCareRideNearby",
   async ({ bookingId }) => {
     const { data } = await API.get(
-      `${BASE}/admin/care-ride/${bookingId}/nearby`,
+      `${BASE}/admin/care-ride/${bookingId}/nearby`
     );
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THUNKS — SOCKET
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — RIDE OPERATIONS ROUTER  (/api/ride-ops)
+// ═════════════════════════════════════════════════════════════════════════════
 
-export const joinBookingRoom = createAsyncThunk(
-  "operations/joinBookingRoom",
-  ({ bookingId }) => {
-    socketService.joinBookingRoom(bookingId);
-    return { bookingId };
-  },
-);
+// ── Participants ──────────────────────────────────────────────────────────────
 
-export const leaveBookingRoom = createAsyncThunk(
-  "operations/leaveBookingRoom",
-  ({ bookingId }) => {
-    socketService.leaveBookingRoom(bookingId);
-    return { bookingId };
-  },
-);
-
-export const joinTpRoom = createAsyncThunk(
-  "operations/joinTpRoom",
-  ({ tpId }) => {
-    socketService.joinTpRoom(tpId);
-    return { tpId };
-  },
-);
-
-export const leaveTpRoom = createAsyncThunk(
-  "operations/leaveTpRoom",
-  ({ tpId }) => {
-    socketService.leaveTpRoom(tpId);
-    return { tpId };
-  },
-);
-
-export const verifyOtpSocket = mkThunk(
-  "operations/verifyOtpSocket",
-  async ({ bookingId, rideId, otp }) => {
-    const result = await socketService.verifyOtpAsync({
-      bookingId,
-      rideId,
-      otp,
-    });
-    toast.success("OTP verified — ride started");
-    return result;
-  },
-);
-
-export const updateDriverStatusSocket = createAsyncThunk(
-  "operations/updateDriverStatusSocket",
-  ({ bookingId, rideId, status, lat, lng, meta }) => {
-    socketService.updateDriverStatus({
-      bookingId,
-      rideId,
-      status,
-      lat,
-      lng,
-      meta,
-    });
-    return { bookingId, rideId, status };
-  },
-);
-
-export const startGpsTracking = createAsyncThunk(
-  "operations/startGpsTracking",
-  ({ bookingId } = {}) => {
-    socketService.startGpsTracking({ bookingId });
-    return { tracking: true };
-  },
-);
-
-export const stopGpsTracking = createAsyncThunk(
-  "operations/stopGpsTracking",
-  () => {
-    socketService.stopGpsTracking();
-    return { tracking: false };
-  },
-);
-
-export const triggerSos = createAsyncThunk(
-  "operations/triggerSos",
-  ({ bookingId, rideId, lat, lng, sosType = "other", description }) => {
-    socketService.triggerSos({
-      bookingId,
-      rideId,
-      lat,
-      lng,
-      sosType,
-      description,
-    });
-    toast.error("SOS triggered — help notified");
-    return { bookingId, rideId, sosType };
-  },
-);
-
-export const reportRouteDeviation = createAsyncThunk(
-  "operations/reportRouteDeviation",
-  ({ bookingId, rideId, lat, lng, deviationKm, driverReason }) => {
-    socketService.reportRouteDeviation({
-      bookingId,
-      rideId,
-      lat,
-      lng,
-      deviationKm,
-      driverReason,
-    });
-    return { bookingId, rideId, deviationKm };
-  },
-);
-
-export const requestBookingState = mkThunk(
-  "operations/requestBookingState",
-  async ({ bookingId }) => {
-    const snapshot = await socketService.requestBookingStateAsync(bookingId);
-    return snapshot;
-  },
-);
-
-/**
- * PATCH /:bookingId/care/reached-jp
- * CA signals they have arrived at the join point.
- * Body: { lat?, lng? }
- */
-export const careReachedJoinPoint = mkThunk(
-  "operations/careReachedJoinPoint",
-  async ({ bookingId, lat, lng }) => {
-    const { data } = await API.patch(`${BASE}/${bookingId}/care/reached-jp`, {
-      lat,
-      lng,
-    });
-    toast.success("Marked as reached join point");
+/** GET /ride-ops/rides/:rideId/participants */
+export const fetchRideParticipants = mkThunk(
+  "operations/fetchRideParticipants",
+  async ({ rideId }) => {
+    const { data } = await API.get(`${RIDE_OPS}/rides/${rideId}/participants`);
     return data.data;
-  },
+  }
+);
+
+/** POST /ride-ops/rides/:rideId/participants */
+export const assignRideParticipant = mkThunk(
+  "operations/assignRideParticipant",
+  async ({ rideId, role, refModel, refId, joinMode, snapshot, reason }) => {
+    const { data } = await API.post(
+      `${RIDE_OPS}/rides/${rideId}/participants`,
+      { role, refModel, refId, joinMode, snapshot, reason }
+    );
+    toast.success("Participant assigned");
+    return data.data;
+  }
+);
+
+/** GET /ride-ops/rides/:rideId/participants/:participantId */
+export const fetchRideParticipant = mkThunk(
+  "operations/fetchRideParticipant",
+  async ({ rideId, participantId }) => {
+    const { data } = await API.get(
+      `${RIDE_OPS}/rides/${rideId}/participants/${participantId}`
+    );
+    return data.data;
+  }
+);
+
+/** PATCH /ride-ops/rides/:rideId/participants/:participantId/status */
+export const updateParticipantStatus = mkThunk(
+  "operations/updateParticipantStatus",
+  async ({ rideId, participantId, status, lat, lng }) => {
+    const { data } = await API.patch(
+      `${RIDE_OPS}/rides/${rideId}/participants/${participantId}/status`,
+      { status, lat, lng }
+    );
+    return data.data;
+  }
+);
+
+/** DELETE /ride-ops/rides/:rideId/participants/:participantId */
+export const removeRideParticipant = mkThunk(
+  "operations/removeRideParticipant",
+  async ({ rideId, participantId, reason }) => {
+    const { data } = await API.delete(
+      `${RIDE_OPS}/rides/${rideId}/participants/${participantId}`,
+      { data: { reason } }
+    );
+    toast.success("Participant removed");
+    return data;
+  }
+);
+
+// ── Join Points ───────────────────────────────────────────────────────────────
+
+/**
+ * POST /ride-ops/admin/bookings/:bookingId/join-point
+ * Admin calculates + locks CA join point on active ride.
+ */
+export const adminCalculateJoinPoint = mkThunk(
+  "operations/adminCalculateJoinPoint",
+  async ({ bookingId, careAssistantId, caCurrentLat, caCurrentLng }) => {
+    const { data } = await API.post(
+      `${RIDE_OPS}/admin/bookings/${bookingId}/join-point`,
+      { careAssistantId, caCurrentLat, caCurrentLng }
+    );
+    toast.success("Join point calculated");
+    return data.data;
+  }
 );
 
 /**
- * PATCH /ride-requests/:rideId/status  { action: 'complete_waypoint', waypointType }
- * Driver marks CA join waypoint as completed (CA boarded vehicle).
- * NOTE: lives on a separate ride-requests router, not bookingRouter — kept
- * as-is, not part of the two booking router files being reconciled here.
+ * POST /ride-ops/admin/bookings/:bookingId/join-point/recalc
+ * Admin recalculates JP after MISSED event.
  */
+export const adminRecalcJoinPoint = mkThunk(
+  "operations/adminRecalcJoinPoint",
+  async ({ bookingId, careAssistantId, caCurrentLat, caCurrentLng, reason }) => {
+    const { data } = await API.post(
+      `${RIDE_OPS}/admin/bookings/${bookingId}/join-point/recalc`,
+      { careAssistantId, caCurrentLat, caCurrentLng, reason }
+    );
+    toast.success("Join point recalculated");
+    return data.data;
+  }
+);
+
+/** GET /ride-ops/rides/:rideId/join-points */
+export const fetchRideJoinPoints = mkThunk(
+  "operations/fetchRideJoinPoints",
+  async ({ rideId }) => {
+    const { data } = await API.get(`${RIDE_OPS}/rides/${rideId}/join-points`);
+    return data.data;
+  }
+);
+
+/** PATCH /ride-ops/rides/:rideId/join-points/:jpId/status */
+export const updateJoinPointStatus = mkThunk(
+  "operations/updateJoinPointStatus",
+  async ({ rideId, jpId, status, lat, lng }) => {
+    const { data } = await API.patch(
+      `${RIDE_OPS}/rides/${rideId}/join-points/${jpId}/status`,
+      { status, lat, lng }
+    );
+    return data.data;
+  }
+);
+
+// ── Ride Stops ────────────────────────────────────────────────────────────────
+
+/** GET /ride-ops/rides/:rideId/stops */
+export const fetchRideStops = mkThunk(
+  "operations/fetchRideStops",
+  async ({ rideId }) => {
+    const { data } = await API.get(`${RIDE_OPS}/rides/${rideId}/stops`);
+    return data.data;
+  }
+);
+
+/** GET /ride-ops/rides/:rideId/stops/:stopId */
+export const fetchRideStop = mkThunk(
+  "operations/fetchRideStop",
+  async ({ rideId, stopId }) => {
+    const { data } = await API.get(
+      `${RIDE_OPS}/rides/${rideId}/stops/${stopId}`
+    );
+    return data.data;
+  }
+);
+
+/** PATCH /ride-ops/rides/:rideId/stops/:stopId/otp */
+export const verifyStopOtp = mkThunk(
+  "operations/verifyStopOtp",
+  async ({ rideId, stopId, otp }) => {
+    const { data } = await API.patch(
+      `${RIDE_OPS}/rides/${rideId}/stops/${stopId}/otp`,
+      { otp }
+    );
+    toast.success("OTP verified");
+    return data.data;
+  }
+);
+
+/** PATCH /ride-ops/rides/:rideId/stops/:stopId/status */
+export const updateStopStatus = mkThunk(
+  "operations/updateStopStatus",
+  async ({ rideId, stopId, status, lat, lng }) => {
+    const { data } = await API.patch(
+      `${RIDE_OPS}/rides/${rideId}/stops/${stopId}/status`,
+      { status, lat, lng }
+    );
+    return data.data;
+  }
+);
+
+// ── Route Versions ────────────────────────────────────────────────────────────
+
+/** GET /ride-ops/rides/:rideId/route-versions */
+export const fetchRouteVersions = mkThunk(
+  "operations/fetchRouteVersions",
+  async ({ rideId }) => {
+    const { data } = await API.get(
+      `${RIDE_OPS}/rides/${rideId}/route-versions`
+    );
+    return data.data;
+  }
+);
+
+/** GET /ride-ops/rides/:rideId/route-versions/active */
+export const fetchActiveRouteVersion = mkThunk(
+  "operations/fetchActiveRouteVersion",
+  async ({ rideId }) => {
+    const { data } = await API.get(
+      `${RIDE_OPS}/rides/${rideId}/route-versions/active`
+    );
+    return data.data;
+  }
+);
+
+// ── SOS  (rideOperationsRouter) ───────────────────────────────────────────────
+
+/** POST /ride-ops/bookings/:bookingId/sos — any participant triggers SOS */
+export const triggerBookingSos = mkThunk(
+  "operations/triggerBookingSos",
+  async ({ bookingId, sosType, description, lat, lng, rideId }) => {
+    const { data } = await API.post(
+      `${RIDE_OPS}/bookings/${bookingId}/sos`,
+      { sosType, description, lat, lng, rideId }
+    );
+    toast.error("SOS triggered — admin notified");
+    return data.data;
+  }
+);
+
+/** GET /ride-ops/bookings/:bookingId/sos */
+export const fetchBookingSosEvents = mkThunk(
+  "operations/fetchBookingSosEvents",
+  async ({ bookingId }) => {
+    const { data } = await API.get(`${RIDE_OPS}/bookings/${bookingId}/sos`);
+    return data.data;
+  }
+);
+
+/** PATCH /ride-ops/sos/:sosId/resolve */
+export const resolveRideOpsSos = mkThunk(
+  "operations/resolveRideOpsSos",
+  async ({ sosId, resolutionNotes }) => {
+    const { data } = await API.patch(`${RIDE_OPS}/sos/${sosId}/resolve`, {
+      resolutionNotes,
+    });
+    toast.success("SOS resolved");
+    return data.data;
+  }
+);
+
+/**
+ * GET /ride-ops/admin/sos/active — paginated version (rideOperationsRouter).
+ * Distinct from fetchAdminActiveSos (bookingRouter2 — no pagination).
+ */
+export const fetchAdminActiveSosPaginated = mkThunk(
+  "operations/fetchAdminActiveSosPaginated",
+  async ({ sosType, page = 1, limit = 20 } = {}) => {
+    const { data } = await API.get(`${RIDE_OPS}/admin/sos/active`, {
+      params: { sosType, page, limit },
+    });
+    return data.data;
+  }
+);
+
+// ── Destination (rideOperationsRouter version) ────────────────────────────────
+
+/**
+ * PATCH /ride-ops/admin/bookings/:bookingId/destination
+ * rideOperationsRouter version — requires destinationLockedAt (driver accepted).
+ * Body: { newLng, newLat, newAddress, reason }
+ * Different from adminChangeDestination (bookingRouter2) which uses newDestination object.
+ */
+export const rideOpsChangeDestination = mkThunk(
+  "operations/rideOpsChangeDestination",
+  async ({ bookingId, newLng, newLat, newAddress, reason }) => {
+    const { data } = await API.patch(
+      `${RIDE_OPS}/admin/bookings/${bookingId}/destination`,
+      { newLng, newLat, newAddress, reason }
+    );
+    toast.success("Destination updated — route recalculated");
+    return data.data;
+  }
+);
+
+/** GET /ride-ops/admin/bookings/:bookingId/destination-history */
+export const fetchDestinationHistory = mkThunk(
+  "operations/fetchDestinationHistory",
+  async ({ bookingId }) => {
+    const { data } = await API.get(
+      `${RIDE_OPS}/admin/bookings/${bookingId}/destination-history`
+    );
+    return data.data;
+  }
+);
+
+// ── Assignment History ────────────────────────────────────────────────────────
+
+/** GET /ride-ops/rides/:rideId/assignment-history */
+export const fetchRideAssignmentHistory = mkThunk(
+  "operations/fetchRideAssignmentHistory",
+  async ({ rideId }) => {
+    const { data } = await API.get(
+      `${RIDE_OPS}/rides/${rideId}/assignment-history`
+    );
+    return data.data;
+  }
+);
+
+/** GET /ride-ops/bookings/:bookingId/assignment-history */
+export const fetchBookingAssignmentHistory = mkThunk(
+  "operations/fetchBookingAssignmentHistory",
+  async ({ bookingId }) => {
+    const { data } = await API.get(
+      `${RIDE_OPS}/bookings/${bookingId}/assignment-history`
+    );
+    return data.data;
+  }
+);
+
+// ── Driver waypoint (existing, kept) ─────────────────────────────────────────
+
 export const driverCompleteWaypoint = mkThunk(
   "operations/driverCompleteWaypoint",
   async ({ rideId, waypointType = "care_assistant_join" }) => {
@@ -1079,12 +1308,124 @@ export const driverCompleteWaypoint = mkThunk(
     });
     toast.success("Waypoint completed");
     return data.data;
-  },
+  }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// THUNKS — SOCKET
+// ═════════════════════════════════════════════════════════════════════════════
+
+export const joinBookingRoom = createAsyncThunk(
+  "operations/joinBookingRoom",
+  ({ bookingId }) => {
+    socketService.joinBookingRoom(bookingId);
+    return { bookingId };
+  }
+);
+
+export const leaveBookingRoom = createAsyncThunk(
+  "operations/leaveBookingRoom",
+  ({ bookingId }) => {
+    socketService.leaveBookingRoom(bookingId);
+    return { bookingId };
+  }
+);
+
+export const joinTpRoom = createAsyncThunk(
+  "operations/joinTpRoom",
+  ({ tpId }) => {
+    socketService.joinTpRoom(tpId);
+    return { tpId };
+  }
+);
+
+export const leaveTpRoom = createAsyncThunk(
+  "operations/leaveTpRoom",
+  ({ tpId }) => {
+    socketService.leaveTpRoom(tpId);
+    return { tpId };
+  }
+);
+
+export const verifyOtpSocket = mkThunk(
+  "operations/verifyOtpSocket",
+  async ({ bookingId, rideId, otp }) => {
+    const result = await socketService.verifyOtpAsync({ bookingId, rideId, otp });
+    toast.success("OTP verified — ride started");
+    return result;
+  }
+);
+
+export const updateDriverStatusSocket = createAsyncThunk(
+  "operations/updateDriverStatusSocket",
+  ({ bookingId, rideId, status, lat, lng, meta }) => {
+    socketService.updateDriverStatus({ bookingId, rideId, status, lat, lng, meta });
+    return { bookingId, rideId, status };
+  }
+);
+
+export const startGpsTracking = createAsyncThunk(
+  "operations/startGpsTracking",
+  ({ bookingId } = {}) => {
+    socketService.startGpsTracking({ bookingId });
+    return { tracking: true };
+  }
+);
+
+export const stopGpsTracking = createAsyncThunk(
+  "operations/stopGpsTracking",
+  () => {
+    socketService.stopGpsTracking();
+    return { tracking: false };
+  }
+);
+
+export const startCareGpsTracking = createAsyncThunk(
+  "operations/startCareGpsTracking",
+  ({ bookingId, status } = {}) => {
+    socketService.startCareGpsTracking({ bookingId, status });
+    return { tracking: true };
+  }
+);
+
+export const stopCareGpsTracking = createAsyncThunk(
+  "operations/stopCareGpsTracking",
+  () => {
+    socketService.stopCareGpsTracking();
+    return { tracking: false };
+  }
+);
+
+export const triggerSos = createAsyncThunk(
+  "operations/triggerSos",
+  ({ bookingId, rideId, lat, lng, sosType = "other", description }) => {
+    socketService.triggerSos({ bookingId, rideId, lat, lng, sosType, description });
+    toast.error("SOS triggered — help notified");
+    return { bookingId, rideId, sosType };
+  }
+);
+
+export const reportRouteDeviation = createAsyncThunk(
+  "operations/reportRouteDeviation",
+  ({ bookingId, rideId, lat, lng, deviationKm, driverReason }) => {
+    socketService.reportRouteDeviation({
+      bookingId, rideId, lat, lng, deviationKm, driverReason,
+    });
+    return { bookingId, rideId, deviationKm };
+  }
+);
+
+export const requestBookingState = mkThunk(
+  "operations/requestBookingState",
+  async ({ bookingId }) => {
+    const snapshot = await socketService.requestBookingStateAsync(bookingId);
+    return snapshot;
+  }
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
 // SLICE
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
 
 const key = (type) => type.split("/")[1];
 
@@ -1093,7 +1434,6 @@ const operationsSlice = createSlice({
   initialState,
 
   reducers: {
-    // Merge into careRideStatus object — never replace with string
     setCareRideWorkflow(state, { payload }) {
       state.careRideStatus = {
         ...state.careRideStatus,
@@ -1176,6 +1516,11 @@ const operationsSlice = createSlice({
       state.navigationTarget = null;
       state.sosAlert = null;
       state.routeDeviation = null;
+      state.rideParticipants = [];
+      state.rideStops = [];
+      state.rideJoinPoints = [];
+      state.destinationAudit = [];
+      state.bookingAssignmentHistory = [];
     },
 
     clearSelectedOp(state) {
@@ -1221,7 +1566,6 @@ const operationsSlice = createSlice({
       state.consultationChat = [];
     },
 
-    // Socket-pushed consultation events (connect via socketService listener)
     setConsultationFromSocket(state, { payload }) {
       if (state.consultation?._id === payload?._id || !state.consultation) {
         state.consultation = { ...(state.consultation ?? {}), ...payload };
@@ -1229,21 +1573,15 @@ const operationsSlice = createSlice({
     },
 
     appendConsultationChatMessage(state, { payload }) {
-      // payload = chat message object from socket chat_message event
       state.consultationChat = [...state.consultationChat, payload];
     },
 
-    // CA reached join point — update local status
-    setCaAtJoinPoint(state, { payload }) {
-      state.careRideStatus = {
-        ...state.careRideStatus,
-        status: "at_pickup",
-      };
+    setCaAtJoinPoint(state) {
+      state.careRideStatus = { ...state.careRideStatus, status: "at_pickup" };
       state.caAtJoinPoint = true;
     },
 
-    // CA joined ride — switch view mode
-    setCaHasJoined(state, { payload }) {
+    setCaHasJoined(state) {
       state.caHasJoined = true;
       state.caViewMode = "driver_tracking_only";
       state.caAtJoinPoint = false;
@@ -1252,7 +1590,6 @@ const operationsSlice = createSlice({
         status: "in_ride",
         careAssistantJoined: true,
       };
-      // Update waypoint as completed in snapshot
       if (state.careTrackingSnapshot?.route?.caJoinWaypoint) {
         state.careTrackingSnapshot.route.caJoinWaypoint.isCompleted = true;
         state.careTrackingSnapshot.route.caJoinWaypoint.completedAt =
@@ -1260,7 +1597,6 @@ const operationsSlice = createSlice({
       }
     },
 
-    // JP waypoint completed by driver (CA boarded)
     setJpWaypointCompleted(state, { payload }) {
       if (state.caJoinPoint) {
         state.caJoinPoint = {
@@ -1276,9 +1612,17 @@ const operationsSlice = createSlice({
       }
     },
 
-    // Set CA view mode explicitly
     setCaViewMode(state, { payload }) {
       state.caViewMode = payload;
+    },
+
+    // Socket-pushed ride stop/JP events
+    setRideStopsFromSocket(state, { payload }) {
+      if (payload?.stops) state.rideStops = payload.stops;
+    },
+
+    setParticipantsFromSocket(state, { payload }) {
+      if (payload?.participants) state.rideParticipants = payload.participants;
     },
 
     // ── CA socket reducers ──────────────────────────────────────────────────
@@ -1290,7 +1634,6 @@ const operationsSlice = createSlice({
       }
     },
 
-    // Patch careRideStatus.status only — never replace whole object
     setCareAssistantStatus(state, { payload }) {
       state.careAssistantStatus = payload;
       if (payload?.careAssistantStatus) {
@@ -1322,7 +1665,6 @@ const operationsSlice = createSlice({
       }
     },
 
-    // Restore careRideStatus to initial OBJECT — never null
     clearCareRideState(state) {
       state.careTrackingSnapshot = null;
       state.careAssistantLocation = null;
@@ -1368,12 +1710,11 @@ const operationsSlice = createSlice({
       if (state.selectedBooking && payload?.ride)
         state.selectedBooking.primaryRide = payload.ride;
     });
-    wire(tpReassignDriver, (state) => {});
+    wire(tpReassignDriver, () => {});
 
     // ── Consultation ────────────────────────────────────────────────────────
     wire(fetchConsultation, (state, { payload }) => {
       state.consultation = payload?.consultation ?? null;
-      // Seed chat messages if present in consultation
       if (payload?.consultation?.chatMessages) {
         state.consultationChat = payload.consultation.chatMessages;
       }
@@ -1391,8 +1732,6 @@ const operationsSlice = createSlice({
       state.consultation = payload?.consultation ?? state.consultation;
     });
     wire(submitConsultationConsent, (state, { payload }) => {
-      // payload = { consentType, accepted }
-      // Sync quick flag on local consultation doc
       if (state.consultation) {
         if (payload?.consentType === "telemedicine") {
           state.consultation.telemedicineConsentAccepted =
@@ -1409,17 +1748,31 @@ const operationsSlice = createSlice({
         state.consultationChat = [...state.consultationChat, payload.message];
       }
     });
-
-    // Care reached join point
-    wire(careReachedJoinPoint, (state) => {
-      state.caAtJoinPoint = true;
-      state.careRideStatus = {
-        ...state.careRideStatus,
-        status: "at_pickup",
-      };
+    wire(fetchConsultationJoinToken, (state, { payload }) => {
+      state.consultationJoinToken = payload ?? null;
     });
 
-    // Driver complete waypoint
+    // ── Care Assistant ──────────────────────────────────────────────────────
+    wire(fetchCareAssignedBookings, (state, { payload }) => {
+      state.careAssignedBookings = payload?.bookings ?? [];
+    });
+    wire(markCareArrived, () => {});
+    wire(markCareStart, (state) => {
+      if (state.selectedBooking) state.selectedBooking.status = "in_progress";
+    });
+    wire(markCareComplete, (state) => {
+      if (state.selectedBooking) state.selectedBooking.status = "completed";
+    });
+    wire(updateCareLocation, () => {});
+    wire(careRequestRide, (state, { payload }) => {
+      if (payload?.rideId) state.activeRide = payload;
+    });
+
+    wire(careReachedJoinPoint, (state) => {
+      state.caAtJoinPoint = true;
+      state.careRideStatus = { ...state.careRideStatus, status: "at_pickup" };
+    });
+
     wire(driverCompleteWaypoint, (state, { payload }) => {
       if (payload?.jpCompleted && state.caJoinPoint) {
         state.caJoinPoint = {
@@ -1429,27 +1782,8 @@ const operationsSlice = createSlice({
         };
       }
     });
-    wire(fetchConsultationJoinToken, (state, { payload }) => {
-      state.consultationJoinToken = payload ?? null;
-    });
 
-    // ── Care Assistant ──────────────────────────────────────────────────────
-    wire(fetchCareAssignedBookings, (state, { payload }) => {
-      state.careAssignedBookings = payload?.bookings ?? [];
-    });
-    wire(markCareArrived, (state) => {});
-    wire(markCareStart, (state) => {
-      if (state.selectedBooking) state.selectedBooking.status = "in_progress";
-    });
-    wire(markCareComplete, (state) => {
-      if (state.selectedBooking) state.selectedBooking.status = "completed";
-    });
-    wire(updateCareLocation, (state) => {});
-    wire(careRequestRide, (state, { payload }) => {
-      if (payload?.rideId) state.activeRide = payload;
-    });
-
-    // POST /:id/care/join-ride — CA attaches to tracking, keeps own nav view
+    // POST /:id/care/join-ride
     wire(careJoinRide, (state, { payload }) => {
       state.caHasJoined = true;
       state.caViewMode = "driver_tracking_only";
@@ -1468,8 +1802,7 @@ const operationsSlice = createSlice({
       }
     });
 
-    // PATCH /:id/care/join-ride — distinct route, CA boards mid-ride and
-    // is switched straight to driver-tracking-only mode by the backend.
+    // PATCH /:id/care/join-ride
     wire(caJoinRideAndTrackDriver, (state, { payload }) => {
       state.caHasJoined = true;
       state.caViewMode = payload?.caViewMode || "driver_tracking_only";
@@ -1481,7 +1814,11 @@ const operationsSlice = createSlice({
       };
       if (payload?.jpCompleted) {
         state.caJoinPoint = state.caJoinPoint
-          ? { ...state.caJoinPoint, isCompleted: true, completedAt: new Date().toISOString() }
+          ? {
+              ...state.caJoinPoint,
+              isCompleted: true,
+              completedAt: new Date().toISOString(),
+            }
           : state.caJoinPoint;
         if (state.careTrackingSnapshot?.route?.caJoinWaypoint) {
           state.careTrackingSnapshot.route.caJoinWaypoint.isCompleted = true;
@@ -1498,10 +1835,7 @@ const operationsSlice = createSlice({
 
     wire(careUpdateRideStatus, (state, { payload }) => {
       if (payload?.status) {
-        state.careRideStatus = {
-          ...state.careRideStatus,
-          status: payload.status,
-        };
+        state.careRideStatus = { ...state.careRideStatus, status: payload.status };
       }
       if (state.careTrackingSnapshot?.careAssistant && payload?.status) {
         state.careTrackingSnapshot.careAssistant.status = payload.status;
@@ -1537,7 +1871,7 @@ const operationsSlice = createSlice({
     wire(fetchHospitalUpcoming, (state, { payload }) => {
       state.hospitalUpcoming = payload?.bookings ?? [];
     });
-    wire(hospitalConfirmBooking, (state) => {});
+    wire(hospitalConfirmBooking, () => {});
     wire(fetchHospitalOps, (state, { payload }) => {
       state.hospitalOps = payload?.ops ?? [];
       state.hospitalOpsMeta = {
@@ -1580,7 +1914,7 @@ const operationsSlice = createSlice({
     wire(fetchOpFollowUps, (state, { payload }) => {
       state.selectedFollowUps = payload?.followUps ?? [];
     });
-    wire(downloadOpCard, (state) => {});
+    wire(downloadOpCard, () => {});
 
     // ── Driver ──────────────────────────────────────────────────────────────
     wire(fetchDriverAssignedRides, (state, { payload }) => {
@@ -1591,17 +1925,42 @@ const operationsSlice = createSlice({
       state.activeRide = payload?.ride ?? null;
       if (payload?.ride) {
         state.driverAssignedRides = state.driverAssignedRides.map((r) =>
-          r._id === payload.ride._id ? { ...r, ...payload.ride } : r,
+          r._id === payload.ride._id ? { ...r, ...payload.ride } : r
         );
       }
     });
-    wire(rejectRide, (state) => {});
-    wire(markDriverArrived, (state) => {});
+    wire(rejectRide, () => {});
+    wire(markDriverArrived, () => {});
+    wire(verifyRideOtp, (state, { payload }) => {
+      state.otpResult = payload ?? null;
+      if (payload?.rideId) {
+        state.driverAssignedRides = state.driverAssignedRides.map((r) =>
+          r._id === payload.rideId ? { ...r, status: "otp_verified" } : r
+        );
+      }
+    });
+    wire(markArrivedStop, (state, { payload }) => {
+      if (payload?.stopId && state.rideStops.length) {
+        state.rideStops = state.rideStops.map((s) =>
+          s.stopId === payload.stopId ? { ...s, status: "ARRIVED" } : s
+        );
+      }
+    });
+    wire(departStop, (state, { payload }) => {
+      if (payload?.stopId && state.rideStops.length) {
+        state.rideStops = state.rideStops.map((s) =>
+          s.stopId === payload.stopId ? { ...s, status: "COMPLETED" } : s
+        );
+      }
+    });
     wire(endRide, (state, { payload }) => {
       state.activeRide = null;
       if (payload?.booking) state.selectedBooking = payload.booking;
     });
-    wire(updateDriverLocationHttp, (state) => {});
+    wire(updateDriverLocationHttp, () => {});
+    wire(driverTriggerSos, (state, { payload }) => {
+      state.sosAlert = payload ?? null;
+    });
 
     // ── Customer ────────────────────────────────────────────────────────────
     wire(customerRequestRide, (state, { payload }) => {
@@ -1620,13 +1979,16 @@ const operationsSlice = createSlice({
     wire(fetchAdminBookingStats, (state, { payload }) => {
       state.adminStats = payload ?? null;
     });
-    wire(exportAdminBookings, (state) => {});
+    wire(exportAdminBookings, () => {});
     wire(fetchAdminBookingById, (state, { payload }) => {
       state.selectedBooking = payload?.booking ?? null;
       if (payload?.opRecord) state.selectedOp = payload.opRecord;
       if (payload?.followUps) state.selectedFollowUps = payload.followUps;
-      // Seed consultation from admin detail fetch (backend returns it)
       if (payload?.consultation) state.consultation = payload.consultation;
+      // Seed rideStops + participants from admin detail response
+      if (payload?.rideStops) state.rideStops = payload.rideStops;
+      if (payload?.participants) state.rideParticipants = payload.participants;
+      if (payload?.joinPoints) state.rideJoinPoints = payload.joinPoints;
     });
     wire(updateAdminBookingStatus, (state, { payload }) => {
       state.adminStatusUpdate = payload ?? null;
@@ -1634,8 +1996,13 @@ const operationsSlice = createSlice({
       state.adminBookings = state.adminBookings.map((b) =>
         b._id === payload?.booking?._id
           ? { ...b, status: payload.booking.status }
-          : b,
+          : b
       );
+    });
+    wire(adminChangeDestination, (state, { payload }) => {
+      if (state.selectedBooking && payload?.booking) {
+        state.selectedBooking = { ...state.selectedBooking, ...payload.booking };
+      }
     });
 
     // ── Admin Nearby ────────────────────────────────────────────────────────
@@ -1656,27 +2023,17 @@ const operationsSlice = createSlice({
     wire(adminAssignSoloDriver, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
       if (state.selectedBooking && payload?.booking)
-        state.selectedBooking = {
-          ...state.selectedBooking,
-          ...payload.booking,
-        };
+        state.selectedBooking = { ...state.selectedBooking, ...payload.booking };
     });
     wire(adminAssignTransportPartner, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
       if (state.selectedBooking && payload?.booking)
-        state.selectedBooking = {
-          ...state.selectedBooking,
-          ...payload.booking,
-        };
+        state.selectedBooking = { ...state.selectedBooking, ...payload.booking };
     });
-    // Handle new { booking, caJoinPoint } shape from backend
     wire(adminAssignCareAssistant, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
       if (state.selectedBooking && payload?.booking)
-        state.selectedBooking = {
-          ...state.selectedBooking,
-          ...payload.booking,
-        };
+        state.selectedBooking = { ...state.selectedBooking, ...payload.booking };
       if (payload?.caJoinPoint) {
         state.caJoinPoint = payload.caJoinPoint;
         if (state.careTrackingSnapshot?.route) {
@@ -1687,13 +2044,9 @@ const operationsSlice = createSlice({
     wire(adminAssignHospital, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
       if (state.selectedBooking && payload?.booking)
-        state.selectedBooking = {
-          ...state.selectedBooking,
-          ...payload.booking,
-        };
+        state.selectedBooking = { ...state.selectedBooking, ...payload.booking };
     });
-    // NOTE: adminReassignDriver has no backing route (see thunk comment above).
-    // Wired only to avoid dead-case errors if something still dispatches it.
+    // No backend route — wired to avoid dead cases
     wire(adminReassignDriver, (state, { payload }) => {
       state.adminAssignment = payload ?? null;
       state.activeRide = payload?.ride ?? null;
@@ -1707,7 +2060,7 @@ const operationsSlice = createSlice({
       state.adminBookings = state.adminBookings.map((b) =>
         b._id === payload?.booking?._id
           ? { ...b, status: "refunded", paymentStatus: "refunded" }
-          : b,
+          : b
       );
     });
 
@@ -1725,31 +2078,240 @@ const operationsSlice = createSlice({
       state.adminOpStatusUpdate = updated ?? null;
       if (updated) {
         state.adminOps = state.adminOps.map((o) =>
-          o._id === updated._id ? { ...o, status: updated.status } : o,
+          o._id === updated._id ? { ...o, status: updated.status } : o
         );
         if (state.selectedOp?._id === updated._id)
           state.selectedOp = { ...state.selectedOp, ...updated };
       }
     });
 
+    // ── Admin SOS ───────────────────────────────────────────────────────────
+    wire(fetchAdminActiveSos, (state, { payload }) => {
+      state.adminActiveSos = payload?.events ?? [];
+      state.adminActiveSosMeta = {
+        total: payload?.total ?? 0,
+        page: 1,
+        pages: 1,
+      };
+    });
+    wire(resolveAdminSos, (state, { payload }) => {
+      const id = payload?.sosEvent?._id;
+      if (id) {
+        state.adminActiveSos = state.adminActiveSos.filter(
+          (e) => e._id !== id
+        );
+      }
+    });
+    wire(fetchAdminDestinationAudit, (state, { payload }) => {
+      state.destinationAudit = payload?.audits ?? [];
+    });
+
     // ── Admin Care-Ride ─────────────────────────────────────────────────────
     wire(adminRequestCareRide, (state, { payload }) => {
       state.activeRide = payload ?? null;
       state.careRideNearby = payload
-        ? { nearbyDrivers: payload.nearbyDrivers, nearbyTPs: payload.nearbyTPs }
+        ? {
+            nearbyDrivers: payload.nearbyDrivers,
+            nearbyTPs: payload.nearbyTPs,
+          }
         : null;
     });
     wire(fetchAdminCareRideNearby, (state, { payload }) => {
       state.careRideNearby = payload ?? null;
     });
 
+    // ── Ride Operations Router ──────────────────────────────────────────────
+
+    // Participants
+    wire(fetchRideParticipants, (state, { payload }) => {
+      state.rideParticipants = payload?.participants ?? [];
+    });
+    wire(assignRideParticipant, (state, { payload }) => {
+      if (payload?.participant) {
+        state.rideParticipants = [
+          ...state.rideParticipants.filter(
+            (p) => p._id !== payload.participant._id
+          ),
+          payload.participant,
+        ];
+      }
+    });
+    wire(fetchRideParticipant, (state, { payload }) => {
+      // Update single participant in list
+      if (payload?.participant) {
+        const idx = state.rideParticipants.findIndex(
+          (p) => p._id === payload.participant._id
+        );
+        if (idx >= 0) {
+          state.rideParticipants[idx] = {
+            ...state.rideParticipants[idx],
+            ...payload.participant,
+            liveLocation: payload.liveLocation ?? null,
+          };
+        }
+      }
+    });
+    wire(updateParticipantStatus, (state, { payload }) => {
+      if (payload?.participant) {
+        state.rideParticipants = state.rideParticipants.map((p) =>
+          p._id === payload.participant._id
+            ? { ...p, status: payload.participant.status }
+            : p
+        );
+      }
+    });
+    wire(removeRideParticipant, (state, action) => {
+      // Soft remove — mark inactive locally (server sets isActive=false)
+      const participantId = action.meta?.arg?.participantId;
+      if (participantId) {
+        state.rideParticipants = state.rideParticipants.filter(
+          (p) => p._id !== participantId
+        );
+      }
+    });
+
+    // Join Points
+    wire(adminCalculateJoinPoint, (state, { payload }) => {
+      if (payload?.joinPoint) {
+        state.caJoinPoint = payload.joinPoint;
+        state.rideJoinPoints = [...state.rideJoinPoints, payload.joinPoint];
+        if (state.careTrackingSnapshot?.route) {
+          state.careTrackingSnapshot.route.caJoinWaypoint = payload.joinPoint;
+        }
+      }
+    });
+    wire(adminRecalcJoinPoint, (state, { payload }) => {
+      if (payload?.joinPoint) {
+        state.caJoinPoint = payload.joinPoint;
+        state.rideJoinPoints = [...state.rideJoinPoints, payload.joinPoint];
+        if (state.careTrackingSnapshot?.route) {
+          state.careTrackingSnapshot.route.caJoinWaypoint = payload.joinPoint;
+        }
+      }
+      // Sync new stop into rideStops
+      if (payload?.newStopId && state.rideStops.length) {
+        state.rideStops = state.rideStops.filter(
+          (s) => s.stopType !== "CARE_ASSISTANT_JOIN"
+        );
+      }
+    });
+    wire(fetchRideJoinPoints, (state, { payload }) => {
+      state.rideJoinPoints = payload?.joinPoints ?? [];
+    });
+    wire(updateJoinPointStatus, (state, { payload }) => {
+      if (payload?.joinPoint) {
+        state.rideJoinPoints = state.rideJoinPoints.map((jp) =>
+          jp._id === payload.joinPoint._id
+            ? { ...jp, status: payload.joinPoint.status }
+            : jp
+        );
+        if (state.caJoinPoint?._id === payload.joinPoint._id) {
+          state.caJoinPoint = { ...state.caJoinPoint, ...payload.joinPoint };
+        }
+      }
+    });
+
+    // Ride Stops
+    wire(fetchRideStops, (state, { payload }) => {
+      state.rideStops = payload?.stops ?? [];
+    });
+    wire(fetchRideStop, (state, { payload }) => {
+      if (payload?.stop) {
+        const idx = state.rideStops.findIndex(
+          (s) => s._id === payload.stop._id
+        );
+        if (idx >= 0) state.rideStops[idx] = payload.stop;
+        else state.rideStops = [...state.rideStops, payload.stop];
+      }
+    });
+    wire(verifyStopOtp, () => {});
+    wire(updateStopStatus, (state, { payload }) => {
+      if (payload?.stop) {
+        state.rideStops = state.rideStops.map((s) =>
+          s._id === payload.stop._id
+            ? { ...s, status: payload.stop.status }
+            : s
+        );
+      }
+    });
+
+    // Route Versions
+    wire(fetchRouteVersions, (state, { payload }) => {
+      state.rideRouteVersions = payload?.versions ?? [];
+    });
+    wire(fetchActiveRouteVersion, (state, { payload }) => {
+      state.activeRouteVersion = payload ?? null;
+      // Sync stops from active version response
+      if (payload?.stops) state.rideStops = payload.stops;
+    });
+
+    // SOS (rideOperationsRouter)
+    wire(triggerBookingSos, (state, { payload }) => {
+      state.sosAlert = payload ?? null;
+    });
+    wire(fetchBookingSosEvents, (state, { payload }) => {
+      state.bookingSosEvents = payload?.events ?? [];
+    });
+    wire(resolveRideOpsSos, (state, { payload }) => {
+      const id = payload?.sos?._id;
+      if (id) {
+        state.bookingSosEvents = state.bookingSosEvents.map((e) =>
+          e._id === id ? { ...e, isResolved: true } : e
+        );
+        state.adminActiveSos = state.adminActiveSos.filter((e) => e._id !== id);
+      }
+    });
+    wire(fetchAdminActiveSosPaginated, (state, { payload }) => {
+      state.adminActiveSos = payload?.events ?? [];
+      state.adminActiveSosMeta = {
+        total: payload?.total ?? 0,
+        page: payload?.page ?? 1,
+        pages: payload?.pages ?? 1,
+      };
+    });
+
+    // Destination (rideOps version)
+    wire(rideOpsChangeDestination, (state, { payload }) => {
+      if (state.selectedBooking && payload?.audit?.newDestination) {
+        state.selectedBooking.destinationLocation =
+          payload.audit.newDestination;
+      }
+      state.destinationAudit = [
+        payload?.audit ?? {},
+        ...state.destinationAudit,
+      ];
+      if (payload?.newRouteVersion) {
+        state.activeRouteVersion = payload.newRouteVersion;
+        state.rideRouteVersions = [
+          ...state.rideRouteVersions.filter(
+            (v) => v._id !== payload.newRouteVersion._id
+          ),
+          payload.newRouteVersion,
+        ];
+      }
+    });
+    wire(fetchDestinationHistory, (state, { payload }) => {
+      state.destinationAudit = payload?.history ?? [];
+    });
+
+    // Assignment History
+    wire(fetchRideAssignmentHistory, (state, { payload }) => {
+      state.rideAssignmentHistory = payload?.history ?? [];
+    });
+    wire(fetchBookingAssignmentHistory, (state, { payload }) => {
+      state.bookingAssignmentHistory = payload?.history ?? [];
+    });
+
     // ── Socket Thunks ───────────────────────────────────────────────────────
-    wire(joinBookingRoom, (state) => {});
-    wire(leaveBookingRoom, (state) => {});
-    wire(joinTpRoom, (state) => {});
-    wire(leaveTpRoom, (state) => {});
+    wire(joinBookingRoom, () => {});
+    wire(leaveBookingRoom, () => {});
+    wire(joinTpRoom, () => {});
+    wire(leaveTpRoom, () => {});
     wire(verifyOtpSocket, (state, { payload }) => {
       state.otpResult = payload ?? null;
+    });
+    wire(requestBookingState, (state, { payload }) => {
+      state.bookingSnapshot = payload ?? null;
     });
 
     builder
@@ -1762,16 +2324,18 @@ const operationsSlice = createSlice({
       .addCase(stopGpsTracking.fulfilled, (state) => {
         state.gpsTracking = false;
       })
+      .addCase(startCareGpsTracking.fulfilled, (state) => {
+        state.gpsTracking = true;
+      })
+      .addCase(stopCareGpsTracking.fulfilled, (state) => {
+        state.gpsTracking = false;
+      })
       .addCase(triggerSos.fulfilled, (state, { payload }) => {
         state.sosAlert = payload ?? null;
       })
       .addCase(reportRouteDeviation.fulfilled, (state, { payload }) => {
         state.routeDeviation = payload ?? null;
       });
-
-    wire(requestBookingState, (state, { payload }) => {
-      state.bookingSnapshot = payload ?? null;
-    });
   },
 });
 
@@ -1805,99 +2369,142 @@ export const {
   setCareAssistantJoined,
   clearCareRideState,
   setCareRideWorkflow,
-  // Consultation
   clearConsultation,
   setConsultationFromSocket,
   appendConsultationChatMessage,
-  // CA join / waypoint local reducers
   setCaAtJoinPoint,
   setCaHasJoined,
   setJpWaypointCompleted,
   setCaViewMode,
+  setRideStopsFromSocket,
+  setParticipantsFromSocket,
 } = operationsSlice.actions;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SELECTORS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const selectCaViewMode = (s) => s.operations.caViewMode;
-export const selectCaHasJoined = (s) => s.operations.caHasJoined;
-export const selectCaAtJoinPoint = (s) => s.operations.caAtJoinPoint;
-export const selectCareReachedJpLoading = (s) =>
-  s.operations.loading["careReachedJoinPoint"] ?? false;
-export const selectCareJoinRideLoading = (s) =>
-  s.operations.loading["careJoinRide"] ?? false;
-export const selectCaJoinRideAndTrackLoading = (s) =>
-  s.operations.loading["caJoinRideAndTrackDriver"] ?? false;
+// CA view
+export const selectCaViewMode       = (s) => s.operations.caViewMode;
+export const selectCaHasJoined      = (s) => s.operations.caHasJoined;
+export const selectCaAtJoinPoint    = (s) => s.operations.caAtJoinPoint;
+export const selectCaJoinPoint      = (s) => s.operations.caJoinPoint;
 
-export const selectAdminBookings = (s) => s.operations.adminBookings;
-export const selectAdminBookingsMeta = (s) => s.operations.adminBookingsMeta;
-export const selectAdminStats = (s) => s.operations.adminStats;
-export const selectAdminOps = (s) => s.operations.adminOps;
-export const selectAdminOpsMeta = (s) => s.operations.adminOpsMeta;
-export const selectAdminBookingDetail = (s) => s.operations.selectedBooking;
-export const selectAdminOpRecord = (s) => s.operations.selectedOp;
-export const selectAdminBookingFollowUps = (s) =>
-  s.operations.selectedFollowUps;
-export const selectAdminStatusUpdate = (s) => s.operations.adminStatusUpdate;
-export const selectAdminAssignment = (s) => s.operations.adminAssignment;
-export const selectAdminRefund = (s) => s.operations.adminRefund;
-export const selectAdminOpStatusUpdate = (s) =>
-  s.operations.adminOpStatusUpdate;
-export const selectTpAssignedBookings = (s) => s.operations.tpAssignedBookings;
-export const selectTpAvailableDrivers = (s) => s.operations.tpAvailableDrivers;
-export const selectCareAssignedBookings = (s) =>
-  s.operations.careAssignedBookings;
-export const selectHospitalUpcoming = (s) => s.operations.hospitalUpcoming;
-export const selectHospitalOps = (s) => s.operations.hospitalOps;
-export const selectHospitalOpsMeta = (s) => s.operations.hospitalOpsMeta;
-export const selectHospitalValidOps = (s) => s.operations.hospitalValidOps;
-export const selectHospitalValidOpsMeta = (s) =>
-  s.operations.hospitalValidOpsMeta;
-export const selectDoctorOps = (s) => s.operations.doctorOps;
-export const selectDoctorOpsMeta = (s) => s.operations.doctorOpsMeta;
-export const selectDriverAssignedRides = (s) =>
-  s.operations.driverAssignedRides;
-export const selectDriverInfo = (s) => s.operations.driverInfo;
-export const selectNearbyDrivers = (s) => s.operations.nearbyDrivers;
-export const selectNearbyCareAssistants = (s) =>
-  s.operations.nearbyCareAssistants;
-export const selectNearbyTPs = (s) => s.operations.nearbyTPs;
-export const selectNearbyHospitals = (s) => s.operations.nearbyHospitals;
-export const selectCareRideNearby = (s) => s.operations.careRideNearby;
-export const selectSelectedBooking = (s) => s.operations.selectedBooking;
-export const selectSelectedOp = (s) => s.operations.selectedOp;
-export const selectSelectedFollowUps = (s) => s.operations.selectedFollowUps;
-export const selectBookingSnapshot = (s) => s.operations.bookingSnapshot;
-export const selectActiveRide = (s) => s.operations.activeRide;
-export const selectAdminBookingMapRoute = (s) =>
-  s.operations.selectedBooking?.route ?? null;
-export const selectLiveLocation = (s) => s.operations.liveLocation;
-export const selectEtaUpdate = (s) => s.operations.etaUpdate;
-export const selectRideStatus = (s) => s.operations.rideStatus;
-export const selectBookingStatus = (s) => s.operations.bookingStatus;
-export const selectNavigationTarget = (s) => s.operations.navigationTarget;
-export const selectSosAlert = (s) => s.operations.sosAlert;
-export const selectRouteDeviation = (s) => s.operations.routeDeviation;
-export const selectOtpResult = (s) => s.operations.otpResult;
-export const selectGpsTracking = (s) => s.operations.gpsTracking;
-export const selectSocketConnected = (s) => s.operations.socketConnected;
-export const selectLoading = (k) => (s) => s.operations.loading[k] ?? false;
-export const selectError = (k) => (s) => s.operations.errors[k] ?? null;
+// Loading helpers
+export const selectCareReachedJpLoading      = (s) => s.operations.loading["careReachedJoinPoint"] ?? false;
+export const selectCareJoinRideLoading       = (s) => s.operations.loading["careJoinRide"] ?? false;
+export const selectCaJoinRideAndTrackLoading = (s) => s.operations.loading["caJoinRideAndTrackDriver"] ?? false;
+
+// Admin bookings
+export const selectAdminBookings          = (s) => s.operations.adminBookings;
+export const selectAdminBookingsMeta      = (s) => s.operations.adminBookingsMeta;
+export const selectAdminStats             = (s) => s.operations.adminStats;
+export const selectAdminOps               = (s) => s.operations.adminOps;
+export const selectAdminOpsMeta           = (s) => s.operations.adminOpsMeta;
+export const selectAdminBookingDetail     = (s) => s.operations.selectedBooking;
+export const selectAdminOpRecord          = (s) => s.operations.selectedOp;
+export const selectAdminBookingFollowUps  = (s) => s.operations.selectedFollowUps;
+export const selectAdminStatusUpdate      = (s) => s.operations.adminStatusUpdate;
+export const selectAdminAssignment        = (s) => s.operations.adminAssignment;
+export const selectAdminRefund            = (s) => s.operations.adminRefund;
+export const selectAdminOpStatusUpdate    = (s) => s.operations.adminOpStatusUpdate;
+
+// SOS
+export const selectAdminActiveSos         = (s) => s.operations.adminActiveSos;
+export const selectAdminActiveSosMeta     = (s) => s.operations.adminActiveSosMeta;
+export const selectBookingSosEvents       = (s) => s.operations.bookingSosEvents;
+export const selectDestinationAudit       = (s) => s.operations.destinationAudit;
+
+// TP
+export const selectTpAssignedBookings     = (s) => s.operations.tpAssignedBookings;
+export const selectTpAvailableDrivers     = (s) => s.operations.tpAvailableDrivers;
+
+// Care
+export const selectCareAssignedBookings   = (s) => s.operations.careAssignedBookings;
+
+// Hospital
+export const selectHospitalUpcoming       = (s) => s.operations.hospitalUpcoming;
+export const selectHospitalOps            = (s) => s.operations.hospitalOps;
+export const selectHospitalOpsMeta        = (s) => s.operations.hospitalOpsMeta;
+export const selectHospitalValidOps       = (s) => s.operations.hospitalValidOps;
+export const selectHospitalValidOpsMeta   = (s) => s.operations.hospitalValidOpsMeta;
+
+// Doctor
+export const selectDoctorOps              = (s) => s.operations.doctorOps;
+export const selectDoctorOpsMeta          = (s) => s.operations.doctorOpsMeta;
+
+// Driver
+export const selectDriverAssignedRides    = (s) => s.operations.driverAssignedRides;
+export const selectDriverInfo             = (s) => s.operations.driverInfo;
+
+// Nearby
+export const selectNearbyDrivers          = (s) => s.operations.nearbyDrivers;
+export const selectNearbyCareAssistants   = (s) => s.operations.nearbyCareAssistants;
+export const selectNearbyTPs              = (s) => s.operations.nearbyTPs;
+export const selectNearbyHospitals        = (s) => s.operations.nearbyHospitals;
+export const selectCareRideNearby         = (s) => s.operations.careRideNearby;
+
+// Selected
+export const selectSelectedBooking        = (s) => s.operations.selectedBooking;
+export const selectSelectedOp             = (s) => s.operations.selectedOp;
+export const selectSelectedFollowUps      = (s) => s.operations.selectedFollowUps;
+export const selectBookingSnapshot        = (s) => s.operations.bookingSnapshot;
+export const selectActiveRide             = (s) => s.operations.activeRide;
+export const selectAdminBookingMapRoute   = (s) => s.operations.selectedBooking?.route ?? null;
+
+// Ride Operations
+export const selectRideParticipants       = (s) => s.operations.rideParticipants;
+export const selectRideStops              = (s) => s.operations.rideStops;
+export const selectRideJoinPoints         = (s) => s.operations.rideJoinPoints;
+export const selectRideRouteVersions      = (s) => s.operations.rideRouteVersions;
+export const selectActiveRouteVersion     = (s) => s.operations.activeRouteVersion;
+export const selectRideAssignmentHistory  = (s) => s.operations.rideAssignmentHistory;
+export const selectBookingAssignmentHistory = (s) => s.operations.bookingAssignmentHistory;
+
+// Live state
+export const selectLiveLocation           = (s) => s.operations.liveLocation;
+export const selectEtaUpdate              = (s) => s.operations.etaUpdate;
+export const selectRideStatus             = (s) => s.operations.rideStatus;
+export const selectBookingStatus          = (s) => s.operations.bookingStatus;
+export const selectNavigationTarget       = (s) => s.operations.navigationTarget;
+export const selectSosAlert               = (s) => s.operations.sosAlert;
+export const selectRouteDeviation         = (s) => s.operations.routeDeviation;
+export const selectOtpResult              = (s) => s.operations.otpResult;
+export const selectGpsTracking            = (s) => s.operations.gpsTracking;
+export const selectSocketConnected        = (s) => s.operations.socketConnected;
+export const selectLoading                = (k) => (s) => s.operations.loading[k] ?? false;
+export const selectError                  = (k) => (s) => s.operations.errors[k] ?? null;
+
+// Consultation
+export const selectConsultation               = (s) => s.operations.consultation;
+export const selectConsultationJoinToken      = (s) => s.operations.consultationJoinToken;
+export const selectConsultationChat           = (s) => s.operations.consultationChat;
+export const selectConsultationLoading        = (s) => s.operations.loading["fetchConsultation"] ?? false;
+export const selectConfirmConsultationLoading = (s) => s.operations.loading["confirmConsultation"] ?? false;
+export const selectAcceptConsultationLoading  = (s) => s.operations.loading["acceptConsultation"] ?? false;
+export const selectStartConsultationLoading   = (s) => s.operations.loading["startConsultation"] ?? false;
+export const selectEndConsultationLoading     = (s) => s.operations.loading["endConsultation"] ?? false;
+export const selectJoinTokenLoading           = (s) => s.operations.loading["fetchConsultationJoinToken"] ?? false;
+export const selectSendChatLoading            = (s) => s.operations.loading["sendConsultationChat"] ?? false;
+
+// CA Tracking
+export const selectCareTrackingSnapshot   = (s) => s.operations.careTrackingSnapshot;
+export const selectCareAssistantLocation  = (s) => s.operations.careAssistantLocation;
+export const selectCareAssistantStatus    = (s) => s.operations.careAssistantStatus;
+export const selectCareAssistantJoined    = (s) => s.operations.careAssistantJoined;
+export const selectCareRideStatus         = (s) => s.operations.careRideStatus;
+export const selectRideStageOps           = (s) => s.operations.careRideStatus?.rideStage ?? null;
+export const selectActiveNavigationTarget = (s) => s.operations.careRideStatus?.activeNavigationTarget ?? null;
+export const selectCareTrackingLoading    = (s) => s.operations.loading["fetchCareTrackingSnapshot"] ?? false;
+export const selectCareJoinLoading        = (s) => s.operations.loading["careJoinRide"] ?? false;
 
 // Loading convenience selectors
-export const selectAdminBookingsLoading = (s) =>
-  s.operations.loading["fetchAdminBookings"] ?? false;
-export const selectAdminBookingDetailLoading = (s) =>
-  s.operations.loading["fetchAdminBookingById"] ?? false;
-export const selectAdminStatsLoading = (s) =>
-  s.operations.loading["fetchAdminBookingStats"] ?? false;
-export const selectAdminExportLoading = (s) =>
-  s.operations.loading["exportAdminBookings"] ?? false;
-export const selectAdminOpsLoading = (s) =>
-  s.operations.loading["fetchAdminOps"] ?? false;
-export const selectAdminRefundLoading = (s) =>
-  s.operations.loading["adminProcessRefund"] ?? false;
+export const selectAdminBookingsLoading       = (s) => s.operations.loading["fetchAdminBookings"] ?? false;
+export const selectAdminBookingDetailLoading  = (s) => s.operations.loading["fetchAdminBookingById"] ?? false;
+export const selectAdminStatsLoading          = (s) => s.operations.loading["fetchAdminBookingStats"] ?? false;
+export const selectAdminExportLoading         = (s) => s.operations.loading["exportAdminBookings"] ?? false;
+export const selectAdminOpsLoading            = (s) => s.operations.loading["fetchAdminOps"] ?? false;
+export const selectAdminRefundLoading         = (s) => s.operations.loading["adminProcessRefund"] ?? false;
 export const selectNearbyLoading = (s) =>
   (s.operations.loading["fetchNearbyCareAssistants"] ?? false) ||
   (s.operations.loading["fetchNearbySoloDrivers"] ?? false) ||
@@ -1910,47 +2517,14 @@ export const selectAdminAssignLoading = (s) =>
   (s.operations.loading["adminAssignHospital"] ?? false) ||
   (s.operations.loading["adminReassignDriver"] ?? false) ||
   (s.operations.loading["adminReassignCareAssistant"] ?? false);
-
-// ── Consultation Selectors ───────────────────────────────────────────────────
-export const selectConsultation = (s) => s.operations.consultation;
-export const selectConsultationJoinToken = (s) =>
-  s.operations.consultationJoinToken;
-export const selectConsultationChat = (s) => s.operations.consultationChat;
-export const selectConsultationLoading = (s) =>
-  s.operations.loading["fetchConsultation"] ?? false;
-export const selectConfirmConsultationLoading = (s) =>
-  s.operations.loading["confirmConsultation"] ?? false;
-export const selectAcceptConsultationLoading = (s) =>
-  s.operations.loading["acceptConsultation"] ?? false;
-export const selectStartConsultationLoading = (s) =>
-  s.operations.loading["startConsultation"] ?? false;
-export const selectEndConsultationLoading = (s) =>
-  s.operations.loading["endConsultation"] ?? false;
-export const selectJoinTokenLoading = (s) =>
-  s.operations.loading["fetchConsultationJoinToken"] ?? false;
-export const selectSendChatLoading = (s) =>
-  s.operations.loading["sendConsultationChat"] ?? false;
-
-// ── CA Tracking Selectors ────────────────────────────────────────────────────
-export const selectCareTrackingSnapshot = (s) =>
-  s.operations.careTrackingSnapshot;
-export const selectCareAssistantLocation = (s) =>
-  s.operations.careAssistantLocation;
-export const selectCareAssistantStatus = (s) =>
-  s.operations.careAssistantStatus;
-export const selectCareAssistantJoined = (s) =>
-  s.operations.careAssistantJoined;
-// Always object — safe for .status, .rideStage etc
-export const selectCareRideStatus = (s) => s.operations.careRideStatus;
-export const selectRideStageOps = (s) =>
-  s.operations.careRideStatus?.rideStage ?? null;
-export const selectActiveNavigationTarget = (s) =>
-  s.operations.careRideStatus?.activeNavigationTarget ?? null;
-export const selectCareTrackingLoading = (s) =>
-  s.operations.loading["fetchCareTrackingSnapshot"] ?? false;
-export const selectCareJoinLoading = (s) =>
-  s.operations.loading["careJoinRide"] ?? false;
-export const selectCaJoinPoint = (s) => s.operations.caJoinPoint;
+export const selectRideOpsLoading = (s) =>
+  (s.operations.loading["fetchRideParticipants"] ?? false) ||
+  (s.operations.loading["fetchRideStops"] ?? false) ||
+  (s.operations.loading["fetchRideJoinPoints"] ?? false) ||
+  (s.operations.loading["fetchRouteVersions"] ?? false);
+export const selectAdminSosLoading = (s) =>
+  (s.operations.loading["fetchAdminActiveSos"] ?? false) ||
+  (s.operations.loading["fetchAdminActiveSosPaginated"] ?? false);
 
 export { DRIVER_STATUS };
 export default operationsSlice.reducer;

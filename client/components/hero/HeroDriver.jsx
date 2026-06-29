@@ -154,11 +154,12 @@ export default function HeroDriver() {
     dispatch(fetchDriverMe());
   }, [dispatch]);
 
-  // Derived values
+  // Derived values from JSON structure
   const firstName    = driverMe?.user?.name?.split(' ')[0] ?? 'Partner';
   const fullName     = driverMe?.user?.name ?? 'Driver Partner';
   const rating       = driverMe?.performance?.rating ?? 0;
-  const vehicleNo    = driverMe?.assignedVehicleSnapshot?.registrationNumber ?? '—';
+  // Fallback to '—' since assignedVehicleId is null in the provided JSON payload
+  const vehicleNo    = driverMe?.assignedVehicleSnapshot?.registrationNumber ?? '—'; 
   const isOnline     = driverMe?.status === 'Available' || driverMe?.status === 'On-Trip';
   const totalEarning = driverMe?.performance?.totalEarnings ?? 0;
   const totalRides   = driverMe?.performance?.totalRidesCompleted ?? 0;
@@ -250,7 +251,7 @@ export default function HeroDriver() {
                   color: 'transparent',
                 }}
               >
-                Let's Roll.
+                Let&apos;s Roll.
               </span>
             </h1>
           </div>
@@ -422,9 +423,9 @@ export default function HeroDriver() {
               </p>
 
               {[
-                { icon: IndianRupee, label: 'Total Earnings',  val: `₹${totalEarning.toLocaleString('en-IN')}`, color: 'var(--accent)',   bg: 'color-mix(in srgb, var(--accent),   transparent 85%)' },
-                { icon: Car,         label: 'Completed Rides', val: `${totalRides}`,                            color: 'var(--primary)',  bg: 'color-mix(in srgb, var(--primary),  transparent 85%)' },
-                { icon: Wallet,      label: 'Coin Balance',    val: `${coinBalance} pts`,                       color: 'var(--success)',  bg: 'color-mix(in srgb, var(--success),  transparent 85%)' },
+                { icon: IndianRupee, label: 'Total Earnings',  val: `₹${totalEarning.toLocaleString('en-IN')}`, color: 'var(--accent)',  bg: 'color-mix(in srgb, var(--accent),   transparent 85%)' },
+                { icon: Car,         label: 'Completed Rides', val: `${totalRides}`,                            color: 'var(--primary)', bg: 'color-mix(in srgb, var(--primary),  transparent 85%)' },
+                { icon: Wallet,      label: 'Coin Balance',    val: `${coinBalance} pts`,                       color: 'var(--success)', bg: 'color-mix(in srgb, var(--success),  transparent 85%)' },
               ].map((row) => (
                 <div key={row.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>

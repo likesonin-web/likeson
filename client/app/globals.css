@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
- 
+
 @theme {
   --font-family-poppins:    var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
   --font-family-montserrat: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
@@ -54,11 +54,7 @@
    SHARED SEMANTIC TOKENS — same across ALL themes
    ============================================================ */
 :root, [data-theme] {
-  --base-100:     oklch(100%  0       0);
-  --base-200:     oklch(97.5% 0.003 240);
-  --base-300:     oklch(93%   0.006 240);
-  --base-content: oklch(20%   0.012 240);
-
+  /* Semantic status colors — shared */
   --info:    oklch(58% 0.16 232);
   --success: oklch(58% 0.18 152);
   --warning: oklch(72% 0.17  72);
@@ -87,9 +83,14 @@
 
 
 /* ============================================================
-   DEFAULT — Base theme
+   DEFAULT — Clean neutral base
    ============================================================ */
 :root {
+  --base-100:     oklch(100%  0       0);
+  --base-200:     oklch(97.5% 0.003 240);
+  --base-300:     oklch(93%   0.006 240);
+  --base-content: oklch(20%   0.012 240);
+
   --primary:         oklch(54% 0.19 242);
   --primary-content: oklch(99% 0    0);
 
@@ -104,7 +105,7 @@
 
 
 /* ============================================================
-   DARK MODE — Base
+   DARK MODE — Default base
    ============================================================ */
 .dark {
   --base-100:     oklch(15%  0.014 240);
@@ -130,10 +131,17 @@
 
 /* ============================================================
    ROLE THEMES — LIGHT
+   Each role gets its own tinted base + brand colors
    ============================================================ */
 
-/* ── SUPERADMIN — Deep Violet ── */
+/* ── SUPERADMIN — Deep Violet. Power. Sovereignty. Trust. ── */
 [data-theme="superadmin"] {
+  /* Warm violet-tinted whites — feels premium, not clinical */
+  --base-100:     oklch(99%   0.008 272);
+  --base-200:     oklch(96%   0.012 272);
+  --base-300:     oklch(91%   0.018 272);
+  --base-content: oklch(18%   0.020 272);
+
   --primary:         oklch(46% 0.26 272);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(58% 0.20 258);
@@ -143,8 +151,14 @@
   --shadow-depth: 0 10px 28px -4px rgba(70, 10, 220, 0.14);
 }
 
-/* ── ADMIN — Steel Blue ── */
+/* ── ADMIN — Steel Blue. Authority. Reliability. Control. ── */
 [data-theme="admin"] {
+  /* Cool steel-blue tinted base — professional, trustworthy */
+  --base-100:     oklch(99%   0.006 228);
+  --base-200:     oklch(96%   0.010 228);
+  --base-300:     oklch(91%   0.015 228);
+  --base-content: oklch(18%   0.016 228);
+
   --primary:         oklch(48% 0.18 228);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(60% 0.14 210);
@@ -154,8 +168,14 @@
   --shadow-depth: 0 8px 22px -4px rgba(20, 60, 160, 0.12);
 }
 
-/* ── DOCTOR — Royal Blue ── */
+/* ── DOCTOR — Royal Blue. Expertise. Calm. Healing. ── */
 [data-theme="doctor"] {
+  /* Deep blue-tinted whites — clinical clarity, trustworthy */
+  --base-100:     oklch(99%   0.007 250);
+  --base-200:     oklch(96.5% 0.011 250);
+  --base-300:     oklch(91%   0.016 250);
+  --base-content: oklch(18%   0.018 250);
+
   --primary:         oklch(50% 0.22 250);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(62% 0.14 225);
@@ -165,8 +185,14 @@
   --shadow-depth: 0 8px 22px -4px rgba(20, 60, 200, 0.12);
 }
 
-/* ── HOSPITAL — Navy ── */
+/* ── HOSPITAL — Navy. Institutional. Stable. Safe. ── */
 [data-theme="hospital"] {
+  /* Deep navy-tinted base — serious, institutional strength */
+  --base-100:     oklch(99%   0.006 245);
+  --base-200:     oklch(96%   0.010 245);
+  --base-300:     oklch(90%   0.015 245);
+  --base-content: oklch(17%   0.016 245);
+
   --primary:         oklch(40% 0.20 245);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(54% 0.12 228);
@@ -176,9 +202,15 @@
   --shadow-depth: 0 8px 20px -3px rgba(10, 30, 120, 0.13);
 }
 
-/* ── TRANSPORT PARTNER — Teal ── */
+/* ── TRANSPORT PARTNER — Teal. Motion. Flow. Efficiency. ── */
 [data-theme="transport"],
 [data-theme="transportpartner"] {
+  /* Teal-tinted base — fresh, movement, energy */
+  --base-100:     oklch(99%   0.007 192);
+  --base-200:     oklch(96%   0.012 192);
+  --base-300:     oklch(90.5% 0.018 192);
+  --base-content: oklch(17%   0.018 195);
+
   --primary:         oklch(54% 0.20 192);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(44% 0.08 215);
@@ -188,36 +220,51 @@
   --shadow-depth: 0 8px 20px -3px rgba(0, 130, 145, 0.12);
 }
 
-/* ── DRIVER — Amber ── */
+/* ── DRIVER — Confident Blue. Road. Reliability. Freedom. ── */
 [data-theme="driver"] {
-  /* A sophisticated deep bronze/amber, not neon orange */
-  --primary:         oklch(70.879% 0.16842 44.967);
+  /* Warm periwinkle-tinted base — road-worthy, confident */
+  --base-100:     oklch(100%  0.00011 271.152);
+  --base-200:     oklch(96%   0.020   270);
+  --base-300:     oklch(90%   0.035   270);
+  --base-content: oklch(18%   0.022   268);
+
+  --primary:         oklch(51.768% 0.24925 267.16);
   --primary-content: oklch(99% 0    0);
-  
-  /* Graphite/Deep Slate for secondary elements */
+
   --secondary:         oklch(32% 0.02 250);
   --secondary-content: oklch(99% 0    0);
-  
-  /* Soft gold/sage for accents */
-  --accent:          oklch(65% 0.14 75);
+
+  --accent:          oklch(82.404% 0.16712 87.566);
   --accent-content:  oklch(15% 0.04 75);
-  
-  --shadow-depth: 0 8px 22px -4px rgba(120, 70, 20, 0.12);
+
+  --shadow-depth: 0 8px 22px -4px rgba(60, 40, 180, 0.13);
 }
 
-/* ── SOLO DRIVER PARTNER — Gold ── */
+/* ── SOLO DRIVER PARTNER — Bright Blue. Independence. Speed. ── */
 [data-theme="solodriverpartner"] {
+  /* Soft indigo-tinted base — independent, sleek, confident */
+  --base-100:     oklch(99.5% 0.005 250);
+  --base-200:     oklch(96.5% 0.010 250);
+  --base-300:     oklch(91%   0.016 250);
+  --base-content: oklch(18%   0.016 250);
+
   --primary:         oklch(58% 0.19 250);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(36% 0.06 248);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(80% 0.18  80);
   --accent-content:  oklch(18% 0.05  80);
-  --shadow-depth: 0 6px 16px -3px rgba(0, 0, 0, 0.09);
+  --shadow-depth: 0 6px 16px -3px rgba(40, 60, 200, 0.10);
 }
 
-/* ── CUSTOMER — Sky + Coral ── */
+/* ── CUSTOMER — Sky + Coral. Friendly. Warm. Welcoming. ── */
 [data-theme="customer"] {
+  /* Warm sky-tinted base — open, inviting, consumer-friendly */
+  --base-100:     oklch(99.5% 0.005 215);
+  --base-200:     oklch(97%   0.010 215);
+  --base-300:     oklch(92%   0.015 215);
+  --base-content: oklch(19%   0.012 220);
+
   --primary:         oklch(56% 0.18 215);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(66% 0.17  22);
@@ -230,8 +277,14 @@
   --shadow-depth: 0 8px 22px -4px rgba(0, 110, 200, 0.10);
 }
 
-/* ── PHARMACY — Emerald ── */
+/* ── PHARMACY — Emerald. Health. Nature. Precision. ── */
 [data-theme="pharmacy"] {
+  /* Green-tinted base — health, wellness, nature */
+  --base-100:     oklch(99%   0.007 158);
+  --base-200:     oklch(96%   0.012 158);
+  --base-300:     oklch(90.5% 0.018 158);
+  --base-content: oklch(17%   0.018 160);
+
   --primary:         oklch(50% 0.22 158);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(62% 0.15 172);
@@ -241,22 +294,34 @@
   --shadow-depth: 0 8px 20px -3px rgba(0, 130, 80, 0.11);
 }
 
-/* ── CARE ASSISTANT — Rose ── */
+/* ── CARE ASSISTANT — Rose. Warmth. Empathy. Human touch. ── */
 [data-theme="care-assistant"] {
-  --primary:         oklch(58% 0.20  12);
+  /* Warm rose-tinted base — compassionate, human, caring */
+  --base-100:     oklch(99.5% 0.006  10);
+  --base-200:     oklch(97%   0.010  10);
+  --base-300:     oklch(92%   0.016  10);
+  --base-content: oklch(18%   0.016   8);
+
+  --primary:         oklch(63.732% 0.18021 8.605);
   --primary-content: oklch(99% 0     0);
   --secondary:       oklch(62% 0.16 345);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(76% 0.15  82);
-  --accent-content:  oklch(16% 0.04  82);
+  --accent-content:  oklch(13.741% 0.0287 77.389);
   --r-selector: 0.75rem;
   --r-field:    0.75rem;
   --r-box:      1.25rem;
   --shadow-depth: 0 10px 24px -4px rgba(200, 50, 80, 0.11);
 }
 
-/* ── FINANCE — Forest Green ── */
+/* ── FINANCE — Forest Green. Wealth. Stability. Precision. ── */
 [data-theme="finance"] {
+  /* Deep forest-green-tinted base — serious money, trust */
+  --base-100:     oklch(99%   0.007 156);
+  --base-200:     oklch(96%   0.012 156);
+  --base-300:     oklch(90%   0.018 156);
+  --base-content: oklch(16%   0.018 156);
+
   --primary:         oklch(40% 0.18 156);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(28% 0.05 240);
@@ -269,9 +334,15 @@
   --shadow-depth: 0 8px 24px -4px rgba(0, 70, 35, 0.14);
 }
 
-/* ── LAB / LAB PARTNER — Purple ── */
+/* ── LAB / LAB PARTNER — Purple. Discovery. Science. Mystery. ── */
 [data-theme="lab"],
 [data-theme="lab-partner"] {
+  /* Cool purple-tinted base — scientific, precise, curious */
+  --base-100:     oklch(99%   0.008 285);
+  --base-200:     oklch(96%   0.014 285);
+  --base-300:     oklch(90.5% 0.022 285);
+  --base-content: oklch(17%   0.022 283);
+
   --primary:         oklch(55% 0.24 285);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(48% 0.20 265);
@@ -284,8 +355,14 @@
   --shadow-depth: 0 8px 22px -4px rgba(100, 30, 210, 0.14);
 }
 
-/* ── BLOOD BANK — Crimson Red. Life. Urgency. Vital. ── */
+/* ── BLOOD BANK — Crimson. Life. Urgency. Vital. Sacred. ── */
 [data-theme="blood_bank"] {
+  /* Warm crimson-tinted base — urgent, vital, life-giving */
+  --base-100:     oklch(99.5% 0.006  18);
+  --base-200:     oklch(97%   0.012  18);
+  --base-300:     oklch(91.5% 0.020  18);
+  --base-content: oklch(17%   0.020  16);
+
   --primary:         oklch(48% 0.24  18);
   --primary-content: oklch(99% 0     0);
   --secondary:       oklch(58% 0.18  30);
@@ -303,71 +380,87 @@
    DARK MODE — ALL ROLES
    ============================================================ */
 
-/* SUPERADMIN DARK */
+/* SUPERADMIN DARK — Deep Violet Night */
 [data-theme="superadmin"].dark,
 .dark [data-theme="superadmin"] {
   --base-100:     oklch(13%  0.022 272);
   --base-200:     oklch(17%  0.026 272);
   --base-300:     oklch(23%  0.030 272);
   --base-content: oklch(93%  0.008 268);
+
   --primary:         oklch(66% 0.26 272);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(72% 0.20 258);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(82% 0.22  92);
   --accent-content:  oklch(10% 0.05  92);
+
+  --neutral:         oklch(88%  0.007 268);
+  --neutral-content: oklch(13%  0.022 272);
   --shadow-depth: 0 14px 36px -6px rgba(50, 0, 200, 0.55);
 }
 
-/* ADMIN DARK */
+/* ADMIN DARK — Steel Night */
 [data-theme="admin"].dark,
 .dark [data-theme="admin"] {
   --base-100:     oklch(14%  0.014 228);
   --base-200:     oklch(18%  0.016 228);
   --base-300:     oklch(25%  0.018 228);
   --base-content: oklch(93%  0.007 225);
+
   --primary:         oklch(64% 0.20 228);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(70% 0.16 210);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(76% 0.18  60);
   --accent-content:  oklch(12% 0.04  60);
+
+  --neutral:         oklch(88%  0.007 225);
+  --neutral-content: oklch(14%  0.014 228);
   --shadow-depth: 0 12px 32px -5px rgba(10, 40, 140, 0.48);
 }
 
-/* DOCTOR DARK */
+/* DOCTOR DARK — Midnight Clinic */
 [data-theme="doctor"].dark,
 .dark [data-theme="doctor"] {
   --base-100:     oklch(14%  0.018 250);
   --base-200:     oklch(18%  0.020 250);
   --base-300:     oklch(25%  0.022 250);
   --base-content: oklch(93%  0.008 245);
+
   --primary:         oklch(66% 0.22 250);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(72% 0.15 225);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(72% 0.20 162);
   --accent-content:  oklch(99% 0    0);
+
+  --neutral:         oklch(88%  0.008 245);
+  --neutral-content: oklch(14%  0.018 250);
   --shadow-depth: 0 12px 32px -5px rgba(10, 40, 180, 0.50);
 }
 
-/* HOSPITAL DARK */
+/* HOSPITAL DARK — Deep Navy Night */
 [data-theme="hospital"].dark,
 .dark [data-theme="hospital"] {
   --base-100:     oklch(13%  0.013 245);
   --base-200:     oklch(17%  0.015 245);
   --base-300:     oklch(23%  0.017 245);
   --base-content: oklch(94%  0.006 235);
+
   --primary:         oklch(58% 0.22 245);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(66% 0.13 228);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(78% 0.20  56);
   --accent-content:  oklch(12% 0.04  56);
+
+  --neutral:         oklch(88%  0.006 235);
+  --neutral-content: oklch(13%  0.013 245);
   --shadow-depth: 0 10px 28px -5px rgba(0, 20, 100, 0.55);
 }
 
-/* TRANSPORT / TRANSPORT PARTNER DARK */
+/* TRANSPORT / TRANSPORT PARTNER DARK — Deep Teal Night */
 [data-theme="transport"].dark,
 .dark [data-theme="transport"],
 [data-theme="transportpartner"].dark,
@@ -376,118 +469,142 @@
   --base-200:     oklch(18%  0.018 198);
   --base-300:     oklch(24%  0.020 198);
   --base-content: oklch(93%  0.008 200);
+
   --primary:         oklch(66% 0.21 192);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(58% 0.09 215);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(80% 0.20  70);
   --accent-content:  oklch(12% 0.04  70);
+
+  --neutral:         oklch(88%  0.008 200);
+  --neutral-content: oklch(13%  0.016 198);
   --shadow-depth: 0 10px 26px -4px rgba(0, 110, 130, 0.46);
 }
 
-/* DRIVER DARK */
+/* DRIVER DARK — Night Road */
 [data-theme="driver"].dark,
 .dark [data-theme="driver"] {
-  /* Slate/Charcoal base, abandoning the muddy brown background */
-  --base-100:      oklch(14%  0.01 250);
-  --base-200:      oklch(18%  0.01 250);
-  --base-300:      oklch(24%  0.01 250);
-  --base-content:  oklch(93%  0.01 250);
-  
-  /* Bright but muted bronze for dark mode contrast */
-  --primary:         oklch(65% 0.15 45);
+  --base-100:      oklch(14%  0.014 268);
+  --base-200:      oklch(18%  0.016 268);
+  --base-300:      oklch(24%  0.018 268);
+  --base-content:  oklch(93%  0.010 268);
+
+  --primary:         oklch(63.396% 0.13698 246.854);
   --primary-content: oklch(12% 0.04 45);
-  
+
   --secondary:         oklch(28% 0.02 250);
   --secondary-content: oklch(99% 0    0);
-  
+
   --accent:          oklch(75% 0.16 75);
   --accent-content:  oklch(14% 0.04 75);
-  
+
+  --neutral:         oklch(88%  0.008 268);
+  --neutral-content: oklch(14%  0.014 268);
   --shadow-depth: 0 12px 30px -5px rgba(0, 0, 0, 0.6);
 }
 
-/* SOLO DRIVER PARTNER DARK */
+/* SOLO DRIVER PARTNER DARK — Indigo Night */
 [data-theme="solodriverpartner"].dark,
 .dark [data-theme="solodriverpartner"] {
   --base-100:     oklch(15%  0.018 250);
   --base-200:     oklch(19%  0.020 250);
   --base-300:     oklch(25%  0.022 250);
   --base-content: oklch(93%  0.008 248);
+
   --primary:         oklch(68% 0.20 250);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(46% 0.08 248);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(82% 0.18  82);
   --accent-content:  oklch(16% 0.05  82);
+
+  --neutral:         oklch(88%  0.008 248);
+  --neutral-content: oklch(15%  0.018 250);
   --shadow-depth: 0 12px 28px -5px rgba(0, 0, 0, 0.58);
 }
 
-/* CUSTOMER DARK */
+/* CUSTOMER DARK — Twilight Sky */
 [data-theme="customer"].dark,
 .dark [data-theme="customer"] {
-  --base-100:     oklch(14%  0.010  82);
-  --base-200:     oklch(19%  0.012  82);
-  --base-300:     oklch(25%  0.014  82);
+  --base-100:     oklch(14%  0.010 215);
+  --base-200:     oklch(19%  0.012 215);
+  --base-300:     oklch(25%  0.014 215);
   --base-content: oklch(93%  0.007 215);
+
   --primary:         oklch(68% 0.20 215);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(72% 0.18  24);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(80% 0.15  90);
   --accent-content:  oklch(14% 0.04  90);
+
+  --neutral:         oklch(88%  0.007 215);
+  --neutral-content: oklch(14%  0.010 215);
   --shadow-depth: 0 10px 26px -4px rgba(0, 100, 200, 0.40);
 }
 
-/* PHARMACY DARK */
+/* PHARMACY DARK — Forest Night */
 [data-theme="pharmacy"].dark,
 .dark [data-theme="pharmacy"] {
   --base-100:     oklch(13%  0.018 160);
   --base-200:     oklch(17%  0.020 160);
   --base-300:     oklch(24%  0.022 160);
   --base-content: oklch(93%  0.008 162);
+
   --primary:         oklch(64% 0.22 158);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(72% 0.16 172);
   --secondary-content: oklch(12% 0.02 172);
   --accent:          oklch(78% 0.20  90);
   --accent-content:  oklch(12% 0.04  90);
+
+  --neutral:         oklch(88%  0.008 162);
+  --neutral-content: oklch(13%  0.018 160);
   --shadow-depth: 0 10px 26px -4px rgba(0, 110, 60, 0.44);
 }
 
-/* CARE ASSISTANT DARK */
+/* CARE ASSISTANT DARK — Rose Night */
 [data-theme="care-assistant"].dark,
 .dark [data-theme="care-assistant"] {
   --base-100:     oklch(14%  0.016  12);
   --base-200:     oklch(19%  0.018  12);
   --base-300:     oklch(25%  0.020  12);
   --base-content: oklch(93%  0.008 355);
+
   --primary:         oklch(68% 0.22  12);
   --primary-content: oklch(99% 0     0);
   --secondary:       oklch(72% 0.18 345);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(80% 0.16  84);
   --accent-content:  oklch(14% 0.04  84);
+
+  --neutral:         oklch(88%  0.008 355);
+  --neutral-content: oklch(14%  0.016  12);
   --shadow-depth: 0 12px 28px -5px rgba(200, 40, 70, 0.42);
 }
 
-/* FINANCE DARK */
+/* FINANCE DARK — Deep Vault */
 [data-theme="finance"].dark,
 .dark [data-theme="finance"] {
   --base-100:     oklch(12%  0.014 156);
   --base-200:     oklch(16%  0.016 156);
   --base-300:     oklch(22%  0.018 156);
   --base-content: oklch(93%  0.007 158);
+
   --primary:         oklch(58% 0.20 156);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(44% 0.06 242);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(76% 0.20  92);
   --accent-content:  oklch(10% 0.04  92);
+
+  --neutral:         oklch(88%  0.007 158);
+  --neutral-content: oklch(12%  0.014 156);
   --shadow-depth: 0 12px 30px -5px rgba(0, 60, 30, 0.52);
 }
 
-/* LAB / LAB PARTNER DARK */
+/* LAB / LAB PARTNER DARK — Deep Lab Night */
 [data-theme="lab"].dark,
 .dark [data-theme="lab"],
 [data-theme="lab-partner"].dark,
@@ -496,28 +613,36 @@
   --base-200:     oklch(17%  0.026 285);
   --base-300:     oklch(24%  0.030 285);
   --base-content: oklch(93%  0.008 280);
+
   --primary:         oklch(68% 0.26 285);
   --primary-content: oklch(99% 0    0);
   --secondary:       oklch(62% 0.22 265);
   --secondary-content: oklch(99% 0  0);
   --accent:          oklch(80% 0.22 104);
   --accent-content:  oklch(12% 0.05 104);
+
+  --neutral:         oklch(88%  0.008 280);
+  --neutral-content: oklch(13%  0.022 285);
   --shadow-depth: 0 12px 30px -5px rgba(80, 10, 200, 0.50);
 }
 
-/* ── BLOOD BANK DARK — Deep Crimson. Urgent. Vital. ── */
+/* BLOOD BANK DARK — Crimson Night */
 [data-theme="blood_bank"].dark,
 .dark [data-theme="blood_bank"] {
   --base-100:     oklch(13%  0.020  18);
   --base-200:     oklch(17%  0.024  18);
   --base-300:     oklch(24%  0.028  18);
   --base-content: oklch(93%  0.008  20);
+
   --primary:         oklch(62% 0.26  18);
   --primary-content: oklch(99% 0     0);
   --secondary:       oklch(68% 0.20  30);
   --secondary-content: oklch(99% 0   0);
   --accent:          oklch(74% 0.18 345);
   --accent-content:  oklch(99% 0     0);
+
+  --neutral:         oklch(88%  0.008  20);
+  --neutral-content: oklch(13%  0.020  18);
   --shadow-depth: 0 14px 36px -6px rgba(180, 10, 10, 0.55);
 }
 
@@ -1251,9 +1376,7 @@
    PRINT
    ============================================================ */
 @media print {
-  body        { background: white; color:a black; }
+  body        { background: white; color: black; }
   .glass-card { border: 1px solid #e5e7eb; background: white; }
   .no-print   { display: none !important; }
 }
-
- 

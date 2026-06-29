@@ -34,7 +34,7 @@ import {
   DOCTOR_SEARCH_LINKS,
   DOCTOR_PROFILE_LINKS,
 } from "../../constants/doctor";
-import WelcomeDoctorPage from "@/app/doctor/WelcomeDoctorPage"; // Added Welcome Page Import
+import WelcomeDoctorPage from "@/app/doctor/WelcomeDoctorPage"; 
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -53,14 +53,14 @@ const OnlineBadge = memo(function OnlineBadge({ isOnline }) {
       className={cn(
         "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-widest border transition-all duration-300",
         isOnline
-          ? "bg-success/10 border-success/30 text-success"
+          ? "bg-primary/10 border-primary/30 text-primary"
           : "bg-base-300/50 border-base-300 text-base-content/30"
       )}
     >
       <span
         className={cn(
           "w-1.5 h-1.5 rounded-full",
-          isOnline ? "bg-success animate-pulse" : "bg-base-content/20"
+          isOnline ? "bg-primary animate-pulse" : "bg-base-content/20"
         )}
       />
       {isOnline ? "Online" : "Offline"}
@@ -105,7 +105,7 @@ const ThemeToggle = memo(function ThemeToggle() {
       onClick={cycle}
       aria-label={label}
       title={label}
-      className="p-2.5 rounded-md border border-base-300 text-base-content/50 hover:bg-success/5 hover:text-success transition-all duration-200"
+      className="p-2.5 rounded-md border border-base-300 text-base-content/50 hover:bg-primary/10 hover:text-primary transition-all duration-200"
     >
       <Icon size={18} />
     </button>
@@ -120,14 +120,14 @@ const NavItem = memo(function NavItem({ link, isActive }) {
       className={cn(
         "flex items-center gap-3 px-4 py-2.5 text-[10px] font-bold uppercase tracking-wider transition-all duration-200 rounded-md whitespace-nowrap overflow-hidden",
         isActive
-          ? "text-success bg-success/8 shadow-sm border-l-2 border-success"
-          : "text-base-content/40 hover:text-success hover:bg-success/5 border-l-2 border-transparent"
+          ? "text-primary bg-primary/10 shadow-sm border-l-2 border-primary"
+          : "text-base-content/40 hover:text-primary hover:bg-primary/10 border-l-2 border-transparent"
       )}
     >
       <span
         className={cn(
           "transition-transform duration-200 shrink-0",
-          isActive && "scale-110 text-success"
+          isActive && "scale-110 text-primary"
         )}
       >
         {link.icon}
@@ -164,7 +164,7 @@ const SidebarSection = memo(function SidebarSection({
         className={cn(
           "w-full flex items-center justify-between p-3 rounded-md transition-all group",
           isOpen || isParentActive
-            ? "bg-success/10 text-success"
+            ? "bg-primary/10 text-primary"
             : "text-base-content/50 hover:bg-base-300/60 hover:text-base-content"
         )}
       >
@@ -172,7 +172,7 @@ const SidebarSection = memo(function SidebarSection({
           <span
             className={cn(
               "shrink-0 transition-transform group-hover:scale-110",
-              (isOpen || isParentActive) ? "text-success" : "text-base-content/30"
+              (isOpen || isParentActive) ? "text-primary" : "text-base-content/30"
             )}
           >
             {section.icons}
@@ -188,7 +188,7 @@ const SidebarSection = memo(function SidebarSection({
             size={13}
             className={cn(
               "transition-transform duration-300 text-base-content/30 shrink-0",
-              isOpen && "rotate-180 text-success"
+              isOpen && "rotate-180 text-primary"
             )}
           />
         )}
@@ -206,7 +206,7 @@ const SidebarSection = memo(function SidebarSection({
               if (el) el.style.overflow = "visible";
             }}
             id={`section-${section.title}`}
-            className="overflow-hidden ml-4 mt-1 pl-2 border-l border-success/15"
+            className="overflow-hidden ml-4 mt-1 pl-2 border-l border-primary/20"
           >
             <div className="flex flex-col gap-0.5 py-1">
               {section.links.map((link, idx) => (
@@ -237,7 +237,6 @@ const DoctorDashboard = ({ children }) => {
   // Mock online status — replace with real selector
   const isOnline = user?.isOnline ?? true;
 
-  // ── FIX: Explicit check for the root/welcome paths ───────────────────────
   const isWelcomeRoute = useMemo(
     () => ["/", "/doctor", "/doctor/"].includes(pathname),
     [pathname]
@@ -310,7 +309,7 @@ const DoctorDashboard = ({ children }) => {
   }
 
   return (
-    <div className="min-h-screen bg-base-100 text-base-content selection:bg-success/20">
+    <div data-theme="doctor" className="min-h-screen bg-base-100 text-base-content selection:bg-primary/20">
       {/* Mobile backdrop */}
       <AnimatePresence>
         {isSidebarOpen && (
@@ -344,18 +343,18 @@ const DoctorDashboard = ({ children }) => {
                 transition={{ duration: 0.2 }}
                 className="flex items-center gap-2.5 whitespace-nowrap"
               >
-                <div className="w-8 h-8 rounded-md bg-success/15 border border-success/30 flex items-center justify-center shrink-0">
-                  <Stethoscope size={16} className="text-success" />
+                <div className="w-8 h-8 rounded-md bg-primary/15 border border-primary/30 flex items-center justify-center shrink-0">
+                  <Stethoscope size={16} className="text-primary" />
                 </div>
                 <div>
                   <Link
                     href="/doctor/dashboard"
-                    className="font-bold text-sm tracking-tight hover:text-success transition-colors block leading-none"
+                    className="font-bold text-sm tracking-tight hover:text-primary transition-colors block leading-none"
                   >
                     LIKESON
-                    <span className="text-success">.in</span>
+                    <span className="text-primary">.in</span>
                   </Link>
-                  <span className="text-[9px] font-bold text-success/60 uppercase tracking-widest">
+                  <span className="text-[9px] font-bold text-primary/60 uppercase tracking-widest">
                     Doctor Portal
                   </span>
                 </div>
@@ -364,7 +363,7 @@ const DoctorDashboard = ({ children }) => {
           </AnimatePresence>
           <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="p-2 rounded-md bg-base-300/50 hover:text-success hover:bg-success/5 transition-all shrink-0"
+            className="p-2 rounded-md bg-base-300/50 hover:text-primary hover:bg-primary/10 transition-all shrink-0"
             aria-label="Toggle Sidebar"
           >
             {isSidebarOpen ? <PanelLeftClose size={17} /> : <Menu size={17} />}
@@ -382,18 +381,18 @@ const DoctorDashboard = ({ children }) => {
                 exit={{ opacity: 0, height: 0 }}
                 className="mx-3 mt-4 shrink-0 overflow-hidden"
               >
-                <div className="p-3.5 rounded-md bg-success/5 border border-success/15">
+                <div className="p-3.5 rounded-md bg-primary/5 border border-primary/15">
                   <div className="flex items-center gap-3">
                     <div className="relative shrink-0">
                       <img
                         src={doctorAvatar}
                         alt="Doctor"
-                        className="w-10 h-10 rounded-md object-cover bg-base-300 border-2 border-success/30"
+                        className="w-10 h-10 rounded-md object-cover bg-base-300 border-2 border-primary/30"
                       />
                       <span
                         className={cn(
                           "absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-base-200",
-                          isOnline ? "bg-success" : "bg-base-300"
+                          isOnline ? "bg-primary" : "bg-base-300"
                         )}
                       />
                     </div>
@@ -401,7 +400,7 @@ const DoctorDashboard = ({ children }) => {
                       <p className="text-[11px] font-bold truncate text-base-content">
                         Dr. {user?.name || "Doctor"}
                       </p>
-                      <p className="text-[9px] font-bold text-success/70 uppercase tracking-widest truncate">
+                      <p className="text-[9px] font-bold text-primary/70 uppercase tracking-widest truncate">
                         {user?.specialization || "Specialist"}
                       </p>
                     </div>
@@ -468,8 +467,8 @@ const DoctorDashboard = ({ children }) => {
             <div className="hidden xl:flex items-center gap-5">
               {DOCTOR_TOP_RIGHT_LINKS.map((item, i) => (
                 <div key={i} className="group relative">
-                  <button className="flex items-center gap-2 text-[10px] font-bold text-base-content/40 hover:text-success transition-all uppercase tracking-widest">
-                    <span className="text-success/60">{item.icon}</span>
+                  <button className="flex items-center gap-2 text-[10px] font-bold text-base-content/40 hover:text-primary transition-all uppercase tracking-widest">
+                    <span className="text-primary/60">{item.icon}</span>
                     {item.name}
                   </button>
                   {item.links && (
@@ -479,9 +478,9 @@ const DoctorDashboard = ({ children }) => {
                           <Link
                             key={si}
                             href={sub.href}
-                            className="flex items-center gap-3 p-3 text-[10px] font-bold uppercase text-base-content/50 hover:bg-success/10 hover:text-success rounded-md transition-all"
+                            className="flex items-center gap-3 p-3 text-[10px] font-bold uppercase text-base-content/50 hover:bg-primary/10 hover:text-primary rounded-md transition-all"
                           >
-                            <span className="text-success/60">{sub.icon}</span>
+                            <span className="text-primary/60">{sub.icon}</span>
                             {sub.name}
                           </Link>
                         ))}
@@ -498,11 +497,11 @@ const DoctorDashboard = ({ children }) => {
             {/* Command search trigger */}
             <button
               onClick={() => setIsSearchOpen(true)}
-              className="flex items-center h-10 gap-3 px-3 py-2 bg-base-200/60 border border-base-300 rounded-md text-base-content/40 hover:border-success/40 hover:bg-success/5 transition-all group"
+              className="flex items-center h-10 gap-3 px-3 py-2 bg-base-200/60 border border-base-300 rounded-md text-base-content/40 hover:border-primary/40 hover:bg-primary/10 transition-all group"
             >
               <Search
                 size={15}
-                className="group-hover:text-success transition-colors"
+                className="group-hover:text-primary transition-colors"
               />
               <span className="text-[9px] font-bold uppercase tracking-widest hidden md:inline">
                 Search <span className="ml-1.5 opacity-30">⌘K</span>
@@ -516,7 +515,7 @@ const DoctorDashboard = ({ children }) => {
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                className="flex items-center gap-1.5 px-3 py-2 h-10 rounded-md border text-[10px] font-bold uppercase tracking-widest transition-all bg-success/10 border-success/30 text-success hover:bg-success/20"
+                className="flex items-center gap-1.5 px-3 py-2 h-10 rounded-md border text-[10px] font-bold uppercase tracking-widest transition-all bg-primary/10 border-primary/30 text-primary hover:bg-primary/20"
               >
                 <IndianRupee size={15} strokeWidth={2.5} />
                 <span className="hidden sm:inline">Wallet</span>
@@ -528,7 +527,7 @@ const DoctorDashboard = ({ children }) => {
               className={cn(
                 "hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-md border text-[9px] font-bold uppercase tracking-widest transition-all",
                 isOnline
-                  ? "bg-success/8 border-success/25 text-success hover:bg-success/15"
+                  ? "bg-primary/10 border-primary/30 text-primary hover:bg-primary/20"
                   : "bg-base-300/50 border-base-300 text-base-content/30 hover:bg-base-300"
               )}
             >
@@ -546,7 +545,7 @@ const DoctorDashboard = ({ children }) => {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="rounded-md text-base-content/60 hover:bg-base-200 hover:text-success"
+                  className="rounded-md text-base-content/60 hover:bg-base-200 hover:text-primary"
                 >
                   <motion.div
                     variants={bellRingingVariant}
@@ -555,7 +554,7 @@ const DoctorDashboard = ({ children }) => {
                     <Bell size={19} />
                   </motion.div>
                   {unreadCount > 0 && (
-                    <span className="absolute top-2 right-2 w-2 h-2 bg-success rounded-mdll border-2 border-base-100 animate-pulse" />
+                    <span className="absolute top-2 right-2 w-2 h-2 bg-primary rounded-full border-2 border-base-100 animate-pulse" />
                   )}
                 </Button>
               </motion.div>
@@ -563,7 +562,7 @@ const DoctorDashboard = ({ children }) => {
 
             {/* Profile dropdown */}
             <div className="group relative">
-              <div className="w-10 h-10 rounded-md bg-gradient-to-tr from-success to-secondary p-[2px] cursor-pointer shadow-lg transition-transform hover:scale-105">
+              <div className="w-10 h-10 rounded-md bg-gradient-to-tr from-primary to-secondary p-[2px] cursor-pointer shadow-lg transition-transform hover:scale-105">
                 <img
                   src={doctorAvatar}
                   alt="Profile"
@@ -574,7 +573,7 @@ const DoctorDashboard = ({ children }) => {
               <div className="absolute right-0 top-full pt-4 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-50">
                 <div className="w-64 bg-base-200 border border-base-300 rounded-md shadow-2xl p-2 backdrop-blur-2xl">
                   {/* Header */}
-                  <div className="px-4 py-4 border-b border-base-300 mb-2 bg-success/5 rounded-md">
+                  <div className="px-4 py-4 border-b border-base-300 mb-2 bg-primary/5 rounded-md">
                     <div className="flex items-center gap-2.5 mb-2">
                       <img
                         src={doctorAvatar}
@@ -585,7 +584,7 @@ const DoctorDashboard = ({ children }) => {
                         <p className="text-[11px] font-bold uppercase tracking-tight truncate">
                           Dr. {user?.name || "Doctor"}
                         </p>
-                        <p className="text-[9px] text-success font-bold uppercase mt-0.5 tracking-widest">
+                        <p className="text-[9px] text-primary font-bold uppercase mt-0.5 tracking-widest">
                           Doctor Portal
                         </p>
                       </div>
@@ -597,9 +596,9 @@ const DoctorDashboard = ({ children }) => {
                     <Link
                       key={pi}
                       href={pl.href}
-                      className="flex items-center gap-3 px-4 py-2.5 text-[11px] font-bold uppercase text-base-content/60 hover:bg-base-100 hover:text-success rounded-md transition-all"
+                      className="flex items-center gap-3 px-4 py-2.5 text-[11px] font-bold uppercase text-base-content/60 hover:bg-base-100 hover:text-primary rounded-md transition-all"
                     >
-                      <span className="text-success/50">{pl.icon}</span>
+                      <span className="text-primary/50">{pl.icon}</span>
                       {pl.name}
                     </Link>
                   ))}
@@ -623,13 +622,13 @@ const DoctorDashboard = ({ children }) => {
           <div className="mb-5 flex items-center gap-2.5 text-[10px] font-bold uppercase tracking-widest text-base-content/20">
             <Link
               href="/doctor/dashboard"
-              className="hover:text-success transition-colors flex items-center gap-1.5"
+              className="hover:text-primary transition-colors flex items-center gap-1.5"
             >
               <Stethoscope size={11} />
               Doctor Portal
             </Link>
             <ChevronRight size={10} />
-            <span className="text-success">
+            <span className="text-primary">
               {breadcrumbLabel}
             </span>
           </div>
@@ -641,12 +640,12 @@ const DoctorDashboard = ({ children }) => {
             className="md:rounded-md rounded-md border border-base-300 bg-base-200/40 min-h-[75vh] shadow-inner relative overflow-hidden backdrop-blur-sm"
           >
             {/* Decorative medical-teal glow */}
-            <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-success/4 blur-[130px] rounded-full pointer-events-none" />
-            <div className="absolute bottom-0 left-0 w-[300px] h-[300px] bg-secondary/3 blur-[100px] rounded-full pointer-events-none" />
+            <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-primary/5 blur-[130px] rounded-full pointer-events-none" />
+            <div className="absolute bottom-0 left-0 w-[300px] h-[300px] bg-secondary/5 blur-[100px] rounded-full pointer-events-none" />
 
             {/* ECG decorative line — top right */}
             <svg
-              className="absolute top-6 right-6 opacity-[0.06] pointer-events-none"
+              className="absolute top-6 right-6 opacity-[0.08] pointer-events-none text-primary"
               width="200"
               height="40"
               viewBox="0 0 200 40"
@@ -656,7 +655,6 @@ const DoctorDashboard = ({ children }) => {
                 points="0,20 30,20 40,5 50,35 60,5 70,35 80,20 120,20 130,8 140,32 150,20 200,20"
                 stroke="currentColor"
                 strokeWidth="2"
-                className="text-success"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
@@ -672,7 +670,7 @@ const DoctorDashboard = ({ children }) => {
         <footer className="p-4 lg:p-6 mt-auto">
           <div className="flex flex-col xl:flex-row items-center justify-between gap-4 p-5 border border-base-300 rounded-md bg-base-200/50">
             <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-success/10 border border-success/20 flex items-center justify-center text-success">
+              <div className="w-10 h-10 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
                 <Stethoscope size={20} />
               </div>
               <div>
@@ -711,9 +709,9 @@ const DoctorDashboard = ({ children }) => {
                 <Link
                   key={idx}
                   href={sc.href}
-                  className="flex items-center gap-3 px-4 py-3.5 bg-base-100/50 border border-base-300 rounded-md hover:border-success/40 hover:bg-success/5 transition-all group"
+                  className="flex items-center gap-3 px-4 py-3.5 bg-base-100/50 border border-base-300 rounded-md hover:border-primary/40 hover:bg-primary/10 transition-all group"
                 >
-                  <span className="text-success/60 group-hover:text-success group-hover:scale-110 transition-all">
+                  <span className="text-primary/60 group-hover:text-primary group-hover:scale-110 transition-all">
                     {sc.icon}
                   </span>
                   <span className="text-[10px] font-bold text-base-content/40 group-hover:text-base-content uppercase tracking-widest">
@@ -745,7 +743,7 @@ const DoctorDashboard = ({ children }) => {
             >
               {/* Search input */}
               <div className="p-6 lg:p-8 border-b border-base-300 flex items-center gap-5 bg-base-100/60">
-                <Search className="text-success shrink-0" size={22} />
+                <Search className="text-primary shrink-0" size={22} />
                 <input
                   autoFocus
                   placeholder="Search doctor portal..."
@@ -754,7 +752,7 @@ const DoctorDashboard = ({ children }) => {
                 />
                 <button
                   onClick={() => setIsSearchOpen(false)}
-                  className="text-[10px] font-bold bg-base-300 px-3 py-1 rounded-md uppercase shrink-0"
+                  className="text-[10px] font-bold bg-base-300 px-3 py-1 rounded-md uppercase shrink-0 hover:bg-base-content/10 transition-colors"
                 >
                   Esc
                 </button>
@@ -773,7 +771,7 @@ const DoctorDashboard = ({ children }) => {
 
                     return (
                       <div key={key}>
-                        <h3 className="text-[10px] font-bold text-success tracking-[0.3em] mb-3 uppercase px-2">
+                        <h3 className="text-[10px] font-bold text-primary tracking-[0.3em] mb-3 uppercase px-2">
                           {key === "0" ? "Recently Visited" : "Quick Actions"}
                         </h3>
                         <div className="space-y-1">
@@ -782,10 +780,10 @@ const DoctorDashboard = ({ children }) => {
                               key={iIdx}
                               href={item.href}
                               onClick={() => setIsSearchOpen(false)}
-                              className="flex items-center justify-between p-3.5 rounded-md hover:bg-success/8 group transition-all"
+                              className="flex items-center justify-between p-3.5 rounded-md hover:bg-primary/10 group transition-all"
                             >
                               <div className="flex items-center gap-3.5">
-                                <span className="text-base-content/30 group-hover:text-success transition-colors">
+                                <span className="text-base-content/30 group-hover:text-primary transition-colors">
                                   {item.icon}
                                 </span>
                                 <span className="text-[11px] font-bold text-base-content/70 group-hover:text-base-content uppercase tracking-tight">
@@ -794,7 +792,7 @@ const DoctorDashboard = ({ children }) => {
                               </div>
                               <ExternalLink
                                 size={13}
-                                className="opacity-0 group-hover:opacity-100 text-success transition-all"
+                                className="opacity-0 group-hover:opacity-100 text-primary transition-all"
                               />
                             </Link>
                           ))}
@@ -819,7 +817,7 @@ const DoctorDashboard = ({ children }) => {
                   </kbd>
                   to close
                 </div>
-                <div className="ml-auto flex items-center gap-1.5 text-[9px] font-bold text-success/40 uppercase tracking-widest">
+                <div className="ml-auto flex items-center gap-1.5 text-[9px] font-bold text-primary/50 uppercase tracking-widest">
                   <Stethoscope size={10} />
                   Doctor Portal
                 </div>
