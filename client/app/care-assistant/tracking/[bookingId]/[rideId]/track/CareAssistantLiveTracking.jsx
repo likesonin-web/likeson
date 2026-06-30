@@ -3,7 +3,21 @@
 /**
  * CareAssistantLiveTracking.jsx
  *
- * FIXES this pass:
+ * NAV/AUTH FIXES this pass:
+ *  A. Added missing `useSocket` import — was called below, crashed every
+ *     mount with ReferenceError. Now imported from SocketProvider.
+ *  B. Dropped local `useSelector((s) => s.user?.role)` — disagreed with
+ *     TrackPage's own role selector, caused viewer-role mismatch. Single
+ *     source now: `useSocket().role`, which is just the prop TrackPage
+ *     already passed into <SocketProvider role={...}>. Can't drift.
+ *  C. Component now reads bookingId off useParams() directly (matches
+ *     [bookingId] folder segment) — no bookingIdProp needed since route
+ *     always supplies it. Accepts `rideId` + `bookingType` as plain props
+ *     from page.jsx (sourced from [rideId] segment + ?type= query) for
+ *     future use by hooks that may need the explicit ride doc id rather
+ *     than deriving it server-side from bookingId.primaryRide.
+ *
+ * FIXES carried over from prior pass:
  *  1. Join-point marker was created via `createStaticMarker(map, lat, lng,
  *     'joinpoint')` — that helper (useDriverMarker.js) only branches on
  *     `type === 'pickup'`, so anything else (including 'joinpoint') fell
@@ -62,12 +76,13 @@
  *   useDriverMarker           — driver marker + static pickup/dropoff pins
  *   useRouteRenderer          — CA route + driver route polylines
  *   useVoiceNavigation        — proximity announcements (optional, muteable)
+ *   useSocket                 — SocketProvider context (connected, role, actions)
  */
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
-import { useSelector } from 'react-redux';
 
+import { useSocket } from '@/context/SocketProvider';
 import { useGoogleMapsLoader } from '@/hooks/useGoogleMapsLoader';
 import { useMapCamera } from '@/hooks/useMapCamera';
 import { useDriverMarker, createStaticMarker } from '@/hooks/useDriverMarker';
@@ -309,11 +324,26 @@ function SosSheet({ onConfirm, onCancel }) {
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function CareAssistantLiveTracking({ bookingId: bookingIdProp, viewerRole: viewerRoleProp }) {
+/**
+ * @param {{ rideId?: string, bookingType?: string }} props
+ *   rideId       — [rideId] route segment, passed through by page.jsx.
+ *                  Not consumed directly here yet — pass to
+ *                  useCareAssistantTracking only if that hook's signature
+ *                  accepts it; otherwise hook derives ride doc server-side
+ *                  off bookingId.primaryRide.
+ *   bookingType  — ?type= query param from the nav link, available as a
+ *                  cheap initial hint before t.bookingType (socket data)
+ *                  arrives. Currently unused below — t.bookingType wins
+ *                  once loaded, this is just available if needed.
+ */
+export default function CareAssistantLiveTracking({ rideId, bookingType: bookingTypeProp }) {
   const params = useParams();
-  const bookingId = bookingIdProp || params?.bookingId;
-  const sessionRole = useSelector((s) => s.user?.role);
-  const viewerRole = viewerRoleProp || sessionRole || 'customer';
+  const bookingId = params?.bookingId; // matches [bookingId] folder segment
+
+  // FIX B: single role source — SocketProvider context, fed by the `role`
+  // prop TrackPage already passed into <SocketProvider>. No second,
+  // independently-derived Redux selector here to drift out of sync.
+  const { role: viewerRole } = useSocket();
 
   const { loaded: mapsLoaded, error: mapsError } = useGoogleMapsLoader();
 

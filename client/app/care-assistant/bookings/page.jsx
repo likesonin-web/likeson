@@ -122,10 +122,12 @@ function TrackRideButton({ booking, variant = 'default' }) {
   if (!canTrack(booking)) return null;
   const rideId = getRideId(booking);
 
-  function handleTrack(e) {
-    e.stopPropagation();
-    router.push(`/care-assistant/tracking/${booking._id}/${rideId}?type=${booking.bookingType}`);
-  }
+function handleTrack(e) {
+  e.stopPropagation();
+  // FIX: route lives at .../[bookingId]/[rideId]/track — append /track,
+  // old code pushed to .../[bookingId]/[rideId] (no page there → 404).
+  router.push(`/care-assistant/tracking/${booking._id}/${rideId}/track?type=${booking.bookingType}`);
+}
 
   if (variant === 'panel') {
     return (
