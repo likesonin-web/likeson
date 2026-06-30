@@ -99,7 +99,7 @@ import {
   fmt, fmtDate, currency, statusBadge, typeIcon,
   Spinner, EmptyState, StatCard, CallButton,
 } from './shared';
-import { BookingCard, AnalysisSection } from './AnalyticsBookingCard';
+import { BookingCard, AnalysisSection } from './Analyticsbookingcard';
 import { BookingDetailPanel } from './BookingDetailPanel';
 import { HelpSection } from './HelpSection';
 import { SosPanelAdmin } from './SosDestinationPanel';
