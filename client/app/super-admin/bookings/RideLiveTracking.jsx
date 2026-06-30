@@ -5,45 +5,35 @@
  * Admin/Superadmin real-time ride tracking panel.
  *
  * FIXES this pass:
- *  1. Driver marker icon used `fillColor: 'var(--color-primary, #2563eb)'`.
- *     Google Maps renders Symbol icons via its own SVG/canvas pipeline, NOT
- *     through the page's CSS engine — `var()` is never resolved there, so
- *     the marker rendered with an invalid/default color (effectively
- *     black, or in some browsers no icon at all). Replaced with a literal
- *     hex constant.
- *  2. Stop markers were created once (`if (!markersRef.current[key])`) and
- *     never touched again — if a stop's status changed PENDING -> ARRIVED
- *     -> COMPLETED after the marker already existed, the pin color never
- *     updated; you'd see a stale amber pin on a stop that's actually been
- *     completed an hour ago. Added an update branch that re-syncs the icon
- *     fillColor + label on every stops change, not just on first creation.
- *  3. Driver marker rotation was set only at creation time inside the
- *     `else` branch — once the marker existed, `setPosition()` updated
- *     location but heading never changed again, so the arrow froze facing
- *     whatever direction it was first drawn in. Added `setIcon()` with
- *     fresh rotation in the position-update branch too.
- *  4. `MapPanel`'s `ride` prop was passed as
- *     `tracking?.tracking ? tracking.ride ?? ride : ride` — a redundant,
- *     confusing ternary that reduces to the same thing as the simpler
- *     `tracking?.ride ?? ride` pattern used everywhere else in this file
- *     (TabOverview / TabRoute). Normalized into one `resolvedRide` value
- *     reused by all three.
+ * 1. Driver marker icon used `fillColor: 'var(--color-primary, #2563eb)'`.
+ * Google Maps renders Symbol icons via its own SVG/canvas pipeline, NOT
+ * through the page's CSS engine — `var()` is never resolved there, so
+ * the marker rendered with an invalid/default color (effectively
+ * black, or in some browsers no icon at all). Replaced with a literal
+ * hex constant.
+ * 2. Stop markers were created once (`if (!markersRef.current[key])`) and
+ * never touched again — if a stop's status changed PENDING -> ARRIVED
+ * -> COMPLETED after the marker already existed, the pin color never
+ * updated; you'd see a stale amber pin on a stop that's actually been
+ * completed an hour ago. Added an update branch that re-syncs the icon
+ * fillColor + label on every stops change, not just on first creation.
+ * 3. Driver marker rotation was set only at creation time inside the
+ * `else` branch — once the marker existed, `setPosition()` updated
+ * location but heading never changed again, so the arrow froze facing
+ * whatever direction it was first drawn in. Added `setIcon()` with
+ * fresh rotation in the position-update branch too.
+ * 4. `MapPanel`'s `ride` prop was passed as
+ * `tracking?.tracking ? tracking.ride ?? ride : ride` — a redundant,
+ * confusing ternary that reduces to the same thing as the simpler
+ * `tracking?.ride ?? ride` pattern used everywhere else in this file
+ * (TabOverview / TabRoute). Normalized into one `resolvedRide` value
+ * reused by all three.
+ * 5. Moved `wireRideSocketEvents` import from socketService to rideRequestSlice
+ * where it actually resides, resolving the "Export doesn't exist" build error.
  *
  * Props:
- *   bookingId: string  — Booking._id
- *   rideId:    string  — Ride._id
- *
- * Data sources:
- *   REST  → GET /ride-requests/:rideId/tracking  (initial hydration)
- *   REST  → GET /ride-requests/:rideId/live      (polling fallback when driver offline)
- *   REST  → GET /ride-ops/rides/:rideId/stops    (stop list)
- *   REST  → GET /ride-ops/rides/:rideId/participants
- *   REST  → GET /ride-ops/bookings/:bookingId/sos
- *   REST  → GET /ride-ops/rides/:rideId/route-versions/active
- *   REST  → GET /ride-ops/bookings/:bookingId/assignment-history
- *   Socket → booking:${bookingId} room events
- *
- * Wires socket events from wireRideSocketEvents helper in rideRequestSlice.
+ * bookingId: string  — Booking._id
+ * rideId:    string  — Ride._id
  */
 
 import React, {
@@ -87,7 +77,6 @@ import {
 import API from '@/store/api';
 import socketService, {
   SOCKET_EVENTS,
-  wireRideSocketEvents,
 } from '@/services/socketService';
 import {
   fetchRideTracking,
@@ -112,6 +101,7 @@ import {
   selectSosEvents,
   selectSocketLive,
   selectRideLoading,
+  wireRideSocketEvents,
 } from '@/store/slices/rideRequestSlice';
 import {
   fetchBookingAssignmentHistory,
