@@ -1077,40 +1077,41 @@ router.get(
   passport.authenticate('google', { scope: ['profile', 'email'], session: false })
 );
 
-/**
- * Google OAuth callback — calls finaliseLogin for session + JWT generation.
- * FCM device token registration must be done separately via POST /device-tokens
- * after the redirect, since tokens can't be passed through OAuth redirect params.
- */
 router.get(
   '/google/callback',
   passport.authenticate('google', {
     session:         false,
-    failureRedirect: `${process.env.FRONTEND_URL}/auth-error?reason=google_denied`,
+    // Add a fallback just in case the env variable fails
+    failureRedirect: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth-error?reason=google_denied`,
   }),
   asyncHandler(async (req, res) => {
     const user = req.user;
+    const frontendBaseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
     if (!user) {
-      return res.redirect(`${process.env.FRONTEND_URL}/auth-error?reason=no_user`);
+      return res.redirect(`${frontendBaseUrl}/auth-error?reason=no_user`);
     }
 
-    // Need auditSessions for finaliseLogin
     const fullUser = await User.findById(user._id).select('+auditSessions +deviceTokens');
     if (!fullUser) {
-      return res.redirect(`${process.env.FRONTEND_URL}/auth-error?reason=no_user`);
+      return res.redirect(`${frontendBaseUrl}/auth-error?reason=no_user`);
     }
 
     const { token, sessionId } = await finaliseLogin(fullUser, req);
-
     log.info('Google OAuth login', { userId: fullUser._id });
 
-    const url = new URL(`${process.env.FRONTEND_URL}/auth-success`);
-    url.searchParams.set('token',     token);
-    url.searchParams.set('sessionId', sessionId);
-    url.searchParams.set('role',      fullUser.role);
+    try {
+      // Safely construct the URL
+      const url = new URL(`${frontendBaseUrl}/auth-success`);
+      url.searchParams.set('token',     token);
+      url.searchParams.set('sessionId', sessionId);
+      url.searchParams.set('role',      fullUser.role);
 
-    return res.redirect(url.toString());
+      return res.redirect(url.toString());
+    } catch (error) {
+      log.error('Invalid FRONTEND_URL environment variable', { error: error.message });
+      return res.status(500).json({ message: 'Server configuration error regarding frontend URL.' });
+    }
   })
 );
 

@@ -14,6 +14,33 @@
  * 6. bookingType derived from trackingData + currentRide — both checked.
  * 7. DRIVER_STATUS exported so consumers don't need a separate import.
  * 8. sendStatusUpdate: HTTP first, socket second, then re-fetch.
+ *
+ * FIX (this pass — these two had regressed back to the pre-redesign shape
+ * and needed re-fixing):
+ * 9. The initial-fetch effect was reading `data.ride.waypoints` and
+ *    `data.ride.careAssistantSnapshot` again. Both are dead reads:
+ *    `Ride.waypoints[]` was removed from the schema entirely (replaced by
+ *    the standalone RideStop collection), and `careAssistantSnapshot` only
+ *    ever lived on `Booking`, never on `Ride` — `data.ride` here is a Ride
+ *    document. `GET /ride-requests/:rideId/tracking` has never returned
+ *    either field. Removed; CA name/join-point/location are populated
+ *    exclusively from socket events further down, same as before.
+ * 10. BOOKING_STATE_SNAPSHOT handler was back to reading
+ *     `data.tracking.careAssistantLiveLocation` / `.careAssistantStatus` —
+ *     both removed from RideTracking in the architecture redesign in favor
+ *     of a generic `participants[]` array. Reads the active CARE_ASSISTANT
+ *     entry out of `participants[]` instead.
+ * 11. JOIN_POINT_CALCULATED now also dispatches `setCareAssistantJoined`
+ *     into operationsSlice (not just local state + rideRequestSlice) —
+ *     CARE_ASSISTANT_ATTACHED already did this; JOIN_POINT_CALCULATED was
+ *     the odd one out, leaving operationsSlice's `caJoinPoint` selector
+ *     stale for any other component reading it.
+ *
+ * For a page dedicated to the Care Assistant's own experience, use
+ * useCareAssistantTracking instead — it talks to the booking-type-aware
+ * `/bookings/:id/care/tracking-snapshot` endpoint, which is the one place
+ * in the codebase that actually returns CA data in the current schema's
+ * shape. This hook stays focused on the driver/customer/admin ride view.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -127,32 +154,15 @@ export function useRideTracking({ rideId, bookingId }) {
         if (!mountedRef.current) return;
         const data = result?.payload;
 
-        // Booking type
+        // `data.ride.booking` is populated (bookingCode bookingType status)
+        // by GET /ride-requests/:rideId/tracking — this is the one CA-adjacent
+        // field that endpoint actually returns. Booking type is all we seed
+        // from this fetch; see FIX #9 above for what was deliberately removed.
         const bt = data?.ride?.booking?.bookingType
           || data?.bookingType
           || data?.booking?.bookingType
           || null;
         if (bt) setBookingType(bt);
-
-        // CA join point from waypoints (legacy) or stops
-        const waypoints = data?.ride?.waypoints || [];
-        const joinWp    = waypoints.find(w => w.type === 'care_assistant_join');
-        if (joinWp?.location?.coordinates?.length >= 2) {
-          setCaJoinPoint({
-            coordinates:    joinWp.location.coordinates,
-            zone:           joinWp.meta?.zone,
-            distCaToJoinKm: joinWp.meta?.distCaToJoinKm,
-          });
-        }
-
-        // CA snapshot
-        const caSnap = data?.ride?.careAssistantSnapshot;
-        if (caSnap?.name) setCaName(caSnap.name);
-
-        // CA live location
-        const caLoc = data?.careAssistant?.liveLocation
-          || data?.tracking?.careAssistantLiveLocation;
-        if (caLoc?.lat && caLoc?.lng) setCaLiveLocation(caLoc);
       })
       .finally(() => { if (mountedRef.current) setIsLoadingRide(false); });
   }, [rideId, dispatch]);
@@ -165,9 +175,7 @@ export function useRideTracking({ rideId, bookingId }) {
       || trackingData?.bookingType
       || null;
     if (bt && bt !== bookingType) setBookingType(bt);
-    const snap = currentRide?.careAssistantSnapshot;
-    if (snap?.name && !caName) setCaName(snap.name);
-  }, [currentRide, trackingData, bookingType, caName]);
+  }, [currentRide, trackingData, bookingType]);
 
   // ── 2. Join booking socket room ────────────────────────────────────────────
   // FIX: call socketService directly — not via Redux thunk
@@ -202,6 +210,8 @@ export function useRideTracking({ rideId, bookingId }) {
           const navPayload = {
             currentTarget:          d.activeNavigationTarget,
             activeNavigationTarget: d.activeNavigationTarget,
+            bookingId:              d.bookingId,
+            rideId:                 d.rideId,
           };
           dispatch(setNavigationTarget(navPayload));
           dispatch(socketNavigationTargetChanged(navPayload));
@@ -217,7 +227,7 @@ export function useRideTracking({ rideId, bookingId }) {
       // ── CA events ────────────────────────────────────────────────────────
       on(SOCKET_EVENTS.CARE_ASSISTANT_LOCATION_UPDATE, (d) => {
         if (!mountedRef.current) return;
-        const loc = { lat: d.lat, lng: d.lng, heading: d.heading ?? 0, speed: d.speed ?? 0, updatedAt: d.updatedAt };
+        const loc = { lat: d.lat, lng: d.lng, heading: d.heading ?? 0, speed: d.speed ?? 0, updatedAt: d.updatedAt || new Date().toISOString() };
         setCaLiveLocation(loc);
         dispatch(setCareAssistantLocation({ ...loc, role: 'care_assistant', careAssistantId: d.careAssistantId, bookingId: d.bookingId }));
         if (d.status) setCaStatusLocal(d.status);
@@ -268,21 +278,45 @@ export function useRideTracking({ rideId, bookingId }) {
         setCaJoinPoint(prev => prev ? { ...prev, isCompleted: true } : prev);
       }),
 
+      // FIX #11: also push into operationsSlice so selectCaJoinPoint stays
+      // in sync — CARE_ASSISTANT_ATTACHED already did this, this handler
+      // was previously local-state-only.
       on(SOCKET_EVENTS.JOIN_POINT_CALCULATED, (d) => {
         if (!mountedRef.current) return;
         if (d.location?.coordinates) {
-          setCaJoinPoint({ coordinates: d.location.coordinates, zone: d.zone, distCaToJoinKm: d.distCaToJoinKm });
+          const jp = { coordinates: d.location.coordinates, zone: d.zone, distCaToJoinKm: d.distCaToJoinKm };
+          setCaJoinPoint(jp);
+          dispatch(setCareAssistantJoined({ caJoinPoint: jp }));
+        }
+      }),
+
+      on(SOCKET_EVENTS.JOIN_POINT_RECALCULATED, (d) => {
+        if (!mountedRef.current) return;
+        if (d.location?.coordinates) {
+          const jp = { coordinates: d.location.coordinates, zone: d.zone, distCaToJoinKm: d.distCaToJoinKm };
+          setCaJoinPoint(jp);
+          dispatch(setCareAssistantJoined({ caJoinPoint: jp }));
         }
       }),
 
       // Booking state snapshot (reconnect hydration)
+      // FIX #10: RideTracking no longer has careAssistant* top-level fields —
+      // read the active CARE_ASSISTANT entry out of the generic
+      // participants[] array instead.
       on(SOCKET_EVENTS.BOOKING_STATE_SNAPSHOT, (d) => {
         if (!mountedRef.current) return;
-        const caLoc = d.tracking?.careAssistantLiveLocation;
-        if (caLoc?.coordinates?.length >= 2) {
-          setCaLiveLocation({ lat: caLoc.coordinates[1], lng: caLoc.coordinates[0], heading: caLoc.heading || 0, speed: caLoc.speedKmh || 0 });
+        const caEntry = d.tracking?.participants?.find(
+          (p) => p.role === 'CARE_ASSISTANT' && p.isActive
+        );
+        if (caEntry?.liveLocation?.coordinates?.length === 2) {
+          setCaLiveLocation({
+            lat:     caEntry.liveLocation.coordinates[1],
+            lng:     caEntry.liveLocation.coordinates[0],
+            heading: caEntry.liveLocation.heading  || 0,
+            speed:   caEntry.liveLocation.speedKmh || 0,
+          });
         }
-        if (d.tracking?.careAssistantStatus) setCaStatusLocal(d.tracking.careAssistantStatus);
+        if (caEntry?.status) setCaStatusLocal(caEntry.status);
       }),
     ];
 

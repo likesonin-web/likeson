@@ -1,268 +1,322 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSelector } from 'react-redux';
-import { QrCode, Banknote, CheckCircle, ArrowRight, RefreshCw, DollarSign, Plus, Navigation } from 'lucide-react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { Wallet, Heart, MapPin, Users, Truck, Check, RefreshCw, QrCode } from 'lucide-react';
 import {
-  generatePayAtServiceLink, fetchPayAtServiceStatus,
-  markCollectedByPartner, markServiceComplete,
-  selectPayAtServiceSession, selectPayAtServiceLoading,
-} from '@/store/slices/payAtServiceSlice';
-import {
-  adminRequestCareRide, fetchAdminCareRideNearby,
-  selectCareRideNearby, selectLoading,
-  adminProcessRefund, selectAdminRefundLoading,
+  adminProcessRefund,
+  adminRequestCareRide,
+  fetchAdminCareRideNearby,
+  fetchAdminBookingById,
+  selectAdminRefund,
+  selectAdminRefundLoading,
+  selectCareRideNearby,
 } from '@/store/slices/operationsSlice';
 import {
-  currency, statusBadge, fmt, Spinner, FieldNote, REFUND_REASONS, CallButton,
+  REFUND_REASONS, currency, fmtDate, statusBadge,
+  Spinner, SectionHeader, FieldNote, CallButton,
 } from './shared';
 
-/* ─── PAY-AT-SERVICE ───────────────────────────────────────────────────────── */
-export function PayAtServicePanel({ booking, dispatch }) {
-  const bookingId = booking._id;
-  const session   = useSelector(selectPayAtServiceSession(bookingId));
-  const loading   = useSelector(selectPayAtServiceLoading);
+// ── Refund panel ──────────────────────────────────────────────────────────────
+export function RefundPanel({ booking, dispatch }) {
+  const loading     = useSelector(selectAdminRefundLoading);
+  const refundResult= useSelector(selectAdminRefund);
+  const [amount,  setAmount]  = useState('');
+  const [reason,  setReason]  = useState('');
+  const [done,    setDone]    = useState(false);
 
-  const [cashAmount, setCashAmount] = useState(booking?.fareBreakdown?.totalAmount ?? '');
-  const [cashMethod, setCashMethod] = useState('cash');
-  const [cashNote,   setCashNote]   = useState('');
+  const paid        = booking.fareBreakdown?.amountPaid ?? 0;
+  const alreadyRefunded = booking.fareBreakdown?.refundAmount ?? 0;
+  const maxRefund   = Math.max(0, paid - alreadyRefunded);
 
-  const paymentDone = ['paid', 'pay_at_service_paid', 'refunded'].includes(booking?.paymentStatus) || session?.paid;
-
-  useEffect(() => {
-    if (!bookingId) return;
-    dispatch(fetchPayAtServiceStatus({ bookingId }));
-    let interval;
-    if (session?.shortUrl && !session?.paid && !paymentDone) {
-      interval = setInterval(() => dispatch(fetchPayAtServiceStatus({ bookingId })), 8000);
-    }
-    return () => interval && clearInterval(interval);
-  }, [bookingId, session?.shortUrl, session?.paid, paymentDone, dispatch]);
-
-  const amount    = session?.amount ?? booking?.fareBreakdown?.totalAmount ?? 0;
-  const shortUrl  = session?.shortUrl ?? booking?.payAtService?.shortUrl ?? null;
-  const expiresAt = session?.expiresAt ?? booking?.payAtService?.expiresAt ?? null;
-  const isPaid    = session?.paid ?? paymentDone;
-  const isExpired = expiresAt ? new Date(expiresAt) < new Date() : false;
-  const canComplete = (session?.canMarkComplete ?? isPaid) && booking?.status !== 'completed';
+  const handleRefund = async () => {
+    if (!reason) return;
+    const refundAmount = amount ? parseFloat(amount) : undefined;
+    try {
+      await dispatch(adminProcessRefund({ bookingId: booking._id, refundAmount, reason })).unwrap();
+      setDone(true);
+      setTimeout(() => setDone(false), 3000);
+      dispatch(fetchAdminBookingById({ bookingId: booking._id }));
+    } catch {}
+  };
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-xl border border-base-300 bg-base-200 p-3 grid grid-cols-2 gap-3">
+      {/* Summary */}
+      <div className="grid grid-cols-3 gap-2 rounded-xl border border-base-300 bg-base-200 p-3">
         <div>
-          <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">Amount Due</p>
-          <p className="text-sm font-bold text-success m-0 mt-0.5">{currency(amount)}</p>
-          <FieldNote text="Total fare from fareBreakdown" />
+          <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">Total</p>
+          <p className="text-sm font-bold text-base-content m-0">{currency(booking.fareBreakdown?.totalAmount)}</p>
         </div>
         <div>
-          <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">Payment Status</p>
-          <div className="mt-1">{statusBadge(booking?.paymentStatus ?? 'unpaid')}</div>
+          <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">Paid</p>
+          <p className="text-sm font-bold text-success m-0">{currency(paid)}</p>
+        </div>
+        <div>
+          <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">Refunded</p>
+          <p className="text-sm font-bold text-error m-0">{currency(alreadyRefunded)}</p>
         </div>
       </div>
 
-      {isPaid ? (
-        <div className="rounded-xl border border-success/30 bg-success/10 p-3 text-xs text-success flex items-center gap-2">
-          <CheckCircle size={14} />
-          <div>
-            <p className="font-bold m-0">Payment Received</p>
-            {session?.paidAt && <p className="m-0 opacity-70 mt-0.5">Paid at {fmt(session.paidAt)}</p>}
-          </div>
+      {maxRefund <= 0 ? (
+        <div className="flex items-center gap-2 text-xs text-success bg-success/10 border border-success/30 rounded-lg px-3 py-2">
+          <Check size={12} /> Full amount already refunded
         </div>
       ) : (
-        <>
-          {shortUrl && !isExpired && (
-            <div className="rounded-xl border border-primary/30 bg-primary/5 p-3 flex flex-col gap-2">
-              <p className="font-bold m-0 text-xs flex items-center gap-1.5 text-base-content"><QrCode size={12} /> Payment Link Active</p>
-              <p className="m-0 text-base-content/60 break-all font-mono text-[10px]">{shortUrl}</p>
-              {expiresAt && <p className="m-0 text-base-content/40 text-[10px]">Expires: {fmt(expiresAt)}</p>}
-              <FieldNote text="Share this link with the patient. It auto-polls every 8 seconds." />
-              <div className="flex gap-2 mt-1">
-                <a href={shortUrl} target="_blank" rel="noreferrer" className="btn btn-xs btn-primary flex-1 gap-1">
-                  <ArrowRight size={9} /> Open Link
-                </a>
-                <button onClick={() => dispatch(fetchPayAtServiceStatus({ bookingId }))} disabled={loading?.fetchStatus} className="btn btn-xs flex-1 gap-1 bg-base-300 text-base-content">
-                  {loading?.fetchStatus ? <Spinner size={9} /> : <RefreshCw size={9} />} Check Status
-                </button>
-              </div>
-            </div>
-          )}
+        <div className="flex flex-col gap-2">
+          <FieldNote text={`Max refundable: ${currency(maxRefund)}`} />
 
-          {(!shortUrl || isExpired) && (
-            <div>
-              <FieldNote text="Generates a Razorpay payment link + QR. Patient can scan/click to pay." />
-              <button disabled={loading?.generateLink} onClick={() => dispatch(generatePayAtServiceLink({ bookingId }))} className="btn btn-primary w-full gap-2 mt-1">
-                {loading?.generateLink ? <Spinner size={12} /> : <QrCode size={12} />}
-                {isExpired ? 'Regenerate QR / Link' : 'Generate QR / Payment Link'}
-              </button>
-            </div>
-          )}
+          <input
+            type="number"
+            value={amount}
+            onChange={e => setAmount(e.target.value)}
+            placeholder={`Amount (blank = full ${currency(maxRefund)})`}
+            max={maxRefund}
+            min={1}
+            className="input-field text-xs"
+          />
 
-          <div className="divider text-[10px] text-base-content/35 m-0">OR record cash / manual payment</div>
+          <select value={reason} onChange={e => setReason(e.target.value)} className="input-field text-xs">
+            <option value="">Select reason (required)…</option>
+            {REFUND_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
 
-          <div className="rounded-xl border border-base-300 bg-base-200 p-3 flex flex-col gap-2">
-            <FieldNote text="Use when patient pays cash on-site. Recorded against booking." />
-            <div className="flex gap-2">
-              <input type="number" value={cashAmount} onChange={(e) => setCashAmount(e.target.value)} placeholder="Amount collected" className="input-field text-xs flex-1" />
-              <select value={cashMethod} onChange={(e) => setCashMethod(e.target.value)} className="input-field text-xs w-28">
-                <option value="cash">Cash</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-            <input value={cashNote} onChange={(e) => setCashNote(e.target.value)} placeholder="Note (optional)" className="input-field text-xs" />
-            <button disabled={loading?.markCollected || !cashAmount} onClick={() => dispatch(markCollectedByPartner({ bookingId, amount: Number(cashAmount), method: cashMethod, note: cashNote || undefined }))} className="btn btn-sm gap-1.5 bg-base-300 text-base-content">
-              {loading?.markCollected ? <Spinner size={10} /> : <Banknote size={10} />} Mark Collected
-            </button>
-          </div>
-        </>
-      )}
+          <textarea
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder="Or type reason directly…"
+            rows={2}
+            className="input-field text-xs resize-none"
+          />
 
-      <div>
-        <FieldNote text="Mark service as complete after payment confirmed. Notifies all parties." />
-        <button
-          disabled={!canComplete || loading?.markComplete || booking?.status === 'completed'}
-          onClick={() => dispatch(markServiceComplete({ bookingId }))}
-          className="btn btn-success w-full gap-2 mt-1"
-        >
-          {loading?.markComplete ? <Spinner size={12} /> : <CheckCircle size={12} />}
-          {booking?.status === 'completed' ? 'Service Already Completed' : 'Mark Service Complete'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* ─── REFUND PANEL ─────────────────────────────────────────────────────────── */
-export function RefundPanel({ booking, dispatch }) {
-  const loading = useSelector(selectAdminRefundLoading);
-  const [amount, setAmount] = useState('');
-  const [reason, setReason] = useState('');
-
-  const alreadyRefunded = ['refunded', 'refund_pending'].includes(booking?.status) || booking?.paymentStatus === 'refunded';
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning-content/80">
-        <p className="font-bold m-0 mb-1">Amount paid: {currency(booking?.fareBreakdown?.amountPaid)}</p>
-        <p className="m-0 opacity-75">Leave amount blank to refund full paid amount. Razorpay refund initiated automatically.</p>
-      </div>
-
-      {alreadyRefunded && (
-        <div className="rounded-xl border border-info/30 bg-info/10 p-3 text-xs text-info">
-          <p className="font-bold m-0">Already refunded: {currency(booking?.fareBreakdown?.refundAmount)}</p>
-          <p className="m-0 opacity-75 mt-0.5">Additional refund can still be processed if needed.</p>
+          <button
+            onClick={handleRefund}
+            disabled={loading || !reason}
+            className={`btn btn-sm gap-1.5 self-start ${done ? 'btn-success' : 'btn-error'}`}
+          >
+            {loading ? <Spinner size={12} /> : done ? <Check size={12} /> : <Wallet size={11} />}
+            {done ? 'Refund Initiated' : 'Process Refund'}
+          </button>
+          <FieldNote text="Razorpay refund or wallet credit. Status email sent to patient." />
         </div>
       )}
 
-      <div>
-        <label className="label text-[10px] uppercase tracking-widest mb-1 block">Refund Amount (₹)</label>
-        <FieldNote text={`Max refundable: ${currency(booking?.fareBreakdown?.amountPaid)}. Blank = full refund.`} />
-        <input
-          type="number"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          placeholder={`Max: ${booking?.fareBreakdown?.amountPaid ?? 0}`}
-          className="input-field text-xs mt-1"
-        />
-      </div>
-
-      <div>
-        <label className="label text-[10px] uppercase tracking-widest mb-1 block">
-          Reason <span className="text-error">*</span>
-        </label>
-        <FieldNote text="Required for audit. Sent to Razorpay as refund note." />
-        <select value={reason} onChange={(e) => setReason(e.target.value)} className="input-field text-xs mt-1">
-          <option value="">Select reason…</option>
-          {REFUND_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
-        </select>
-      </div>
-
-      <button disabled={loading || !reason} onClick={() => dispatch(adminProcessRefund({ bookingId: booking._id, refundAmount: amount ? parseFloat(amount) : undefined, reason }))} className="btn btn-warning w-full gap-2">
-        {loading ? <Spinner size={12} /> : <DollarSign size={12} />}
-        {loading ? 'Processing refund…' : 'Initiate Refund'}
-      </button>
+      {/* Payment details */}
+      {(booking.payments?.length ?? 0) > 0 && (
+        <div className="rounded-xl border border-base-300 bg-base-200 p-3 mt-2">
+          <SectionHeader title="Payment History" />
+          {booking.payments.map((p, i) => (
+            <div key={i} className="flex items-center justify-between text-[11px] py-1.5 border-b border-base-300/60 last:border-0">
+              <div>
+                <span className="font-bold text-base-content/70">{p.gateway}</span>
+                {p.transactionId && <span className="text-base-content/35 ml-1 font-mono text-[9px]">{p.transactionId.slice(-8)}</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-success font-bold">{currency(p.amount)}</span>
+                {statusBadge(p.status)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-/* ─── CARE RIDE PANEL ──────────────────────────────────────────────────────── */
+// ── Care ride panel ───────────────────────────────────────────────────────────
 export function CareRidePanel({ booking, dispatch }) {
-  const careRideNearby  = useSelector(selectCareRideNearby);
-  const careRideLoading = useSelector(selectLoading('adminRequestCareRide'));
-  const nearbyLoading   = useSelector(selectLoading('fetchAdminCareRideNearby'));
+  const nearby   = useSelector(selectCareRideNearby);
+  const [loading, setLoading] = useState(false);
+  const [done,    setDone]    = useState(false);
+  const [requesterType, setRequesterType] = useState('care_assistant');
+  const [pickupLat,  setPickupLat]   = useState(booking.patientLocation?.coordinates?.[1] ?? '');
+  const [pickupLng,  setPickupLng]   = useState(booking.patientLocation?.coordinates?.[0] ?? '');
+  const [pickupAddr, setPickupAddr]  = useState(booking.patientLocation?.address ?? '');
+  const [destLat,   setDestLat]     = useState(booking.destinationLocation?.coordinates?.[1] ?? '');
+  const [destLng,   setDestLng]     = useState(booking.destinationLocation?.coordinates?.[0] ?? '');
+  const [destAddr,  setDestAddr]    = useState(booking.destinationLocation?.address ?? '');
 
-  const [form, setForm] = useState({
-    requesterType: 'care_assistant', careAssistantId: '',
-    pickupLat: '', pickupLng: '', pickupAddress: '',
-    dropLat: '', dropLng: '', dropAddress: '',
-  });
-  const upd = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+  const loadNearby = () => dispatch(fetchAdminCareRideNearby({ bookingId: booking._id }));
 
-  const submit = () => dispatch(adminRequestCareRide({
-    bookingId:           booking._id,
-    customerId:          booking.customer?._id ?? booking.customer,
-    requesterType:       form.requesterType,
-    careAssistantId:     form.careAssistantId || undefined,
-    pickupLocation:      { coordinates: [parseFloat(form.pickupLng), parseFloat(form.pickupLat)], address: form.pickupAddress },
-    destinationLocation: { coordinates: [parseFloat(form.dropLng),   parseFloat(form.dropLat)],   address: form.dropAddress },
-  }));
+  const handleCreate = async () => {
+    if (!pickupLat || !pickupLng || !destLat || !destLng) return;
+    setLoading(true);
+    try {
+      await dispatch(adminRequestCareRide({
+        bookingId:     booking._id,
+        customerId:    booking.customer?._id ?? booking.customer,
+        requesterType,
+        careAssistantId: booking.careAssistant?._id ?? booking.careAssistant ?? undefined,
+        pickupLocation:      { coordinates: [parseFloat(pickupLng), parseFloat(pickupLat)], address: pickupAddr },
+        destinationLocation: { coordinates: [parseFloat(destLng),   parseFloat(destLat)],   address: destAddr   },
+      })).unwrap();
+      setDone(true);
+      setTimeout(() => setDone(false), 3000);
+      dispatch(fetchAdminBookingById({ bookingId: booking._id }));
+    } catch {}
+    setLoading(false);
+  };
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-xl border border-base-300 bg-base-200/60 p-3 text-[10px] text-base-content/50">
-        Creates a care ride request. Use when patient needs transport during a full-care booking. Admin-side override for care_assistant or customer requester.
-      </div>
+      <FieldNote text="Creates a Ride record linked to booking. Then assign a driver from Assign tab." />
 
-      <div className="grid grid-cols-2 gap-2">
-        {[{k:'pickupLat',ph:'Pickup Lat'},{k:'pickupLng',ph:'Pickup Lng'},{k:'dropLat',ph:'Drop Lat'},{k:'dropLng',ph:'Drop Lng'}].map(({k,ph}) => (
-          <div key={k}>
-            <FieldNote text={ph} />
-            <input value={form[k]} onChange={(e) => upd(k, e.target.value)} placeholder={ph} className="input-field text-xs mt-0.5" />
-          </div>
+      {/* Requester type */}
+      <div className="flex gap-2">
+        {['care_assistant', 'customer'].map(t => (
+          <button
+            key={t}
+            onClick={() => setRequesterType(t)}
+            className={`btn btn-xs ${requesterType === t ? 'btn-primary' : 'bg-base-300 text-base-content'}`}
+          >
+            {t === 'care_assistant' ? 'CA Requested' : 'Patient Requested'}
+          </button>
         ))}
       </div>
 
-      <input value={form.pickupAddress} onChange={(e) => upd('pickupAddress', e.target.value)} placeholder="Pickup address" className="input-field text-xs" />
-      <input value={form.dropAddress}   onChange={(e) => upd('dropAddress',   e.target.value)} placeholder="Drop address"   className="input-field text-xs" />
-
-      <div className="flex gap-2">
-        <select value={form.requesterType} onChange={(e) => upd('requesterType', e.target.value)} className="input-field text-xs flex-1">
-          <option value="care_assistant">Care Assistant</option>
-          <option value="customer">Customer</option>
-        </select>
-        {form.requesterType === 'care_assistant' && (
-          <input value={form.careAssistantId} onChange={(e) => upd('careAssistantId', e.target.value)} placeholder="Care Asst. ID" className="input-field text-xs flex-1" />
-        )}
+      {/* Location inputs */}
+      <div className="rounded-xl border border-base-300 bg-base-200 p-3 flex flex-col gap-2">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/45 m-0">Pickup Location</p>
+        <div className="grid grid-cols-2 gap-2">
+          <input value={pickupLat}  onChange={e => setPickupLat(e.target.value)}  placeholder="Lat" type="number" step="any" className="input-field text-xs" />
+          <input value={pickupLng}  onChange={e => setPickupLng(e.target.value)}  placeholder="Lng" type="number" step="any" className="input-field text-xs" />
+        </div>
+        <input value={pickupAddr} onChange={e => setPickupAddr(e.target.value)} placeholder="Address" className="input-field text-xs" />
       </div>
 
-      <div className="flex gap-2">
-        <button disabled={careRideLoading} onClick={submit} className="btn btn-primary btn-sm flex-1 gap-1.5">
-          {careRideLoading ? <Spinner size={10} /> : <Plus size={10} />} Create Care Ride
+      <div className="rounded-xl border border-base-300 bg-base-200 p-3 flex flex-col gap-2">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/45 m-0">Destination</p>
+        <div className="grid grid-cols-2 gap-2">
+          <input value={destLat}   onChange={e => setDestLat(e.target.value)}   placeholder="Lat" type="number" step="any" className="input-field text-xs" />
+          <input value={destLng}   onChange={e => setDestLng(e.target.value)}   placeholder="Lng" type="number" step="any" className="input-field text-xs" />
+        </div>
+        <input value={destAddr}  onChange={e => setDestAddr(e.target.value)}  placeholder="Address" className="input-field text-xs" />
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={handleCreate} disabled={loading || !pickupLat || !pickupLng || !destLat || !destLng} className={`btn btn-sm gap-1.5 ${done ? 'btn-success' : 'btn-primary'}`}>
+          {loading ? <Spinner size={12} /> : done ? <Check size={12} /> : <Heart size={11} />}
+          {done ? 'Care Ride Created' : 'Create Care Ride'}
         </button>
-        <button disabled={nearbyLoading} onClick={() => dispatch(fetchAdminCareRideNearby({ bookingId: booking._id }))} className="btn btn-sm flex-1 gap-1.5 bg-base-300 text-base-content">
-          {nearbyLoading ? <Spinner size={10} /> : <Navigation size={10} />} Find Nearby
+        <button onClick={loadNearby} className="btn btn-ghost btn-sm gap-1.5">
+          <RefreshCw size={11} /> Check Nearby
         </button>
       </div>
 
-      <AnimatePresence>
-        {careRideNearby && (
-          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
-            className="rounded-xl border border-base-300 bg-base-200 p-3 text-xs text-base-content">
-            <p className="font-bold m-0 mb-1">Nearby Results</p>
-            <p className="m-0 text-base-content/60 mb-2">
-              {(careRideNearby.soloDrivers ?? careRideNearby.nearbyDrivers ?? []).length} solo drivers · {(careRideNearby.nearbyTPs ?? careRideNearby.transportPartners ?? []).length} TPs nearby
-            </p>
-            {(careRideNearby.soloDrivers ?? careRideNearby.nearbyDrivers ?? careRideNearby.agencyDrivers ?? []).slice(0, 5).map((d, i) => (
-              <div key={d._id ?? d.driverId ?? i} className="flex items-center justify-between mt-2 py-1.5 border-t border-base-300/60">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-medium truncate">{d.name ?? d.legalName}</span>
-                  {d.phone && <CallButton phone={d.phone} label="" size="xs" />}
+      {/* Nearby results summary */}
+      {nearby && (
+        <div className="rounded-xl border border-base-300 bg-base-200 p-3">
+          <SectionHeader title="Nearby for Care Ride" sub={`${(nearby.nearbyDrivers?.length ?? 0)} drivers · ${(nearby.nearbyTPs?.length ?? 0)} TPs`} />
+          {nearby.ratePerKm && (
+            <p className="text-[11px] text-base-content/50 mb-2">Rate: ₹{nearby.ratePerKm}/km ({nearby.rateSource})</p>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <p className="text-[10px] font-bold text-base-content/40 mb-1">Solo Drivers</p>
+              {(nearby.soloDrivers ?? nearby.nearbyDrivers ?? []).slice(0, 4).map((d, i) => (
+                <div key={i} className="flex items-center justify-between text-[10px] border-b border-base-300/60 last:border-0 py-1">
+                  <span className="text-base-content/60 truncate">{d.name ?? d.legalName}</span>
+                  <span className="text-base-content/35 shrink-0 ml-2">{d.distanceKm} km</span>
                 </div>
-                <span className="text-[10px] text-primary shrink-0">{d.distanceKm} km</span>
-              </div>
-            ))}
-          </motion.div>
+              ))}
+              {(nearby.soloDrivers ?? nearby.nearbyDrivers ?? []).length === 0 && (
+                <p className="text-[10px] text-base-content/30">None found</p>
+              )}
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-base-content/40 mb-1">Transport Partners</p>
+              {(nearby.transportPartners ?? nearby.nearbyTPs ?? []).slice(0, 4).map((tp, i) => (
+                <div key={i} className="flex items-center justify-between text-[10px] border-b border-base-300/60 last:border-0 py-1">
+                  <span className="text-base-content/60 truncate">{tp.businessName}</span>
+                  <span className="text-base-content/35 shrink-0 ml-2">{tp.totalDrivers}d</span>
+                </div>
+              ))}
+              {(nearby.transportPartners ?? nearby.nearbyTPs ?? []).length === 0 && (
+                <p className="text-[10px] text-base-content/30">None found</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Pay at service panel (QR / cash) ─────────────────────────────────────────
+export function PayAtServicePanel({ booking, dispatch }) {
+  const [payLink,   setPayLink]   = useState(null);
+  const [polling,   setPolling]   = useState(false);
+  const [cashLoading, setCashLoading] = useState(false);
+  const [cashDone,  setCashDone]  = useState(false);
+  const pollRef = useRef(null);
+
+  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; setPolling(false); } };
+
+  useEffect(() => () => stopPoll(), []);
+
+  const generateLink = () => {
+    // Placeholder — real implementation calls payment gateway API
+    setPayLink({ url: `https://rzp.io/i/mock-${booking.bookingCode}`, expiresAt: new Date(Date.now() + 30*60*1000).toISOString() });
+    setPolling(true);
+    pollRef.current = setInterval(() => {
+      dispatch(fetchAdminBookingById({ bookingId: booking._id }));
+    }, 8000);
+  };
+
+  const markCash = async () => {
+    setCashLoading(true);
+    try {
+      await dispatch(updateAdminBookingStatus({ bookingId: booking._id, status: 'completed', note: 'Cash collected at service point' })).unwrap();
+      setCashDone(true);
+      dispatch(fetchAdminBookingById({ bookingId: booking._id }));
+    } catch {}
+    setCashLoading(false);
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <SectionHeader title="Pay at Service" sub="Generate QR link or record cash" />
+
+      <div className="grid grid-cols-2 gap-2 rounded-xl border border-base-300 bg-base-200 p-3">
+        <div>
+          <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">Total</p>
+          <p className="text-base font-bold text-base-content m-0">{currency(booking.fareBreakdown?.totalAmount)}</p>
+        </div>
+        <div>
+          <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">Status</p>
+          {statusBadge(booking.paymentStatus ?? 'unpaid')}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        {!payLink ? (
+          <button onClick={generateLink} className="btn btn-sm btn-primary gap-1.5">
+            <QrCode size={11} /> Generate Payment Link
+          </button>
+        ) : (
+          <div className="flex flex-col gap-2 w-full">
+            <div className="flex items-center gap-2 text-xs">
+              <a href={payLink.url} target="_blank" rel="noreferrer" className="text-primary underline truncate">{payLink.url}</a>
+              {polling && <Spinner size={12} className="text-base-content/40" />}
+            </div>
+            <p className="text-[10px] text-base-content/40 m-0">Expires: {fmtDate(payLink.expiresAt)}</p>
+            <div className="flex gap-2">
+              <button onClick={generateLink} className="btn btn-ghost btn-xs gap-1"><RefreshCw size={10} /> Regenerate</button>
+              <button onClick={stopPoll} className="btn btn-ghost btn-xs text-error">Stop Polling</button>
+            </div>
+          </div>
         )}
-      </AnimatePresence>
+
+        <button
+          onClick={markCash}
+          disabled={cashLoading || cashDone}
+          className={`btn btn-sm gap-1.5 ${cashDone ? 'btn-success' : 'btn-outline'}`}
+        >
+          {cashLoading ? <Spinner size={12} /> : cashDone ? <Check size={12} /> : <Wallet size={11} />}
+          {cashDone ? 'Cash Marked' : 'Mark Cash Collected'}
+        </button>
+      </div>
+
+      <FieldNote text="QR polling auto-refreshes booking status every 8s. Manual mark sets status to completed." />
     </div>
   );
 }

@@ -1,287 +1,363 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSelector } from 'react-redux';
-import { useRouter } from 'next/navigation';
-import { Radio, Video, Zap, Plus, AlertTriangle, RefreshCw, Car, Heart } from 'lucide-react';
+import { Navigation, Radio, Video, Check, RefreshCw, Phone, AlertTriangle, MessageSquare, FileText } from 'lucide-react';
 import {
-  createConsultation, fetchAgoraTokens, provisionAgoraTokens,
-  selectAgora, selectLoading as selectConsultLoading,
-} from '@/store/slices/consultationSlice';
-import {
-  fetchCareTrackingSnapshot, selectCareTrackingSnapshot,
-  selectCareAssistantLocation, selectLiveLocation, selectSocketConnected,
-  selectLoading,
+  fetchCareTrackingSnapshot,
+  fetchConsultation,
+  fetchConsultationJoinToken,
+  confirmConsultation,
+  acceptConsultation,
+  startConsultation,
+  endConsultation,
+  submitConsultationConsent,
+  sendConsultationChat,
+  fetchAdminBookingById,
+  selectCareTrackingSnapshot,
+  selectCareTrackingLoading,
+  selectConsultation,
+  selectConsultationChat,
+  selectConsultationLoading,
+  selectConfirmConsultationLoading,
+  selectStartConsultationLoading,
+  selectEndConsultationLoading,
+  selectConsultationJoinToken,
+  selectJoinTokenLoading,
+  selectCareRideStatus,
+  selectRideParticipants,
+  fetchRideParticipants,
 } from '@/store/slices/operationsSlice';
-import LiveTrackingPanel from './LiveTrackingPanel';
 import {
-  resolveConsultId, fmt, fmtDate, Spinner, EmptyState, SectionHeader,
-  InfoRow, CA_STATUS_LABELS, CA_STATUS_COLORS, CallButton, FieldNote,
+  statusBadge, fmtDate, currency, Spinner,
+  SectionHeader, FieldNote, CallButton, resolveConsultId,
+  CA_STATUS_LABELS, CA_STATUS_COLORS,
 } from './shared';
 
-/* ─── CONSULTATION PANEL ───────────────────────────────────────────────────── */
-export function ConsultationPanel({ booking, dispatch }) {
-  const router = useRouter();
-  const [form, setForm] = useState({ consultationType: 'video', scheduledAt: '', slotDurationMin: 30, urgency: 'routine' });
-  const agoraState    = useSelector(selectAgora);
-  const tokenLoading  = useSelector(selectConsultLoading('agora'));
-  const createLoading = useSelector(selectConsultLoading('create'));
-  const [localErr, setLocalErr] = useState(null);
+// ── Care tracking panel ───────────────────────────────────────────────────────
+export function CareTrackingPanel({ booking, dispatch }) {
+  const snapshot = useSelector(selectCareTrackingSnapshot);
+  const loading  = useSelector(selectCareTrackingLoading);
+  const participants = useSelector(selectRideParticipants);
+  const pollRef  = useRef(null);
+  const [polling, setPolling] = useState(false);
 
-  const consultationId = resolveConsultId(booking?.consultationSessionId);
-  const upd = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+  const rideId = booking.primaryRide?._id ?? booking.primaryRide;
 
-  const handleCreate = async () => {
-    if (!form.scheduledAt) { setLocalErr('Scheduled date/time is required'); return; }
-    setLocalErr(null);
-    try {
-      await dispatch(createConsultation({
-        bookingId: booking._id, consultationType: form.consultationType,
-        scheduledAt: new Date(form.scheduledAt).toISOString(),
-        slotDurationMin: Number(form.slotDurationMin), urgency: form.urgency,
-      })).unwrap();
-    } catch (e) { setLocalErr(String(e?.message ?? e)); }
+  const loadSnapshot = () => dispatch(fetchCareTrackingSnapshot({ bookingId: booking._id }));
+
+  const startPoll = () => {
+    loadSnapshot();
+    if (rideId) dispatch(fetchRideParticipants({ rideId }));
+    setPolling(true);
+    pollRef.current = setInterval(() => {
+      loadSnapshot();
+    }, 10000);
   };
 
-  const handleFetchToken = async () => {
-    if (!consultationId) return;
-    setLocalErr(null);
-    try {
-      const res = await dispatch(fetchAgoraTokens(consultationId)).unwrap();
-      if (!res?.tokens) await dispatch(provisionAgoraTokens(consultationId)).unwrap();
-    } catch {
-      try { await dispatch(provisionAgoraTokens(consultationId)).unwrap(); }
-      catch (e2) { setLocalErr(String(e2?.message ?? e2)); }
-    }
+  const stopPoll = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    setPolling(false);
   };
 
-  const tokens    = agoraState?.myTokens ?? agoraState?.doctorTokens;
-  const hasTokens = !!tokens?.rtcToken;
+  useEffect(() => () => stopPoll(), []);
 
-  if (consultationId) {
-    return (
-      <div className="flex flex-col gap-3">
-        <div className="rounded-xl border border-violet-300/30 bg-violet-50/10 p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-5 h-5 rounded-full bg-violet-400/15 flex items-center justify-center">
-              <Radio size={10} className="text-violet-400" />
-            </div>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400">Session Linked</span>
-          </div>
-          <p className="text-[11px] font-mono text-base-content/60 m-0 break-all">{consultationId}</p>
-          <p className="text-[10px] text-base-content/40 mt-1 m-0">Type: {booking.consultationType ?? form.consultationType} · {booking.bookingType?.replace(/_/g, ' ')}</p>
-          <FieldNote text="Agora-based telemedicine room. Doctor and patient connect here." />
-        </div>
+  const caStatus    = snapshot?.careAssistant?.status ?? 'not_joined';
+  const caStatusLabel = CA_STATUS_LABELS[caStatus] ?? caStatus.replace(/_/g,' ');
+  const caStatusClass = CA_STATUS_COLORS[caStatus] ?? 'text-base-content/50';
 
-        {hasTokens && (
-          <div className="rounded-xl border border-base-300 bg-base-200 p-3 flex flex-col gap-1.5">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/40 m-0">Agora Session</p>
-            <InfoRow label="Channel"   value={tokens.channelName} mono />
-            <InfoRow label="App ID"    value={agoraState.appId}  mono />
-            <InfoRow label="UID"       value={String(tokens.uid ?? '—')} mono />
-            <InfoRow label="Expires"   value={agoraState.expiresAt ? new Date(agoraState.expiresAt).toLocaleTimeString('en-IN') : '—'} />
-            <div className="rounded-lg border border-base-300 bg-base-100 p-2 mt-1">
-              <p className="text-[9px] text-base-content/40 m-0 mb-1">RTC Token (SDK use only)</p>
-              <p className="text-[10px] font-mono text-base-content/50 break-all m-0 select-all line-clamp-3">{tokens.rtcToken}</p>
-            </div>
-          </div>
-        )}
-
-        {localErr && <p className="text-[10px] text-error m-0">{localErr}</p>}
-
-        <div className="flex gap-2">
-          <button disabled={tokenLoading} onClick={handleFetchToken} className="btn btn-primary btn-sm flex-1 gap-1.5">
-            {tokenLoading ? <Spinner size={10} /> : <Zap size={10} />}
-            {hasTokens ? 'Refresh Token' : 'Get Agora Token'}
-          </button>
-          <button onClick={() => router.push(`/doctor/consultation/${consultationId}`)} className="btn btn-success btn-sm flex-1 gap-1.5">
-            <Video size={10} /> Join Room
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const hasSos = snapshot?.hasActiveSos;
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-xl border border-warning/20 bg-warning/5 p-3 text-[10px] text-warning-content/70">
-        No consultation session linked. Create one below to enable telemedicine for this booking. A Razorpay Agora room will be provisioned.
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="label text-[10px] uppercase tracking-widest mb-1 block">Type</label>
-          <select value={form.consultationType} onChange={(e) => upd('consultationType', e.target.value)} className="input-field text-xs">
-            {['video','audio','chat','in_person','home_visit'].map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
-          </select>
+      {/* SOS banner */}
+      {hasSos && (
+        <div className="flex items-center gap-2 rounded-xl border border-error/50 bg-error/10 px-3 py-2 text-xs text-error font-bold">
+          <AlertTriangle size={13} /> Active SOS on this ride! Escalate immediately.
         </div>
-        <div>
-          <label className="label text-[10px] uppercase tracking-widest mb-1 block">Urgency</label>
-          <select value={form.urgency} onChange={(e) => upd('urgency', e.target.value)} className="input-field text-xs">
-            {['routine','urgent','emergency'].map(u => <option key={u} value={u}>{u}</option>)}
-          </select>
+      )}
+
+      {/* Controls */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={loadSnapshot} disabled={loading} className="btn btn-sm btn-outline gap-1.5">
+          {loading ? <Spinner size={12} /> : <RefreshCw size={11} />} Refresh
+        </button>
+        {!polling ? (
+          <button onClick={startPoll} className="btn btn-sm btn-primary gap-1.5">
+            <Navigation size={11} /> Start Live Poll
+          </button>
+        ) : (
+          <button onClick={stopPoll} className="btn btn-sm btn-ghost text-error gap-1.5">
+            <Navigation size={11} /> Stop Poll
+          </button>
+        )}
+        {polling && <span className="text-[10px] text-base-content/40 flex items-center gap-1"><Spinner size={10} /> Polling every 10s</span>}
+      </div>
+
+      {!snapshot ? (
+        <div className="py-8 text-center text-xs text-base-content/40">No tracking data. Click Refresh.</div>
+      ) : (
+        <div className="flex flex-col gap-3">
+
+          {/* Ride status */}
+          <div className="rounded-xl border border-base-300 bg-base-200 p-3">
+            <SectionHeader title="Ride Status" />
+            <div className="grid grid-cols-2 gap-y-1 text-xs">
+              <span className="text-base-content/45">Ride</span>
+              {statusBadge(snapshot.rideStatus)}
+              {snapshot.rideStage && <><span className="text-base-content/45">Stage</span><span>{snapshot.rideStage.replace(/_/g,' ')}</span></>}
+              {snapshot.route?.currentEtaMinutes != null && (
+                <><span className="text-base-content/45">ETA</span><span className="text-success font-bold">{snapshot.route.currentEtaMinutes} min</span></>
+              )}
+              {snapshot.route?.estimatedDistanceKm != null && (
+                <><span className="text-base-content/45">Distance</span><span>{snapshot.route.estimatedDistanceKm} km</span></>
+              )}
+            </div>
+          </div>
+
+          {/* Driver */}
+          {snapshot.driver && (
+            <div className="rounded-xl border border-base-300 bg-base-200 p-3">
+              <SectionHeader title="Driver" />
+              <div className="grid grid-cols-2 gap-y-1 text-xs">
+                <span className="text-base-content/45">Name</span>
+                <div className="flex items-center gap-1">
+                  <span>{snapshot.driver.snapshot?.name ?? '—'}</span>
+                  <CallButton phone={snapshot.driver.snapshot?.phone} label="" size="xs" />
+                </div>
+                {snapshot.driver.liveLocation && (
+                  <>
+                    <span className="text-base-content/45">Location</span>
+                    <span>{snapshot.driver.liveLocation.lat?.toFixed(4)}, {snapshot.driver.liveLocation.lng?.toFixed(4)}</span>
+                    <span className="text-base-content/45">Speed</span>
+                    <span>{snapshot.driver.liveLocation.speedKmh ?? 0} km/h</span>
+                  </>
+                )}
+                <span className="text-base-content/45">Vehicle</span>
+                <span>{snapshot.driver.vehicleSnapshot?.registrationNumber ?? '—'}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Care assistant */}
+          {snapshot.careAssistant && (
+            <div className="rounded-xl border border-base-300 bg-base-200 p-3">
+              <SectionHeader title="Care Assistant" />
+              <div className="grid grid-cols-2 gap-y-1 text-xs">
+                <span className="text-base-content/45">Name</span>
+                <div className="flex items-center gap-1">
+                  <span>{snapshot.careAssistant.name ?? '—'}</span>
+                  <CallButton phone={snapshot.careAssistant.phone} label="" size="xs" />
+                </div>
+                <span className="text-base-content/45">Status</span>
+                <span className={`font-bold ${caStatusClass}`}>{caStatusLabel}</span>
+                <span className="text-base-content/45">Joined Ride</span>
+                <span>{snapshot.careAssistant.isLinkedToRide ? 'Yes' : 'No'}</span>
+                {snapshot.careAssistant.liveLocation && (
+                  <>
+                    <span className="text-base-content/45">CA Location</span>
+                    <span>{snapshot.careAssistant.liveLocation.lat?.toFixed(4)}, {snapshot.careAssistant.liveLocation.lng?.toFixed(4)}</span>
+                  </>
+                )}
+              </div>
+
+              {/* CA Join Point */}
+              {snapshot.route?.caJoinWaypoint && (
+                <div className="mt-2 p-2 rounded-lg bg-base-300/40">
+                  <p className="text-[10px] font-bold text-base-content/45 uppercase tracking-widest mb-1">Join Point</p>
+                  <div className="grid grid-cols-2 gap-y-0.5 text-[11px]">
+                    <span className="text-base-content/40">Zone</span>
+                    <span className="font-medium">{snapshot.route.caJoinWaypoint.zone?.replace(/_/g,' ')}</span>
+                    <span className="text-base-content/40">CA Distance</span>
+                    <span>{snapshot.route.caJoinWaypoint.distCaToJoinKm} km</span>
+                    <span className="text-base-content/40">Completed</span>
+                    <span className={snapshot.route.caJoinWaypoint.isCompleted ? 'text-success font-bold' : 'text-warning'}>
+                      {snapshot.route.caJoinWaypoint.isCompleted ? 'Yes' : 'Pending'}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Milestones */}
+          {snapshot.milestones?.length > 0 && (
+            <div className="rounded-xl border border-base-300 bg-base-200 p-3">
+              <SectionHeader title={`Milestones (${snapshot.milestones.length})`} />
+              <div className="flex flex-col gap-0.5 max-h-32 overflow-y-auto scrollbar-thin">
+                {[...snapshot.milestones].reverse().slice(0,10).map((m, i) => (
+                  <div key={i} className="flex items-center justify-between text-[10px] border-b border-base-300/60 last:border-0 py-1">
+                    <span className="font-mono text-base-content/60">{m.name?.replace(/_/g,' ')}</span>
+                    <span className="text-base-content/35">{fmtDate(m.recordedAt)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* RideParticipants */}
+          {participants.length > 0 && (
+            <div className="rounded-xl border border-base-300 bg-base-200 p-3">
+              <SectionHeader title={`Participants (${participants.length})`} />
+              {participants.map((p, i) => (
+                <div key={p._id ?? i} className="flex items-center justify-between text-[11px] border-b border-base-300/60 last:border-0 py-1.5">
+                  <div>
+                    <span className="font-bold text-base-content/70">{p.role?.replace(/_/g,' ')}</span>
+                    <span className="text-base-content/40 ml-2">{p.snapshot?.name}</span>
+                  </div>
+                  {statusBadge(p.status ?? 'PENDING')}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      </div>
-
-      <div>
-        <label className="label text-[10px] uppercase tracking-widest mb-1 block">Scheduled At <span className="text-error">*</span></label>
-        <FieldNote text="Must match the booking's scheduled time or an agreed teleconsult slot." />
-        <input type="datetime-local" value={form.scheduledAt} onChange={(e) => upd('scheduledAt', e.target.value)} className="input-field text-xs mt-1" />
-      </div>
-
-      <div>
-        <label className="label text-[10px] uppercase tracking-widest mb-1 block">Slot Duration (min)</label>
-        <input type="number" value={form.slotDurationMin} min={5} max={180} onChange={(e) => upd('slotDurationMin', e.target.value)} className="input-field text-xs" />
-      </div>
-
-      {localErr && <p className="text-[10px] text-error m-0">{localErr}</p>}
-
-      <button disabled={createLoading || !form.scheduledAt} onClick={handleCreate} className="btn btn-primary w-full gap-2">
-        {createLoading ? <Spinner size={12} /> : <Plus size={12} />}
-        {createLoading ? 'Creating session…' : 'Create Consultation Room'}
-      </button>
+      )}
     </div>
   );
 }
 
-/* ─── CARE TRACKING PANEL ──────────────────────────────────────────────────── */
-export function CareTrackingPanel({ booking, dispatch }) {
-  const snapshot        = useSelector(selectCareTrackingSnapshot);
-  const caLocation      = useSelector(selectCareAssistantLocation);
-  const liveLocation    = useSelector(selectLiveLocation);
-  const socketConnected = useSelector(selectSocketConnected);
-  const loading         = useSelector(selectLoading('fetchCareTrackingSnapshot'));
+// ── Consultation panel ────────────────────────────────────────────────────────
+export function ConsultationPanel({ booking, dispatch }) {
+  const consultation  = useSelector(selectConsultation);
+  const chat          = useSelector(selectConsultationChat);
+  const token         = useSelector(selectConsultationJoinToken);
+  const loadingCons   = useSelector(selectConsultationLoading);
+  const loadingConf   = useSelector(selectConfirmConsultationLoading);
+  const loadingStart  = useSelector(selectStartConsultationLoading);
+  const loadingEnd    = useSelector(selectEndConsultationLoading);
+  const loadingToken  = useSelector(selectJoinTokenLoading);
+
+  const [chatMsg, setChatMsg]   = useState('');
+  const [endReason, setEndReason] = useState('');
+  const [endDone, setEndDone]   = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
+
+  const consultId = resolveConsultId(booking.consultationSessionId ?? consultation?._id);
 
   useEffect(() => {
-    if (booking?._id) dispatch(fetchCareTrackingSnapshot({ bookingId: booking._id }));
-  }, [booking?._id, dispatch]);
+    if (consultId) dispatch(fetchConsultation({ bookingId: booking._id }));
+  }, [booking._id, consultId, dispatch]);
 
-  const ca        = snapshot?.careAssistant;
-  const caLoc     = ca?.liveLocation ?? caLocation;
-  const driverLoc = snapshot?.driver?.liveLocation ?? liveLocation;
-  const route     = snapshot?.route;
+  const handleConfirm = () => consultId && dispatch(confirmConsultation({ consultationId: consultId, consentAccepted: true }));
+  const handleStart   = () => consultId && dispatch(startConsultation({ consultationId: consultId }));
+  const handleGetToken= () => consultId && dispatch(fetchConsultationJoinToken({ consultationId: consultId }));
+
+  const handleEnd = async () => {
+    if (!consultId) return;
+    await dispatch(endConsultation({ consultationId: consultId, reason: endReason, prescriptionUploaded: false })).unwrap();
+    setEndDone(true);
+    dispatch(fetchAdminBookingById({ bookingId: booking._id }));
+  };
+
+  const handleChat = async () => {
+    if (!chatMsg.trim() || !consultId) return;
+    setChatLoading(true);
+    await dispatch(sendConsultationChat({ consultationId: consultId, message: chatMsg })).unwrap();
+    setChatMsg('');
+    setChatLoading(false);
+  };
+
+  if (!consultId) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-6 text-base-content/40">
+        <Radio size={24} strokeWidth={1} />
+        <p className="text-xs m-0">No consultation session linked</p>
+        <FieldNote text="Auto-created for doctor_online on confirm. Or confirm status to trigger." />
+      </div>
+    );
+  }
+
+  if (loadingCons) return <div className="flex items-center gap-2 text-xs text-base-content/40 py-6 justify-center"><Spinner size={14} /> Loading consultation…</div>;
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Map */}
-      <div className="rounded-xl border border-base-300 overflow-hidden" style={{ height: 200 }}>
-        <LiveTrackingPanel
-          booking={booking}
-          mapRoute={route ? {
-            polyline:         route.expectedPolyline,
-            estimatedDistKm:  route.estimatedDistanceKm,
-            estimatedMinutes: route.estimatedDurationMin,
-            pickupCoords:     route.pickup?.coordinates,
-            dropoffCoords:    route.dropoff?.coordinates,
-          } : null}
-          liveLocation={driverLoc}
-          socketConnected={socketConnected}
+
+      {/* Session info */}
+      {consultation && (
+        <div className="rounded-xl border border-base-300 bg-base-200 p-3">
+          <SectionHeader title="Session" />
+          <div className="grid grid-cols-2 gap-y-1 text-xs">
+            <span className="text-base-content/45">Status</span>
+            {statusBadge(consultation.status)}
+            <span className="text-base-content/45">Type</span>
+            <span>{consultation.consultationType ?? '—'}</span>
+            <span className="text-base-content/45">Scheduled</span>
+            <span>{fmtDate(consultation.scheduledStartTime)}</span>
+            <span className="text-base-content/45">Consent</span>
+            <span className={consultation.telemedicineConsentAccepted ? 'text-success font-bold' : 'text-warning'}>
+              {consultation.telemedicineConsentAccepted ? 'Accepted' : 'Pending'}
+            </span>
+            {consultation.roomId && (
+              <><span className="text-base-content/45">Room</span><span className="font-mono text-[10px] truncate">{consultation.roomId}</span></>
+            )}
+            {consultation.actualDurationMinutes != null && (
+              <><span className="text-base-content/45">Duration</span><span>{consultation.actualDurationMinutes} min</span></>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex flex-wrap gap-2">
+        <button onClick={handleConfirm} disabled={loadingConf || consultation?.status === 'completed'} className="btn btn-xs btn-primary gap-1">
+          {loadingConf ? <Spinner size={10} /> : <Check size={10} />} Confirm
+        </button>
+        <button onClick={handleStart} disabled={loadingStart || consultation?.status !== 'waiting'} className="btn btn-xs btn-success gap-1">
+          {loadingStart ? <Spinner size={10} /> : <Radio size={10} />} Start
+        </button>
+        <button onClick={handleGetToken} disabled={loadingToken} className="btn btn-xs btn-outline gap-1">
+          {loadingToken ? <Spinner size={10} /> : <Video size={10} />} Get Token
+        </button>
+        {!['completed','cancelled'].includes(consultation?.status) && (
+          <button onClick={handleEnd} disabled={loadingEnd || endDone} className="btn btn-xs btn-error gap-1">
+            {loadingEnd ? <Spinner size={10} /> : endDone ? <Check size={10} /> : <FileText size={10} />}
+            {endDone ? 'Ended' : 'End'}
+          </button>
+        )}
+      </div>
+
+      {/* End reason */}
+      {!['completed','cancelled'].includes(consultation?.status) && (
+        <input
+          value={endReason}
+          onChange={e => setEndReason(e.target.value)}
+          placeholder="End reason (optional)"
+          className="input-field text-xs"
         />
-      </div>
+      )}
 
-      {/* Driver + CA cards */}
-      <div className="grid grid-cols-2 gap-2">
-        <div className="rounded-xl border border-base-300 bg-base-200 p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-6 h-6 rounded-full bg-primary/15 flex items-center justify-center"><Car size={12} className="text-primary" /></div>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-base-content/50">Driver</span>
-          </div>
-          {snapshot?.driver?.snapshot ? (
-            <>
-              <div className="flex items-center gap-1.5">
-                <p className="text-xs font-bold text-base-content m-0 truncate">{snapshot.driver.snapshot.legalName ?? 'Assigned'}</p>
-                <CallButton phone={snapshot.driver.snapshot.phone} label="" size="xs" />
-              </div>
-              <p className="text-[10px] text-base-content/50 m-0">{snapshot.driver.snapshot.phone ?? '—'}</p>
-              {snapshot.driver.vehicleSnapshot && (
-                <p className="text-[10px] text-base-content/35 m-0 mt-0.5">
-                  {snapshot.driver.vehicleSnapshot.make} {snapshot.driver.vehicleSnapshot.model} · {snapshot.driver.vehicleSnapshot.registrationNumber}
-                </p>
-              )}
-            </>
-          ) : <p className="text-[10px] text-base-content/35 m-0">Not yet assigned</p>}
-          {driverLoc && (
-            <div className="flex items-center gap-1 mt-1.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-              <span className="text-[10px] text-success font-medium">Live</span>
-              <span className="text-[10px] text-base-content/40">{driverLoc.speedKmh ?? 0} km/h</span>
-            </div>
-          )}
+      {/* Token display */}
+      {token && (
+        <div className="rounded-xl border border-success/30 bg-success/10 p-3">
+          <p className="text-[10px] font-bold text-success uppercase tracking-widest mb-1">Agora Token</p>
+          <p className="text-[10px] font-mono text-success/70 break-all m-0">{token.token?.slice(0,40)}…</p>
+          <p className="text-[10px] text-base-content/40 m-0 mt-1">Role: {token.role} · Expires in {token.expiresInSeconds}s</p>
         </div>
+      )}
 
-        <div className={`rounded-xl border p-3 ${ca?.isLinkedToRide ? 'border-rose-300/40 bg-rose-50/20' : 'border-base-300 bg-base-200'}`}>
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-6 h-6 rounded-full bg-rose-400/15 flex items-center justify-center"><Heart size={12} className="text-rose-400" /></div>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-base-content/50">Care Asst.</span>
-          </div>
-          {ca ? (
-            <>
-              <div className="flex items-center gap-1.5">
-                <p className="text-xs font-bold text-base-content m-0 truncate">{ca.name ?? 'Assigned'}</p>
-                <CallButton phone={ca.phone} label="" size="xs" />
-              </div>
-              <p className="text-[10px] text-base-content/50 m-0">{ca.phone ?? '—'}</p>
-              <div className="flex items-center gap-1.5 mt-1.5">
-                {ca.isLinkedToRide ? (
-                  <>
-                    <div className={`w-1.5 h-1.5 rounded-full ${ca.status === 'in_ride' ? 'bg-success animate-pulse' : 'bg-warning'}`} />
-                    <span className={`text-[10px] font-medium ${CA_STATUS_COLORS[ca.status] ?? 'text-base-content/40'}`}>{CA_STATUS_LABELS[ca.status] ?? ca.status}</span>
-                  </>
-                ) : <span className="text-[10px] text-base-content/35">Not joined ride</span>}
-              </div>
-            </>
-          ) : <p className="text-[10px] text-base-content/35 m-0">Not assigned</p>}
-        </div>
-      </div>
-
-      {/* Route summary */}
-      {route && (
-        <div className="rounded-xl border border-base-300 bg-base-200 p-3">
-          <SectionHeader title="Route Summary" />
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { l: 'Distance', v: route.estimatedDistanceKm ? `${route.estimatedDistanceKm} km` : '—' },
-              { l: 'ETA', v: snapshot?.route?.currentEtaMinutes ? `${snapshot.route.currentEtaMinutes} min` : '—' },
-              { l: 'SOS Active', v: snapshot?.hasActiveSos ? 'YES' : 'No' },
-            ].map(({ l, v }) => (
-              <div key={l}>
-                <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">{l}</p>
-                <p className={`text-xs font-bold m-0 mt-0.5 ${l === 'SOS Active' && snapshot?.hasActiveSos ? 'text-error' : 'text-base-content'}`}>{v}</p>
+      {/* Chat */}
+      {consultation?.chatEnabled !== false && (
+        <div className="rounded-xl border border-base-300 bg-base-200 p-3 flex flex-col gap-2">
+          <SectionHeader title={`Chat (${chat.length} messages)`} />
+          <div className="max-h-40 overflow-y-auto scrollbar-thin flex flex-col gap-1">
+            {chat.length === 0 ? (
+              <p className="text-[10px] text-base-content/35 text-center py-3">No messages yet</p>
+            ) : chat.slice(-10).map((m, i) => (
+              <div key={i} className={`flex flex-col ${m.senderRole === 'admin' ? 'items-end' : 'items-start'}`}>
+                <span className="text-[9px] text-base-content/35 mb-0.5">{m.senderRole}</span>
+                <div className={`rounded-xl px-2.5 py-1.5 text-xs max-w-[80%] ${m.senderRole === 'admin' ? 'bg-primary/20 text-primary' : 'bg-base-300 text-base-content'}`}>
+                  {m.message}
+                </div>
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* Milestones */}
-      {(snapshot?.milestones?.length ?? 0) > 0 && (
-        <div className="rounded-xl border border-base-300 bg-base-200 p-3">
-          <SectionHeader title="Milestones" sub={`${snapshot.milestones.length} recorded`} />
-          <div className="flex flex-col gap-1 max-h-32 overflow-y-auto scrollbar-thin">
-            {[...snapshot.milestones].reverse().slice(0, 8).map((m, i) => (
-              <div key={i} className="flex items-center justify-between text-[10px] py-1 border-b border-base-300/40 last:border-0">
-                <span className="font-medium text-base-content/70">{m.name?.replace(/_/g, ' ')}</span>
-                <span className="text-base-content/40">{fmt(m.occurredAt)}</span>
-              </div>
-            ))}
+          <div className="flex gap-2 mt-1">
+            <input value={chatMsg} onChange={e => setChatMsg(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleChat()} placeholder="Type message…" className="input-field text-xs flex-1" />
+            <button onClick={handleChat} disabled={chatLoading || !chatMsg.trim()} className="btn btn-xs btn-primary gap-1">
+              {chatLoading ? <Spinner size={10} /> : <MessageSquare size={10} />} Send
+            </button>
           </div>
         </div>
       )}
-
-      {snapshot?.hasActiveSos && (
-        <div className="rounded-xl border border-error/40 bg-error/10 p-3 flex items-center gap-2 text-error text-xs font-bold">
-          <AlertTriangle size={14} /> Active SOS on this booking — escalate immediately
-        </div>
-      )}
-
-      {loading && (
-        <div className="flex items-center justify-center gap-2 py-4 text-xs text-base-content/40">
-          <Spinner size={12} /> Loading tracking data…
-        </div>
-      )}
-
-      <button onClick={() => dispatch(fetchCareTrackingSnapshot({ bookingId: booking._id }))} className="btn btn-sm gap-1.5 bg-base-300 text-base-content w-full">
-        <RefreshCw size={10} /> Refresh Snapshot
-      </button>
     </div>
   );
 }

@@ -3,7 +3,37 @@
 /**
  * CareAssistantLiveTracking.jsx
  *
- * Live tracking page for the Care Assistant (CA) side of the platform.
+ * FIXES this pass:
+ *  1. Join-point marker was created via `createStaticMarker(map, lat, lng,
+ *     'joinpoint')` — that helper (useDriverMarker.js) only branches on
+ *     `type === 'pickup'`, so anything else (including 'joinpoint') fell
+ *     into the dropoff branch: red pin labeled "Drop-off" sitting on the
+ *     CA's join point. Replaced with a dedicated `createJoinPointMarker`
+ *     defined locally in this file — amber flag pin, labeled "Join Point",
+ *     so it can't be confused with the real hospital dropoff pin on
+ *     full_care_ride bookings (which DOES need the real dropoff pin).
+ *  2. `caMarker.destroyMarker()` was being called unconditionally on every
+ *     GPS-tick render once `phase === 'in_vehicle'` — harmless individually
+ *     but pointless churn (cancels a non-existent rAF, nulls already-null
+ *     refs, every ~1s for the rest of the ride). Guarded with a ref so it
+ *     fires exactly once on the standalone/navigate_to_jp -> in_vehicle
+ *     transition.
+ *  3. `STATUS_STEPS.in_vehicle` used keys ('in_ride', 'enroute_hospital',
+ *     'hospital_reached') that don't match any status string the backend
+ *     actually emits once boarded — real ride statuses for this leg are
+ *     DRIVER_STATUS values ('ride_started', 'otp_verified', 'completed',
+ *     etc., per socketService.js). `activeStepKey` was also pulling from
+ *     `t.caStatus` first, but caStatus stops updating once boarded (CA is
+ *     a passenger, not driving) — for in_vehicle the only thing that
+ *     actually advances is `t.rideStatus`. Fixed both: in_vehicle timeline
+ *     keys now match driver status strings, and activeStepKey uses
+ *     rideStatus (not caStatus) while in that phase.
+ *  4. `announcedRef` (one-time proximity announcement) never reset across
+ *     a phase change — if navigate_to_jp's "approaching join point" had
+ *     already fired and the ride later needed a different one-time
+ *     announcement in another phase, it would silently never speak.
+ *     Reset on every phase transition.
+ *
  * Booking-type aware:
  *
  *   bookingType === 'care_assistant'  (CA-only booking, no separate vehicle)
@@ -29,7 +59,7 @@
  *   useGoogleMapsLoader       — singleton Maps JS SDK loader
  *   useMapCamera              — follow/recenter/tilt camera
  *   useCareAssistantMarker    — CA's own marker (purple)
- *   useDriverMarker           — driver marker + static pickup/dropoff/JP pins
+ *   useDriverMarker           — driver marker + static pickup/dropoff pins
  *   useRouteRenderer          — CA route + driver route polylines
  *   useVoiceNavigation        — proximity announcements (optional, muteable)
  */
@@ -60,6 +90,9 @@ const PHASE_LABEL = {
   other:                'Tracking ride',
 };
 
+// FIX #3: in_vehicle keys now match the actual DRIVER_STATUS string enum
+// (see socketService.js DRIVER_STATUS) instead of CA-side statuses that
+// never get emitted once the CA is a passenger.
 const STATUS_STEPS = {
   standalone: [
     { key: 'assigned',           label: 'Assigned' },
@@ -74,11 +107,64 @@ const STATUS_STEPS = {
     { key: 'in_ride',            label: 'Boarded' },
   ],
   in_vehicle: [
-    { key: 'in_ride',     label: 'In vehicle' },
-    { key: 'enroute_hospital', label: 'To hospital' },
-    { key: 'hospital_reached', label: 'Arrived' },
+    { key: 'otp_verified', label: 'Boarded' },
+    { key: 'ride_started', label: 'To hospital' },
+    { key: 'at_stop',      label: 'Arrived' },
+    { key: 'completed',    label: 'Completed' },
   ],
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Local marker helper — join point flag (FIX #1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * createJoinPointMarker — amber flag pin for the CA's calculated join point.
+ * Kept local to this page (rather than overloading createStaticMarker's
+ * pickup/dropoff branch) so it can't accidentally render as a mislabeled
+ * "Drop-off" pin — a real dropoff (hospital) pin can coexist on the same
+ * full_care_ride booking and the two must stay visually distinct.
+ */
+function createJoinPointMarker(map, lat, lng) {
+  if (!window.google?.maps?.marker?.AdvancedMarkerElement) return null;
+
+  const color = '#f59e0b';
+  const anchor = document.createElement('div');
+  anchor.style.cssText =
+    'position:absolute;width:0;height:0;overflow:visible;pointer-events:none;';
+  anchor.innerHTML = `
+    <div style="
+        position:absolute;display:flex;flex-direction:column;align-items:center;
+        left:-22px;top:-72px;pointer-events:none;">
+      <div style="
+          width:44px;height:44px;
+          background:linear-gradient(135deg,#fbbf24,#d97706);
+          border-radius:50%;border:3px solid #fff;
+          display:flex;align-items:center;justify-content:center;
+          box-shadow:0 6px 18px ${color}88;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+          <path d="M6 2v20h2v-8h9l-2-4 2-4H8V2z"/>
+        </svg>
+      </div>
+      <div style="width:0;height:0;
+           border-left:6px solid transparent;border-right:6px solid transparent;
+           border-top:10px solid ${color};margin-top:-1px;"></div>
+      <div style="
+          background:${color};color:#fff;padding:2px 10px;border-radius:20px;
+          font-size:10px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;
+          white-space:nowrap;margin-top:2px;
+          box-shadow:0 3px 10px rgba(0,0,0,0.25);
+          font-family:system-ui,sans-serif;">Join Point</div>
+    </div>
+  `;
+
+  return new window.google.maps.marker.AdvancedMarkerElement({
+    map,
+    content:  anchor,
+    position: { lat, lng },
+    zIndex:   11,
+  });
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Small presentational pieces
@@ -237,6 +323,9 @@ export default function CareAssistantLiveTracking({ bookingId: bookingIdProp, vi
   const [mapReady, setMapReady] = useState(false);
   const [showSos, setShowSos]   = useState(false);
   const announcedRef = useRef(false);
+  // FIX #2: guards caMarker.destroyMarker() so it only fires once on the
+  // standalone/navigate_to_jp -> in_vehicle transition, not on every tick.
+  const caMarkerDestroyedRef = useRef(false);
 
   // ── 1. Create the map once the SDK + container are both ready ────────────
   useEffect(() => {
@@ -263,6 +352,10 @@ export default function CareAssistantLiveTracking({ bookingId: bookingIdProp, vi
   // ── 3. Data + sockets ──────────────────────────────────────────────────────
   const t = useCareAssistantTracking({ bookingId, viewerRole });
 
+  // FIX #4: a one-time announcement made in one phase shouldn't permanently
+  // block the equivalent announcement in a later phase.
+  useEffect(() => { announcedRef.current = false; }, [t.phase]);
+
   // ── Static markers: patient pickup, hospital dropoff, join point ─────────
   const staticRef = useRef({ patient: null, dropoff: null, joinPoint: null });
   useEffect(() => {
@@ -283,8 +376,10 @@ export default function CareAssistantLiveTracking({ bookingId: bookingIdProp, vi
 
     const jpCoords = t.caJoinPoint?.coordinates;
     if (jpCoords?.length === 2 && t.phase === 'navigate_to_jp') {
-      staticRef.current.joinPoint?.map && (staticRef.current.joinPoint.map = null);
-      staticRef.current.joinPoint = createStaticMarker(map, jpCoords[1], jpCoords[0], 'joinpoint');
+      // FIX #1: dedicated join-point marker, not createStaticMarker's
+      // pickup/dropoff branch (which would mislabel it "Drop-off").
+      if (staticRef.current.joinPoint) staticRef.current.joinPoint.map = null;
+      staticRef.current.joinPoint = createJoinPointMarker(map, jpCoords[1], jpCoords[0]);
     }
   }, [mapReady, t.pickupLocation, t.dropoffLocation, t.bookingType, t.caJoinPoint, t.phase]);
 
@@ -350,6 +445,7 @@ export default function CareAssistantLiveTracking({ bookingId: bookingIdProp, vi
     if (!mapReady) return;
 
     if (t.phase === 'navigate_to_jp' || t.phase === 'standalone') {
+      caMarkerDestroyedRef.current = false; // back in a CA-marker phase — allow future destroy
       const pos = t.isSelf ? t.currentPosition : t.caLiveLocation;
       if (pos?.lat && pos?.lng) {
         caMarker.updateMarker(pos.lat, pos.lng, pos.heading || 0, camera.mapBearingRef.current, t.caStatus);
@@ -374,7 +470,11 @@ export default function CareAssistantLiveTracking({ bookingId: bookingIdProp, vi
     }
 
     if (t.phase === 'in_vehicle') {
-      caMarker.destroyMarker();
+      // FIX #2: only destroy once on the transition into this phase.
+      if (!caMarkerDestroyedRef.current) {
+        caMarker.destroyMarker();
+        caMarkerDestroyedRef.current = true;
+      }
       const pos = t.driverLiveLocation;
       if (pos?.lat && pos?.lng) {
         drvMarker.updateMarker(pos.lat, pos.lng, pos.heading || 0, camera.mapBearingRef.current, pos.speedKmh || pos.speed || 0);
@@ -389,7 +489,11 @@ export default function CareAssistantLiveTracking({ bookingId: bookingIdProp, vi
 
   // ── Derived UI bits ───────────────────────────────────────────────────────
   const steps = STATUS_STEPS[t.phase] || [];
-  const activeStepKey = t.caStatus || t.rideStatus;
+  // FIX #3: once boarded, caStatus stops being meaningful (CA is now a
+  // passenger) — drive the timeline off rideStatus instead for in_vehicle.
+  const activeStepKey = t.phase === 'in_vehicle'
+    ? (t.rideStatus || t.caStatus)
+    : (t.caStatus || t.rideStatus);
 
   const distToDestKm = useMemo(() => {
     const pos = t.isSelf ? t.currentPosition : t.caLiveLocation;
@@ -464,7 +568,7 @@ export default function CareAssistantLiveTracking({ bookingId: bookingIdProp, vi
         <FloatingControls
           onRecenter={() => {
             const pos = t.phase === 'in_vehicle' ? t.driverLiveLocation : (t.isSelf ? t.currentPosition : t.caLiveLocation);
-            if (pos?.lat) camera.recenter(pos.lat, pos.lng, pos.heading || 0);
+            if (pos?.lat) camera.recenter(pos.lat, pos.lng);
           }}
           onNorthUp={camera.resetToNorth}
           onZoomIn={camera.zoomIn}

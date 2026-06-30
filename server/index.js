@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────
 import dotenv from "dotenv";
 dotenv.config();
-
+import 'dotenv/config';
 import express from "express";
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';

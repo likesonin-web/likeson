@@ -1,309 +1,445 @@
 'use client';
-
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Search, Filter, Download, RefreshCw, ChevronLeft, ChevronRight,
-  Layers, Shield, Zap, ChevronDown, ChevronUp, X, BarChart2,
-  HelpCircle,
+  Search, Filter, Download, RefreshCw, X, ChevronLeft,
+  ChevronRight, Bell, BarChart2, HelpCircle, AlertTriangle,
+  Layers, CheckCircle, Clock,
 } from 'lucide-react';
+
+// ── Slice imports ────────────────────────────────────────────────────────────
 import {
-  fetchAdminBookings, exportAdminBookings,
-  resetAdminStatusUpdate, resetAdminAssignment,
-  resetAdminRefund, resetAdminOpStatusUpdate,
-  selectAdminBookings, selectAdminBookingsMeta,
-  selectAdminBookingsLoading, selectAdminExportLoading,
-  selectAdminStatusUpdate, selectAdminAssignment,
-  selectAdminRefund, selectAdminOpStatusUpdate,
+  // Admin bookings list
+  fetchAdminBookings,
+  fetchAdminBookingStats,
+  exportAdminBookings,
+  fetchAdminBookingById,
+  updateAdminBookingStatus,
+  adminChangeDestination,
+  clearAdminBookingDetail,
+  clearAdminBookingDetail as clearDetail,
+
+  // Nearby
+  fetchNearbyCareAssistants,
+  fetchNearbySoloDrivers,
+  fetchNearbyTransportPartners,
+  fetchNearbyHospitals,
+
+  // Assignment
+  adminAssignSoloDriver,
+  adminAssignTransportPartner,
+  adminAssignCareAssistant,
+  adminAssignHospital,
+  adminReassignDriver,
+  adminReassignCareAssistant,
+
+  // Refund
+  adminProcessRefund,
+
+  // OPs
+  fetchAdminOps,
+  updateAdminOpStatus,
+
+  // SOS
+  fetchAdminActiveSos,
+  resolveAdminSos,
+  fetchAdminDestinationAudit,
+  fetchAdminActiveSosPaginated,
+
+  // Care ride
+  adminRequestCareRide,
+  fetchAdminCareRideNearby,
+
+  // Ride ops
+  fetchRideParticipants,
+  assignRideParticipant,
+  fetchRideParticipant,
+  updateParticipantStatus,
+  removeRideParticipant,
+  adminCalculateJoinPoint,
+  adminRecalcJoinPoint,
+  fetchRideJoinPoints,
+  updateJoinPointStatus,
+  fetchRideStops,
+  fetchRideStop,
+  verifyStopOtp,
+  updateStopStatus,
+  fetchRouteVersions,
+  fetchActiveRouteVersion,
+  triggerBookingSos,
+  fetchBookingSosEvents,
+  resolveRideOpsSos,
+  rideOpsChangeDestination,
+  fetchDestinationHistory,
+  fetchRideAssignmentHistory,
+  fetchBookingAssignmentHistory,
+
+  // Socket
+  joinBookingRoom,
+  leaveBookingRoom,
+
+  // Selectors
+  selectAdminBookings,
+  selectAdminBookingsMeta,
+  selectAdminBookingsLoading,
+  selectAdminBookingDetail,
+  selectAdminBookingDetailLoading,
+  selectAdminStats,
+  selectAdminStatsLoading,
+  selectAdminActiveSos,
+  selectAdminActiveSosMeta,
+  selectAdminSosLoading,
+  selectAdminExportLoading,
 } from '@/store/slices/operationsSlice';
-import { selectCurrentUser } from '@/store/slices/userSlice';
-import { BookingCard, AnalysisSection } from './BookingCardAndAnalysis';
+
+// ── Local components ─────────────────────────────────────────────────────────
+import {
+  BOOKING_TYPES, BOOKING_STATUSES,
+  fmt, fmtDate, currency, statusBadge, typeIcon,
+  Spinner, EmptyState, StatCard, CallButton,
+} from './shared';
+import { BookingCard, AnalysisSection } from './AnalyticsBookingCard';
 import { BookingDetailPanel } from './BookingDetailPanel';
 import { HelpSection } from './HelpSection';
-import { BOOKING_TYPES, BOOKING_STATUSES, Spinner, EmptyState } from './shared';
-import { FileText } from 'lucide-react';
+import { SosPanelAdmin } from './SosDestinationPanel';
 
-/* ─── MAIN PAGE ────────────────────────────────────────────────────────────── */
-export default function BookingsManagement() {
-  const dispatch = useDispatch();
-  const user     = useSelector(selectCurrentUser);
+// ── Constants ────────────────────────────────────────────────────────────────
+const MAIN_TABS = ['bookings', 'analysis', 'sos', 'help'];
+const POLL_MS   = 30_000; // 30s auto-refresh for SOS
 
-  const bookings      = useSelector(selectAdminBookings);
-  const meta          = useSelector(selectAdminBookingsMeta);
-  const listLoading   = useSelector(selectAdminBookingsLoading);
-  const exportLoading = useSelector(selectAdminExportLoading);
+// ── Export all thunks as named map for child panels ─────────────────────────
+export const ADMIN_THUNKS = {
+  fetchAdminBookings,
+  fetchAdminBookingStats,
+  exportAdminBookings,
+  fetchAdminBookingById,
+  updateAdminBookingStatus,
+  adminChangeDestination,
+  fetchNearbyCareAssistants,
+  fetchNearbySoloDrivers,
+  fetchNearbyTransportPartners,
+  fetchNearbyHospitals,
+  adminAssignSoloDriver,
+  adminAssignTransportPartner,
+  adminAssignCareAssistant,
+  adminAssignHospital,
+  adminReassignDriver,
+  adminReassignCareAssistant,
+  adminProcessRefund,
+  fetchAdminOps,
+  updateAdminOpStatus,
+  fetchAdminActiveSos,
+  resolveAdminSos,
+  fetchAdminDestinationAudit,
+  fetchAdminActiveSosPaginated,
+  adminRequestCareRide,
+  fetchAdminCareRideNearby,
+  fetchRideParticipants,
+  assignRideParticipant,
+  fetchRideParticipant,
+  updateParticipantStatus,
+  removeRideParticipant,
+  adminCalculateJoinPoint,
+  adminRecalcJoinPoint,
+  fetchRideJoinPoints,
+  updateJoinPointStatus,
+  fetchRideStops,
+  fetchRideStop,
+  verifyStopOtp,
+  updateStopStatus,
+  fetchRouteVersions,
+  fetchActiveRouteVersion,
+  triggerBookingSos,
+  fetchBookingSosEvents,
+  resolveRideOpsSos,
+  rideOpsChangeDestination,
+  fetchDestinationHistory,
+  fetchRideAssignmentHistory,
+  fetchBookingAssignmentHistory,
+  joinBookingRoom,
+  leaveBookingRoom,
+};
 
-  const adminStatusUpdate   = useSelector(selectAdminStatusUpdate);
-  const adminAssignment     = useSelector(selectAdminAssignment);
-  const adminRefund         = useSelector(selectAdminRefund);
-  const adminOpStatusUpdate = useSelector(selectAdminOpStatusUpdate);
+// ── Filter bar ───────────────────────────────────────────────────────────────
+function FilterBar({ filters, setFilters, onSearch, loading, onExport, exportLoading }) {
+  const [showAdv, setShowAdv] = useState(false);
 
-  const [selectedId,    setSelectedId]    = useState(null);
-  const [search,        setSearch]        = useState('');
-  const [filterStatus,  setFilterStatus]  = useState('');
-  const [filterType,    setFilterType]    = useState('');
-  const [filterFrom,    setFilterFrom]    = useState('');
-  const [filterTo,      setFilterTo]      = useState('');
-  const [page,          setPage]          = useState(1);
-  const [section,       setSection]       = useState('bookings');
-  const [filtersOpen,   setFiltersOpen]   = useState(false);
-  // tab to auto-navigate to in detail panel (from help section)
-  const [helpNavTab,    setHelpNavTab]    = useState(null);
+  return (
+    <div className="flex flex-col gap-2 px-4 py-3 border-b border-base-300 bg-base-100 shrink-0">
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+          <input
+            value={filters.search}
+            onChange={(e) => setFilters(f => ({ ...f, search: e.target.value }))}
+            onKeyDown={(e) => e.key === 'Enter' && onSearch()}
+            placeholder="Booking code or patient name…"
+            className="input-field w-full pl-8 text-xs"
+          />
+        </div>
+        <button onClick={onSearch} className="btn btn-primary btn-sm gap-1" disabled={loading}>
+          {loading ? <Spinner size={12} /> : <Search size={11} />} Search
+        </button>
+        <button onClick={() => setShowAdv(s => !s)} className="btn btn-ghost btn-sm btn-circle" title="Advanced filters">
+          <Filter size={13} className={showAdv ? 'text-primary' : ''} />
+        </button>
+        <button onClick={onExport} className="btn btn-ghost btn-sm gap-1" disabled={exportLoading} title="Export CSV">
+          {exportLoading ? <Spinner size={12} /> : <Download size={12} />}
+        </button>
+      </div>
 
-  const loadBookings = useCallback(() => {
+      {showAdv && (
+        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="grid grid-cols-2 gap-2">
+          <select value={filters.status} onChange={(e) => setFilters(f => ({ ...f, status: e.target.value }))} className="input-field text-xs">
+            <option value="">All statuses</option>
+            {BOOKING_STATUSES.map(s => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}
+          </select>
+          <select value={filters.bookingType} onChange={(e) => setFilters(f => ({ ...f, bookingType: e.target.value }))} className="input-field text-xs">
+            <option value="">All types</option>
+            {BOOKING_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+          </select>
+          <input type="date" value={filters.from} onChange={(e) => setFilters(f => ({ ...f, from: e.target.value }))} className="input-field text-xs" placeholder="From" />
+          <input type="date" value={filters.to}   onChange={(e) => setFilters(f => ({ ...f, to: e.target.value }))}   className="input-field text-xs" placeholder="To" />
+          <input value={filters.city} onChange={(e) => setFilters(f => ({ ...f, city: e.target.value }))} placeholder="City" className="input-field text-xs" />
+          <button onClick={() => setFilters({ search:'', status:'', bookingType:'', from:'', to:'', city:'' })} className="btn btn-ghost btn-sm gap-1 text-error">
+            <X size={11} /> Clear filters
+          </button>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+// ── Bookings list panel ──────────────────────────────────────────────────────
+function BookingListPanel({ selectedId, onSelect, dispatch }) {
+  const bookings     = useSelector(selectAdminBookings);
+  const meta         = useSelector(selectAdminBookingsMeta);
+  const loading      = useSelector(selectAdminBookingsLoading);
+  const exportLoading= useSelector(selectAdminExportLoading);
+
+  const [filters, setFilters] = useState({ search:'', status:'', bookingType:'', from:'', to:'', city:'' });
+  const [page, setPage]       = useState(1);
+
+  const doFetch = useCallback((pg = page) => {
     dispatch(fetchAdminBookings({
-      page, limit: 18,
-      status:      filterStatus || undefined,
-      bookingType: filterType   || undefined,
-      search:      search       || undefined,
-      from:        filterFrom   || undefined,
-      to:          filterTo     || undefined,
+      page: pg, limit: 20,
+      ...(filters.search      && { search:      filters.search }),
+      ...(filters.status      && { status:      filters.status }),
+      ...(filters.bookingType && { bookingType: filters.bookingType }),
+      ...(filters.from        && { from:        filters.from }),
+      ...(filters.to          && { to:          filters.to }),
+      ...(filters.city        && { city:        filters.city }),
     }));
-  }, [dispatch, page, filterStatus, filterType, search, filterFrom, filterTo]);
+  }, [dispatch, filters, page]);
 
+  useEffect(() => { doFetch(1); setPage(1); }, []); // initial load
+
+  const handleSearch = () => { setPage(1); doFetch(1); };
+
+  const handleExport = () => {
+    dispatch(exportAdminBookings({
+      from: filters.from || undefined,
+      to:   filters.to   || undefined,
+      status:      filters.status      || undefined,
+      bookingType: filters.bookingType || undefined,
+    }));
+  };
+
+  const changePage = (np) => { setPage(np); doFetch(np); };
+
+  return (
+    <div className="flex flex-col h-full">
+      <FilterBar
+        filters={filters} setFilters={setFilters}
+        onSearch={handleSearch} loading={loading}
+        onExport={handleExport} exportLoading={exportLoading}
+      />
+
+      {/* Stats row */}
+      <div className="flex items-center gap-4 px-4 py-2 border-b border-base-300 bg-base-200/40 shrink-0">
+        <span className="text-[10px] text-base-content/45 flex items-center gap-1">
+          <Layers size={9} /> {meta?.total ?? 0} total
+        </span>
+        <span className="text-[10px] text-base-content/45 flex items-center gap-1">
+          Page {meta?.page ?? 1}/{meta?.pages ?? 1}
+        </span>
+        <button onClick={() => doFetch(page)} className="btn btn-ghost btn-xs btn-circle ml-auto" title="Refresh">
+          <RefreshCw size={10} />
+        </button>
+      </div>
+
+      {/* List */}
+      <div className="flex-1 overflow-y-auto p-3 scrollbar-thin">
+        {loading && !bookings.length ? (
+          <div className="flex items-center justify-center gap-2 text-xs text-base-content/40 py-20">
+            <Spinner size={14} /> Loading bookings…
+          </div>
+        ) : bookings.length === 0 ? (
+          <EmptyState text="No bookings found" sub="Try adjusting filters" />
+        ) : (
+          <AnimatePresence>
+            {bookings.map(b => (
+              <BookingCard
+                key={b._id}
+                booking={b}
+                selected={selectedId === b._id}
+                onClick={() => onSelect(b._id)}
+              />
+            ))}
+          </AnimatePresence>
+        )}
+      </div>
+
+      {/* Pagination */}
+      {(meta?.pages ?? 0) > 1 && (
+        <div className="flex items-center justify-between px-4 py-2 border-t border-base-300 shrink-0">
+          <span className="text-[10px] text-base-content/45">
+            {meta.total} bookings · page {page}/{meta.pages}
+          </span>
+          <div className="flex gap-1">
+            <button disabled={page <= 1}             onClick={() => changePage(page - 1)} className="btn btn-ghost btn-xs btn-circle"><ChevronLeft  size={12} /></button>
+            <button disabled={page >= meta.pages}    onClick={() => changePage(page + 1)} className="btn btn-ghost btn-xs btn-circle"><ChevronRight size={12} /></button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SOS badge ────────────────────────────────────────────────────────────────
+function SosBadge({ count }) {
+  if (!count) return null;
+  return (
+    <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-error text-white text-[9px] font-bold ml-1">
+      {count > 9 ? '9+' : count}
+    </span>
+  );
+}
+
+// ── Main component ───────────────────────────────────────────────────────────
+export default function BookingsManagement() {
+  const dispatch     = useDispatch();
+  const [mainTab, setMainTab]         = useState('bookings');
+  const [selectedId, setSelectedId]   = useState(null);
+  const [detailNavTab, setDetailNavTab] = useState(null);
+
+  const activeSos    = useSelector(selectAdminActiveSos);
+  const sosLoading   = useSelector(selectAdminSosLoading);
+
+  // Initial SOS poll
   useEffect(() => {
-    if (adminStatusUpdate)   { loadBookings(); dispatch(resetAdminStatusUpdate()); }
-  }, [adminStatusUpdate]); // eslint-disable-line
+    dispatch(fetchAdminActiveSos());
+    const iv = setInterval(() => dispatch(fetchAdminActiveSos()), POLL_MS);
+    return () => clearInterval(iv);
+  }, [dispatch]);
 
+  // Join booking room when selected
+  const prevIdRef = useRef(null);
   useEffect(() => {
-    if (adminAssignment)     { loadBookings(); dispatch(resetAdminAssignment()); }
-  }, [adminAssignment]); // eslint-disable-line
+    if (prevIdRef.current && prevIdRef.current !== selectedId) {
+      dispatch(leaveBookingRoom({ bookingId: prevIdRef.current }));
+    }
+    if (selectedId) {
+      dispatch(joinBookingRoom({ bookingId: selectedId }));
+    }
+    prevIdRef.current = selectedId;
+    return () => {
+      if (selectedId) dispatch(leaveBookingRoom({ bookingId: selectedId }));
+    };
+  }, [selectedId, dispatch]);
 
-  useEffect(() => {
-    if (adminRefund)         { loadBookings(); dispatch(resetAdminRefund()); }
-  }, [adminRefund]); // eslint-disable-line
+  const handleSelect = (id) => {
+    setSelectedId(id);
+    setDetailNavTab(null);
+    if (mainTab !== 'bookings') setMainTab('bookings');
+  };
 
-  useEffect(() => {
-    if (adminOpStatusUpdate) { dispatch(resetAdminOpStatusUpdate()); }
-  }, [adminOpStatusUpdate, dispatch]);
-
-  useEffect(() => { loadBookings(); }, [loadBookings]);
-
-  const handleExport = () => dispatch(exportAdminBookings({
-    from: filterFrom || undefined, to: filterTo || undefined,
-    status: filterStatus || undefined, bookingType: filterType || undefined,
-  }));
-
-  const hasActiveFilters = filterStatus || filterType || filterFrom || filterTo || search;
-
-  // Help section action button → navigate to booking section + specific tab
-  const handleHelpNavigate = (target) => {
-    if (target === 'bookings' || target === 'analysis') {
-      setSection(target);
-    } else {
-      // It's a tab ID — switch to bookings, set tab
-      setSection('bookings');
-      setHelpNavTab(target);
+  // Help section can navigate to a detail tab
+  const handleHelpNavigate = (section) => {
+    if (['status','assign','refund','op','care_ride','tracking','consultation','payment'].includes(section)) {
+      setDetailNavTab(section);
+    } else if (section === 'analysis') {
+      setMainTab('analysis');
+    } else if (section === 'bookings') {
+      setMainTab('bookings');
     }
   };
 
-  const NAV_ITEMS = [
-    { id: 'bookings', label: 'Bookings', icon: Layers    },
-    { id: 'analysis', label: 'Analysis', icon: BarChart2 },
-    { id: 'help',     label: 'Help',     icon: HelpCircle },
-  ];
+  const TAB_LABELS = {
+    bookings: 'Bookings',
+    analysis: 'Analysis',
+    sos:      'SOS Alerts',
+    help:     'Help',
+  };
 
   return (
-    <div className="min-h-screen bg-base-100 text-base-content font-poppins">
+    <div className="flex flex-col h-screen bg-base-100 overflow-hidden">
 
-      {/* ── TOP NAV ── */}
-      <header className="sticky top-0 z-40 bg-base-100/90 backdrop-blur-strong border-b border-base-300">
-        <div className="flex items-center justify-between px-6 py-2.5">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center shadow-md">
-                <Shield size={14} className="text-primary-content" />
-              </div>
-              <div>
-                <p className="text-xs font-bold text-base-content m-0 leading-none">Likeson Admin</p>
-                <p className="text-[9px] text-base-content/40 m-0 leading-none mt-0.5">Bookings Management</p>
-              </div>
-            </div>
+      {/* ── Top bar ─────────────────────────────────────────────────────────── */}
+      <div className="shrink-0 flex items-center justify-between px-5 py-3 border-b border-base-300 bg-base-100 z-10">
+        <div>
+          <h2 className="m-0 text-base font-bold">Bookings Management</h2>
+          <p className="text-[10px] text-base-content/45 m-0">Admin operations dashboard</p>
+        </div>
 
-            <div className="flex items-center gap-1 bg-base-200 border border-base-300 rounded-xl p-1">
-              {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-                <button
-                  key={id}
-                  onClick={() => setSection(id)}
-                  className={`btn btn-sm gap-1.5 ${id === section ? 'btn-primary' : 'btn-ghost'}`}
-                >
-                  <Icon size={11} /> {label}
-                </button>
-              ))}
-            </div>
+        <div className="flex items-center gap-1">
+          {MAIN_TABS.map(t => (
+            <button
+              key={t}
+              onClick={() => setMainTab(t)}
+              className={`btn btn-sm gap-1.5 ${mainTab === t ? 'btn-primary' : 'btn-ghost text-base-content/60'}`}
+            >
+              {t === 'analysis' && <BarChart2 size={11} />}
+              {t === 'sos'      && <><AlertTriangle size={11} />{activeSos.length > 0 && <SosBadge count={activeSos.length} />}</>}
+              {t === 'help'     && <HelpCircle size={11} />}
+              {t === 'bookings' && <Layers size={11} />}
+              {TAB_LABELS[t]}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Body ────────────────────────────────────────────────────────────── */}
+      {mainTab === 'bookings' && (
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left — list */}
+          <div className="w-[340px] shrink-0 border-r border-base-300 flex flex-col overflow-hidden">
+            <BookingListPanel
+              selectedId={selectedId}
+              onSelect={handleSelect}
+              dispatch={dispatch}
+            />
           </div>
 
-          <div className="flex items-center gap-3">
-            <span className="text-[11px] text-base-content/50 hidden sm:block">
-              {user?.name ?? 'Admin'} · {user?.role}
-            </span>
-            <span className="badge badge-primary gap-1">
-              <Zap size={9} /> {meta?.total ?? 0} bookings
-            </span>
+          {/* Right — detail */}
+          <div className="flex-1 overflow-hidden">
+            <BookingDetailPanel
+              bookingId={selectedId}
+              dispatch={dispatch}
+              onTabNavigate={detailNavTab}
+            />
           </div>
         </div>
-      </header>
+      )}
 
-      {/* ── BOOKINGS SECTION ── */}
-      <AnimatePresence mode="wait">
-        {section === 'bookings' && (
-          <motion.div
-            key="bookings"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="flex"
-            style={{ height: 'calc(100vh - 53px)' }}
-          >
-            {/* LEFT: filters + list */}
-            <div className="w-96 shrink-0 flex flex-col border-r border-base-300 overflow-hidden">
+      {mainTab === 'analysis' && (
+        <div className="flex-1 overflow-y-auto scrollbar-thin">
+          <AnalysisSection dispatch={dispatch} />
+        </div>
+      )}
 
-              {/* Filters */}
-              <div className="shrink-0 p-4 border-b border-base-300 bg-base-200/60 flex flex-col gap-2.5">
-                <div className="relative">
-                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/35 pointer-events-none" />
-                  <input
-                    value={search}
-                    onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-                    placeholder="Search code or patient name…"
-                    className="input-field pl-9 text-xs"
-                  />
-                </div>
+      {mainTab === 'sos' && (
+        <div className="flex-1 overflow-y-auto scrollbar-thin">
+          <SosPanelAdmin dispatch={dispatch} />
+        </div>
+      )}
 
-                <button
-                  onClick={() => setFiltersOpen(p => !p)}
-                  className={`btn btn-sm gap-1.5 w-full justify-between ${hasActiveFilters ? 'btn-primary' : 'bg-base-300 text-base-content'}`}
-                >
-                  <div className="flex items-center gap-1.5">
-                    <Filter size={10} />
-                    Filters
-                    {hasActiveFilters && <span className="badge badge-xs">Active</span>}
-                  </div>
-                  {filtersOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                </button>
-
-                <AnimatePresence>
-                  {filtersOpen && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      className="overflow-hidden"
-                    >
-                      <div className="flex flex-col gap-2 pt-1">
-                        <div className="grid grid-cols-2 gap-2">
-                          <select value={filterStatus} onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }} className="input-field text-xs">
-                            <option value="">All statuses</option>
-                            {BOOKING_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
-                          </select>
-                          <select value={filterType} onChange={(e) => { setFilterType(e.target.value); setPage(1); }} className="input-field text-xs">
-                            <option value="">All types</option>
-                            {BOOKING_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
-                          </select>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <input type="date" value={filterFrom} onChange={(e) => { setFilterFrom(e.target.value); setPage(1); }} className="input-field text-xs" />
-                          <input type="date" value={filterTo}   onChange={(e) => { setFilterTo(e.target.value); setPage(1); }}   className="input-field text-xs" />
-                        </div>
-                        {hasActiveFilters && (
-                          <button
-                            onClick={() => { setFilterStatus(''); setFilterType(''); setFilterFrom(''); setFilterTo(''); setSearch(''); setPage(1); }}
-                            className="btn btn-xs gap-1 text-error bg-error/10 border-error/20 hover:bg-error/20 w-full"
-                          >
-                            <X size={9} /> Clear all filters
-                          </button>
-                        )}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                <div className="flex gap-2">
-                  <button onClick={loadBookings} className="btn btn-sm flex-1 gap-1.5 bg-base-300 text-base-content">
-                    {listLoading ? <Spinner size={11} /> : <RefreshCw size={11} />}
-                    {listLoading ? 'Loading…' : 'Refresh'}
-                  </button>
-                  <button onClick={handleExport} disabled={exportLoading} className="btn btn-primary btn-sm flex-1 gap-1.5">
-                    {exportLoading ? <Spinner size={11} /> : <Download size={11} />}
-                    Export CSV
-                  </button>
-                </div>
-              </div>
-
-              {/* Booking list */}
-              <div className="flex-1 overflow-y-auto p-3 scrollbar-thin">
-                <AnimatePresence>
-                  {listLoading && (bookings?.length ?? 0) === 0
-                    ? Array.from({ length: 6 }).map((_, i) => (
-                        <div key={i} className="skeleton h-24 rounded-2xl mb-2" />
-                      ))
-                    : (bookings?.length ?? 0) === 0
-                    ? <EmptyState icon={FileText} text="No bookings found" sub="Try adjusting your search or filters" />
-                    : (bookings ?? []).map((b) => (
-                        <BookingCard
-                          key={b._id}
-                          booking={b}
-                          selected={b._id === selectedId}
-                          onClick={() => {
-                            setSelectedId(b._id === selectedId ? null : b._id);
-                            setHelpNavTab(null);
-                          }}
-                        />
-                      ))
-                  }
-                </AnimatePresence>
-              </div>
-
-              {/* Pagination */}
-              {(meta?.pages ?? 0) > 1 && (
-                <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-t border-base-300 bg-base-200/60">
-                  <p className="text-[10px] text-base-content/45 m-0">Page {page} of {meta.pages} · {meta.total} total</p>
-                  <div className="flex gap-1">
-                    <button disabled={page <= 1}           onClick={() => setPage(p => p-1)} className="btn btn-ghost btn-sm btn-circle"><ChevronLeft  size={12} /></button>
-                    <button disabled={page >= meta.pages}  onClick={() => setPage(p => p+1)} className="btn btn-ghost btn-sm btn-circle"><ChevronRight size={12} /></button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* RIGHT: detail panel */}
-            <div className="flex-1 overflow-hidden">
-              <BookingDetailPanel
-                bookingId={selectedId}
-                dispatch={dispatch}
-                onTabNavigate={helpNavTab}
-              />
-            </div>
-          </motion.div>
-        )}
-
-        {section === 'analysis' && (
-          <motion.div
-            key="analysis"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="overflow-y-auto scrollbar-thin"
-            style={{ height: 'calc(100vh - 53px)' }}
-          >
-            <AnalysisSection dispatch={dispatch} />
-          </motion.div>
-        )}
-
-        {section === 'help' && (
-          <motion.div
-            key="help"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="overflow-y-auto scrollbar-thin"
-            style={{ height: 'calc(100vh - 53px)' }}
-          >
-            <HelpSection onNavigate={handleHelpNavigate} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {mainTab === 'help' && (
+        <div className="flex-1 overflow-y-auto scrollbar-thin">
+          <HelpSection onNavigate={handleHelpNavigate} />
+        </div>
+      )}
     </div>
   );
 }

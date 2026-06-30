@@ -4,19 +4,26 @@ import { useSelector } from 'react-redux';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Eye, RefreshCw, Video, Edit2, UserCheck, Wallet, Stethoscope,
-  Heart, Navigation, Radio, QrCode, Phone, Mail, Calendar,
-  ArrowRight, FileText, XCircle, Clock,
+  Eye, RefreshCw, Video, Edit2, UserCheck, Wallet,
+  Stethoscope, Heart, Navigation, Radio, QrCode,
+  Phone, Mail, Calendar, ArrowRight, FileText,
+  XCircle, Clock, Route, History, AlertTriangle, MapPin,
 } from 'lucide-react';
 import {
-  fetchAdminBookingById, clearAdminBookingDetail, fetchAdminOps,
-  selectAdminBookingDetail, selectAdminBookingFollowUps,
+  fetchAdminBookingById,
+  clearAdminBookingDetail,
+  fetchAdminOps,
+  selectAdminBookingDetail,
+  selectAdminBookingFollowUps,
   selectAdminBookingDetailLoading,
 } from '@/store/slices/operationsSlice';
-import { StatusPanel, OpPanel } from './StatusOpPanels';
-import { NearbyAssignPanel } from './NearbyAssignPanel';
+import { StatusPanel, OpPanel }                        from './StatusOpPanels';
+import { NearbyAssignPanel }                           from './NearbyAssignPanel';
 import { PayAtServicePanel, RefundPanel, CareRidePanel } from './PaymentPanels';
-import { ConsultationPanel, CareTrackingPanel } from './TrackingConsultPanels';
+import { ConsultationPanel, CareTrackingPanel }         from './TrackingConsultPanels';
+import { RideOpsPanel }                                 from './RideOpsPanel';
+import RideOpsLiveTracking                              from './RideLiveTracking';
+import { BookingSosPanelInline, DestinationHistoryPanel } from './SosDestinationPanel';
 import {
   TYPE_ACTION_TABS, resolveConsultId, getDriverAssignmentState,
   fmt, fmtDate, currency, statusBadge, typeIcon,
@@ -24,22 +31,29 @@ import {
   RideHistoryList, CallButton, FieldNote,
 } from './shared';
 
+// ── Tab registry (all 10 tabs) ────────────────────────────────────────────────
 const TAB_META = {
-  status:       { label: 'Status',     icon: Edit2       },
-  assign:       { label: 'Assign',     icon: UserCheck   },
-  refund:       { label: 'Refund',     icon: Wallet      },
-  op:           { label: 'OP',         icon: Stethoscope },
-  care_ride:    { label: 'Care Ride',  icon: Heart       },
-  tracking:     { label: 'Tracking',   icon: Navigation  },
-  consultation: { label: 'Consult',    icon: Radio       },
-  payment:      { label: 'Payment',    icon: QrCode      },
+  status:       { label: 'Status',       icon: Edit2          },
+  assign:       { label: 'Assign',       icon: UserCheck      },
+  refund:       { label: 'Refund',       icon: Wallet         },
+  op:           { label: 'OP',           icon: Stethoscope    },
+  care_ride:    { label: 'Care Ride',    icon: Heart          },
+  tracking:     { label: 'Tracking',     icon: Navigation     },
+  consultation: { label: 'Consult',      icon: Radio          },
+  payment:      { label: 'Payment',      icon: QrCode         },
+  ride_ops:     { label: 'Ride Ops',     icon: Route          },
+  sos:          { label: 'SOS',          icon: AlertTriangle  },
+  destination:  { label: 'Destination',  icon: MapPin         },
 };
 
+// Merge ride_ops, sos, destination into allowed tabs for every booking that has a ride
+const ALWAYS_SHOW_TABS = ['ride_ops', 'sos', 'destination'];
+
 export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
-  const router      = useRouter();
-  const booking     = useSelector(selectAdminBookingDetail);
-  const followUps   = useSelector(selectAdminBookingFollowUps);
-  const loading     = useSelector(selectAdminBookingDetailLoading);
+  const router    = useRouter();
+  const booking   = useSelector(selectAdminBookingDetail);
+  const followUps = useSelector(selectAdminBookingFollowUps);
+  const loading   = useSelector(selectAdminBookingDetailLoading);
   const [actionTab, setActionTab] = useState('status');
 
   useEffect(() => {
@@ -50,7 +64,6 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
     return () => dispatch(clearAdminBookingDetail());
   }, [bookingId, dispatch]);
 
-  // Allow external navigation (from Help section)
   useEffect(() => {
     if (onTabNavigate && TAB_META[onTabNavigate]) setActionTab(onTabNavigate);
   }, [onTabNavigate]);
@@ -76,19 +89,20 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
 
   const consultId   = resolveConsultId(booking.consultationSessionId);
   const driverState = getDriverAssignmentState(booking);
-  const allowedTabs = TYPE_ACTION_TABS[booking.bookingType] ?? Object.keys(TAB_META);
+  const baseTabs    = TYPE_ACTION_TABS[booking.bookingType] ?? Object.keys(TAB_META);
+
+  // Always include ride_ops, sos, destination (de-dup)
+  const allowedTabs = [...new Set([...baseTabs, ...ALWAYS_SHOW_TABS])];
+  const safeTab     = allowedTabs.includes(actionTab) ? actionTab : allowedTabs[0];
 
   const canJoinVideo = !!consultId &&
     ['doctor_online', 'full_care_ride'].includes(booking.bookingType) &&
     ['confirmed', 'in_progress', 'waiting'].includes(booking.status);
 
-  // Ensure active tab is valid for this booking type
-  const safeTab = allowedTabs.includes(actionTab) ? actionTab : allowedTabs[0];
-
   return (
     <div className="flex flex-col h-full overflow-hidden">
 
-      {/* ── Booking header ── */}
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div className="shrink-0 px-5 py-3.5 border-b border-base-300 bg-base-100">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -128,18 +142,24 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
         </div>
       </div>
 
-      {/* ── Action tabs ── */}
+      {/* ── Action tabs ─────────────────────────────────────────────────────── */}
       <div className="shrink-0 border-b border-base-300 bg-base-200/60 px-4 pt-3 pb-4">
+        {/* Tab buttons — split into two rows for readability */}
         <div className="flex gap-1 flex-wrap mb-3">
           {allowedTabs.map((id) => {
             const meta = TAB_META[id];
             if (!meta) return null;
             const { icon: Icon, label } = meta;
+            const isSos = id === 'sos';
             return (
               <button
                 key={id}
                 onClick={() => setActionTab(id)}
-                className={`btn btn-xs gap-1.5 ${id === safeTab ? 'btn-primary' : 'bg-base-300 text-base-content'}`}
+                className={`btn btn-xs gap-1.5 ${
+                  id === safeTab
+                    ? isSos ? 'btn-error' : 'btn-primary'
+                    : 'bg-base-300 text-base-content'
+                }`}
               >
                 <Icon size={9} /> {label}
               </button>
@@ -147,6 +167,7 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
           })}
         </div>
 
+        {/* Active panel */}
         <AnimatePresence mode="wait">
           <motion.div
             key={safeTab}
@@ -163,15 +184,36 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
             {safeTab === 'tracking'     && <CareTrackingPanel booking={booking} dispatch={dispatch} />}
             {safeTab === 'consultation' && <ConsultationPanel booking={booking} dispatch={dispatch} />}
             {safeTab === 'payment'      && <PayAtServicePanel booking={booking} dispatch={dispatch} />}
+            {safeTab === 'ride_ops'     && (
+              <>
+                {/* Live map/status/SOS/stops/participants tracker — only meaningful
+                    once a ride actually exists on this booking. Falls back to just
+                    RideOpsPanel (ride request/assignment controls) if no ride yet,
+                    instead of mounting RideLiveTracking with an undefined rideId
+                    (which would otherwise fire fetchRideTracking(undefined) and
+                    spam 400s against the API on every booking that hasn't been
+                    assigned a ride yet). */}
+                {booking.primaryRide?._id && (
+                  <div className="mb-4">
+                    <RideOpsLiveTracking
+                      bookingId={booking._id}
+                      rideId={booking.primaryRide._id}
+                    />
+                  </div>
+                )}
+                <RideOpsPanel booking={booking} dispatch={dispatch} />
+              </>
+            )}
+            {safeTab === 'sos'          && <BookingSosPanelInline booking={booking} dispatch={dispatch} />}
+            {safeTab === 'destination'  && <DestinationHistoryPanel booking={booking} dispatch={dispatch} />}
           </motion.div>
         </AnimatePresence>
       </div>
 
-      {/* ── Scrollable detail body ── */}
+      {/* ── Scrollable detail body ───────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto p-5 scrollbar-thin">
         <div className="flex flex-col gap-5">
 
-          {/* Partner status banner */}
           <PartnerStatusBanner booking={booking} />
 
           {/* Patient + Customer */}
@@ -185,10 +227,7 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
               {booking.patientInfo?.bloodGroup && (
                 <span className="badge badge-error badge-xs mt-1">{booking.patientInfo.bloodGroup}</span>
               )}
-              {booking.patientInfo?.weight && (
-                <p className="text-[10px] text-base-content/40 m-0 mt-0.5">{booking.patientInfo.weight} kg</p>
-              )}
-              <FieldNote text="Patient may differ from account holder (customer)" />
+              <FieldNote text="Patient may differ from account holder" />
             </div>
             <div className="rounded-xl border border-base-300 bg-base-200 p-3">
               <SectionHeader title="Customer" />
@@ -211,25 +250,21 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
             <SectionHeader title="Fare Breakdown" />
             <div className="grid grid-cols-3 gap-3">
               {[
-                { l: 'Total',       v: currency(booking.fareBreakdown?.totalAmount),      highlight: true, note: 'Full service cost' },
-                { l: 'Paid',        v: currency(booking.fareBreakdown?.amountPaid),        note: 'Amount received from patient' },
-                { l: 'Refunded',    v: currency(booking.fareBreakdown?.refundAmount),      note: 'Already refunded amount' },
-                { l: 'Transport',   v: currency(booking.fareBreakdown?.transportFee),      note: 'Driver/TP fee' },
-                { l: 'Consult',     v: currency(booking.fareBreakdown?.consultationFee),   note: 'Doctor consultation fee' },
-                { l: 'Care Asst.',  v: currency(booking.fareBreakdown?.careAssistantFee),  note: 'CA service fee' },
-              ].map(({ l, v, highlight, note }) => (
+                { l: 'Total',      v: currency(booking.fareBreakdown?.totalAmount),     highlight: true },
+                { l: 'Paid',       v: currency(booking.fareBreakdown?.amountPaid)                       },
+                { l: 'Refunded',   v: currency(booking.fareBreakdown?.refundAmount)                     },
+                { l: 'Transport',  v: currency(booking.fareBreakdown?.transportFee)                     },
+                { l: 'Consult',    v: currency(booking.fareBreakdown?.consultationFee)                  },
+                { l: 'Care Asst.', v: currency(booking.fareBreakdown?.careAssistantFee)                 },
+              ].map(({ l, v, highlight }) => (
                 <div key={l}>
                   <p className="text-[9px] uppercase tracking-widest text-base-content/40 m-0">{l}</p>
                   <p className={`text-xs font-bold m-0 mt-0.5 ${highlight ? 'text-success' : 'text-base-content'}`}>{v}</p>
-                  <FieldNote text={note} />
                 </div>
               ))}
             </div>
             <div className="flex items-center justify-between mt-3 pt-2 border-t border-base-300/60">
-              <div>
-                <span className="text-[10px] text-base-content/40">Payment Status</span>
-                <FieldNote text="Gateway payment state" />
-              </div>
+              <span className="text-[10px] text-base-content/40">Payment Status</span>
               {statusBadge(booking.paymentStatus ?? 'unpaid')}
             </div>
           </div>
@@ -246,7 +281,6 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
                     <p className="text-xs text-base-content m-0 mt-0.5 break-words">
                       {booking.patientLocation.address ?? `${booking.patientLocation.coordinates?.[1]}, ${booking.patientLocation.coordinates?.[0]}`}
                     </p>
-                    <FieldNote text="Used for nearby partner search" />
                   </div>
                 </div>
               )}
@@ -254,66 +288,32 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
                 <div className="flex items-start gap-2.5">
                   <div className="w-2 h-2 rounded-full bg-error mt-1 shrink-0" />
                   <div className="min-w-0">
-                    <p className="text-[10px] text-base-content/40 m-0">Drop-off / Destination</p>
+                    <p className="text-[10px] text-base-content/40 m-0">Destination</p>
                     <p className="text-xs text-base-content m-0 mt-0.5 break-words">
                       {booking.destinationLocation.address ?? `${booking.destinationLocation.coordinates?.[1]}, ${booking.destinationLocation.coordinates?.[0]}`}
                     </p>
+                    {booking.destinationLockedAt && (
+                      <p className="text-[10px] text-warning m-0 mt-0.5">
+                        🔒 Locked at {fmtDate(booking.destinationLockedAt)}
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
             </div>
           )}
 
-          {/* Assignments — all partners */}
+          {/* Assignments */}
           <div className="rounded-xl border border-base-300 bg-base-200 p-3">
             <SectionHeader title="Assignments" sub="All linked service partners" />
-            <InfoRow
-              label="Doctor"
-              value={booking.doctorSnapshot?.name}
-              sub={booking.doctorSnapshot?.specialization}
-              note="Assigned doctor profile"
-            />
-            <InfoRow
-              label="Care Assistant"
-              value={booking.careAssistantSnapshot?.name}
-              sub={booking.careAssistantSnapshot?.phone}
-              callPhone={booking.careAssistantSnapshot?.phone}
-              note="Assigned CA profile"
-            />
-            <InfoRow
-              label="Driver"
-              value={booking.primaryRide?.driverSnapshot?.legalName}
-              sub={
-                driverState.state === 'rejected'
-                  ? `Rejected${driverState.ride?.cancellation?.reason ? ` — ${driverState.ride.cancellation.reason}` : ''}`
-                  : booking.primaryRide?.driverSnapshot?.phone
-              }
-              callPhone={driverState.state !== 'rejected' ? booking.primaryRide?.driverSnapshot?.phone : null}
-              note="Solo driver or TP-assigned driver"
-            />
-            <InfoRow
-              label="Transport Partner"
-              value={booking.transportPartner?.businessName ?? (booking.transportPartner ? 'TP Assigned' : null)}
-              note="Fleet agency. Must assign their own driver."
-            />
-            <InfoRow
-              label="Hospital"
-              value={booking.hospital?.name ?? (booking.hospital ? 'Linked' : null)}
-              note="Appointment destination hospital"
-            />
-            <InfoRow
-              label="Primary Ride"
-              value={booking.primaryRide?.status?.replace(/_/g, ' ')}
-              sub={booking.primaryRide?.rideCode}
-              mono
-              note="Current active ride status"
-            />
-            <InfoRow
-              label="Consultation"
-              value={consultId ? 'Linked' : null}
-              sub="Telemedicine session"
-              note="Agora room ID linked to this booking"
-            />
+            <InfoRow label="Doctor"             value={booking.doctorSnapshot?.name}                            sub={booking.doctorSnapshot?.specialization}                             note="Assigned doctor profile" />
+            <InfoRow label="Care Assistant"     value={booking.careAssistantSnapshot?.name}                     sub={booking.careAssistantSnapshot?.phone}   callPhone={booking.careAssistantSnapshot?.phone} note="Assigned CA profile" />
+            <InfoRow label="Driver"             value={booking.primaryRide?.driverSnapshot?.legalName}          sub={driverState.state === 'rejected' ? 'Rejected' : booking.primaryRide?.driverSnapshot?.phone} callPhone={driverState.state !== 'rejected' ? booking.primaryRide?.driverSnapshot?.phone : null} note="Solo or TP-assigned driver" />
+            <InfoRow label="Transport Partner"  value={booking.transportPartner?.businessName ?? (booking.transportPartner ? 'TP Assigned' : null)} note="Fleet agency" />
+            <InfoRow label="Hospital"           value={booking.hospital?.name ?? (booking.hospital ? 'Linked' : null)} note="Appointment hospital" />
+            <InfoRow label="Primary Ride"       value={booking.primaryRide?.status?.replace(/_/g,' ')}         sub={booking.primaryRide?.rideCode}    mono note="Current active ride status" />
+            <InfoRow label="Consultation"       value={consultId ? 'Linked' : null}                            sub="Telemedicine session"                                                note="Agora room ID" />
+            <InfoRow label="Destination Locked" value={booking.destinationLockedAt ? fmtDate(booking.destinationLockedAt) : null} note="Set when driver accepts" />
           </div>
 
           {/* Consultation quick-link */}
@@ -328,9 +328,6 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
                 <Radio size={12} className="text-violet-400" />
                 <span className="text-xs font-mono text-base-content/60 truncate">{consultId}</span>
               </div>
-              <p className="text-[10px] text-base-content/40 m-0 mt-1">
-                Type: {booking.consultationType ?? 'video'} · {booking.bookingType?.replace(/_/g, ' ')}
-              </p>
             </div>
           )}
 
@@ -356,7 +353,7 @@ export function BookingDetailPanel({ bookingId, dispatch, onTabNavigate }) {
           {/* Ride history */}
           {(booking.rides?.length ?? 0) > 0 && (
             <div className="rounded-xl border border-base-300 bg-base-200 p-3">
-              <SectionHeader title={`Ride Attempts (${booking.rides.length})`} sub="All driver assignments for this booking" />
+              <SectionHeader title={`Ride Attempts (${booking.rides.length})`} sub="All driver assignments" />
               <RideHistoryList rides={booking.rides} />
             </div>
           )}

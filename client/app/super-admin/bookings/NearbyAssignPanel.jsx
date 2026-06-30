@@ -1,296 +1,394 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useSelector } from 'react-redux';
-import { Car, Truck, Heart, Building2, Plus, RotateCcw, MapPin, Phone, CheckCircle, XCircle, Star } from 'lucide-react';
 import {
-  fetchNearbySoloDrivers, fetchNearbyTransportPartners,
-  fetchNearbyCareAssistants, fetchNearbyHospitals,
-  adminAssignSoloDriver, adminAssignTransportPartner,
-  adminAssignCareAssistant, adminAssignHospital,
-  adminReassignDriver, adminReassignCareAssistant,
-  clearNearbyResults,
-  selectNearbyDrivers, selectNearbyCareAssistants,
-  selectNearbyTPs, selectNearbyHospitals,
-  selectNearbyLoading, selectAdminAssignLoading,
+  UserCheck, Car, Truck, Hospital, RefreshCw, Check,
+  MapPin, Star, Phone, ChevronRight, AlertTriangle,
+} from 'lucide-react';
+import {
+  fetchNearbyCareAssistants,
+  fetchNearbySoloDrivers,
+  fetchNearbyTransportPartners,
+  fetchNearbyHospitals,
+  adminAssignSoloDriver,
+  adminAssignTransportPartner,
+  adminAssignCareAssistant,
+  adminAssignHospital,
+  adminReassignDriver,
+  adminReassignCareAssistant,
+  fetchAdminBookingById,
+  selectNearbyDrivers,
+  selectNearbyCareAssistants,
+  selectNearbyTPs,
+  selectNearbyHospitals,
+  selectNearbyLoading,
+  selectAdminAssignLoading,
 } from '@/store/slices/operationsSlice';
 import {
-  TYPE_ASSIGN_TABS, getDriverAssignmentState,
-  PartnerStatusBanner, CallButton, Spinner, EmptyState, FieldNote,
+  TYPE_ASSIGN_TABS, statusBadge, currency, Spinner,
+  SectionHeader, CallButton, FieldNote, getDriverAssignmentState,
 } from './shared';
 
-/* ─── NEARBY ASSIGN PANEL ──────────────────────────────────────────────────── */
+// ── Assign tab layout ─────────────────────────────────────────────────────────
+const ASSIGN_TAB_META = {
+  driver:   { label: 'Solo Driver', icon: Car      },
+  tp:       { label: 'Transport Partner', icon: Truck  },
+  care:     { label: 'Care Asst.', icon: UserCheck  },
+  hospital: { label: 'Hospital',   icon: Hospital   },
+};
+
+// ── Solo driver results ───────────────────────────────────────────────────────
+function SoloDriverResults({ results, bookingId, dispatch, alreadyAssigned }) {
+  const [assigning, setAssigning] = useState(null);
+  const [done,      setDone]      = useState(null);
+  const [reason,    setReason]    = useState('');
+
+  const assign = async (soloDriverPartnerId) => {
+    setAssigning(soloDriverPartnerId);
+    try {
+      if (alreadyAssigned) {
+        await dispatch(adminReassignDriver({ bookingId, newDriverId: soloDriverPartnerId, reason })).unwrap();
+      } else {
+        await dispatch(adminAssignSoloDriver({ bookingId, soloDriverPartnerId })).unwrap();
+      }
+      setDone(soloDriverPartnerId);
+      setTimeout(() => setDone(null), 2500);
+      dispatch(fetchAdminBookingById({ bookingId }));
+    } catch {}
+    setAssigning(null);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      {alreadyAssigned && (
+        <input
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          placeholder="Reason for reassignment…"
+          className="input-field text-xs"
+        />
+      )}
+      {results.length === 0 ? (
+        <p className="text-xs text-base-content/40 text-center py-4">No solo drivers nearby</p>
+      ) : results.map(d => (
+        <div key={d.soloPartnerId} className="rounded-xl border border-base-300 bg-base-200 p-3 flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 mb-0.5">
+              <p className="text-xs font-bold text-base-content m-0 truncate">{d.name}</p>
+              {d.rating > 0 && (
+                <span className="flex items-center gap-0.5 text-[10px] text-warning">
+                  <Star size={8} fill="currentColor" /> {d.rating?.toFixed(1)}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 flex-wrap text-[10px] text-base-content/50">
+              <span><MapPin size={8} className="inline mr-0.5" />{d.distanceKm} km</span>
+              {d.vehicle && <span>{d.vehicle.registrationNumber} · {d.vehicle.vehicleType}</span>}
+              {d.isDispatchReady && <span className="text-success font-bold">Ready</span>}
+            </div>
+            {d.matchedZone && (
+              <p className="text-[10px] text-base-content/35 m-0 mt-0.5">Zone: {d.matchedZone.city}</p>
+            )}
+          </div>
+          <div className="flex flex-col items-end gap-1 shrink-0">
+            {d.phone && <CallButton phone={d.phone} label="" size="xs" />}
+            <button
+              onClick={() => assign(d.soloPartnerId)}
+              disabled={!!assigning}
+              className={`btn btn-xs gap-1 ${done === d.soloPartnerId ? 'btn-success' : 'btn-primary'}`}
+            >
+              {assigning === d.soloPartnerId ? <Spinner size={10} /> : done === d.soloPartnerId ? <Check size={10} /> : <ChevronRight size={10} />}
+              {done === d.soloPartnerId ? 'Assigned' : alreadyAssigned ? 'Reassign' : 'Assign'}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── TP results ────────────────────────────────────────────────────────────────
+function TpResults({ results, bookingId, dispatch }) {
+  const [assigning, setAssigning] = useState(null);
+  const [done,      setDone]      = useState(null);
+
+  const assign = async (transportPartnerId) => {
+    setAssigning(transportPartnerId);
+    try {
+      await dispatch(adminAssignTransportPartner({ bookingId, transportPartnerId })).unwrap();
+      setDone(transportPartnerId);
+      setTimeout(() => setDone(null), 2500);
+      dispatch(fetchAdminBookingById({ bookingId }));
+    } catch {}
+    setAssigning(null);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <FieldNote text="TP then assigns their own driver from their fleet" />
+      {results.length === 0 ? (
+        <p className="text-xs text-base-content/40 text-center py-4">No transport partners nearby</p>
+      ) : results.map(tp => (
+        <div key={tp.tpId} className="rounded-xl border border-base-300 bg-base-200 p-3 flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-base-content m-0 truncate">{tp.businessName}</p>
+            <div className="flex items-center gap-2 flex-wrap text-[10px] text-base-content/50 mt-0.5">
+              <span>{tp.availableDriversNearby} drivers near</span>
+              <span>{tp.activeVehicles} vehicles</span>
+              {tp.isDispatchReady && <span className="text-success font-bold">Dispatch ready</span>}
+            </div>
+            {tp.distanceKm != null && (
+              <p className="text-[10px] text-base-content/35 m-0 mt-0.5"><MapPin size={8} className="inline mr-0.5" />{tp.distanceKm} km</p>
+            )}
+            {tp.matchedZone && (
+              <p className="text-[10px] text-base-content/30 m-0">Zone: {tp.matchedZone.city}</p>
+            )}
+          </div>
+          <div className="flex flex-col items-end gap-1 shrink-0">
+            {tp.ownerPhone && <CallButton phone={tp.ownerPhone} label="" size="xs" />}
+            <button
+              onClick={() => assign(tp.tpId)}
+              disabled={!!assigning}
+              className={`btn btn-xs gap-1 ${done === tp.tpId ? 'btn-success' : 'btn-primary'}`}
+            >
+              {assigning === tp.tpId ? <Spinner size={10} /> : done === tp.tpId ? <Check size={10} /> : <ChevronRight size={10} />}
+              {done === tp.tpId ? 'Assigned' : 'Assign TP'}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Care assistant results ────────────────────────────────────────────────────
+function CareResults({ results, bookingId, dispatch, alreadyAssigned }) {
+  const [assigning, setAssigning] = useState(null);
+  const [done,      setDone]      = useState(null);
+
+  const assign = async (careAssistantId) => {
+    setAssigning(careAssistantId);
+    try {
+      if (alreadyAssigned) {
+        await dispatch(adminReassignCareAssistant({ bookingId, newCareAssistantId: careAssistantId })).unwrap();
+      } else {
+        await dispatch(adminAssignCareAssistant({ bookingId, careAssistantId })).unwrap();
+      }
+      setDone(careAssistantId);
+      setTimeout(() => setDone(null), 2500);
+      dispatch(fetchAdminBookingById({ bookingId }));
+    } catch {}
+    setAssigning(null);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      {results.length === 0 ? (
+        <p className="text-xs text-base-content/40 text-center py-4">No care assistants nearby</p>
+      ) : results.map(ca => (
+        <div key={ca.careAssistantId} className="rounded-xl border border-base-300 bg-base-200 p-3 flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 mb-0.5">
+              <p className="text-xs font-bold text-base-content m-0 truncate">{ca.name}</p>
+              {ca.rating > 0 && (
+                <span className="flex items-center gap-0.5 text-[10px] text-warning">
+                  <Star size={8} fill="currentColor" /> {ca.rating?.toFixed(1)}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 flex-wrap text-[10px] text-base-content/50">
+              <span><MapPin size={8} className="inline mr-0.5" />{ca.distanceKm} km</span>
+              {ca.specializations?.length > 0 && <span>{ca.specializations.slice(0,2).join(', ')}</span>}
+            </div>
+            {ca.currentCity && (
+              <p className="text-[10px] text-base-content/35 m-0 mt-0.5">City: {ca.currentCity}</p>
+            )}
+          </div>
+          <div className="flex flex-col items-end gap-1 shrink-0">
+            {ca.phone && <CallButton phone={ca.phone} label="" size="xs" />}
+            <button
+              onClick={() => assign(ca.careAssistantId)}
+              disabled={!!assigning}
+              className={`btn btn-xs gap-1 ${done === ca.careAssistantId ? 'btn-success' : 'btn-primary'}`}
+            >
+              {assigning === ca.careAssistantId ? <Spinner size={10} /> : done === ca.careAssistantId ? <Check size={10} /> : <ChevronRight size={10} />}
+              {done === ca.careAssistantId ? 'Assigned' : alreadyAssigned ? 'Reassign' : 'Assign'}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Hospital results ──────────────────────────────────────────────────────────
+function HospitalResults({ results, bookingId, dispatch }) {
+  const [assigning, setAssigning] = useState(null);
+  const [done,      setDone]      = useState(null);
+
+  const assign = async (hospitalId) => {
+    setAssigning(hospitalId);
+    try {
+      await dispatch(adminAssignHospital({ bookingId, hospitalId })).unwrap();
+      setDone(hospitalId);
+      setTimeout(() => setDone(null), 2500);
+      dispatch(fetchAdminBookingById({ bookingId }));
+    } catch {}
+    setAssigning(null);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      {results.length === 0 ? (
+        <p className="text-xs text-base-content/40 text-center py-4">No hospitals nearby</p>
+      ) : results.map(h => (
+        <div key={h.hospitalId} className="rounded-xl border border-base-300 bg-base-200 p-3 flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-base-content m-0 truncate">{h.name}</p>
+            <div className="flex items-center gap-2 flex-wrap text-[10px] text-base-content/50 mt-0.5">
+              <span><MapPin size={8} className="inline mr-0.5" />{h.distanceKm} km</span>
+              {h.hospitalType && <span>{h.hospitalType}</span>}
+              {h.is24x7 && <span className="text-success font-bold">24x7</span>}
+              {h.isEmergencyReady && <span className="text-warning font-bold">Emergency</span>}
+            </div>
+            {h.specialties?.length > 0 && (
+              <p className="text-[10px] text-base-content/35 m-0 mt-0.5">{h.specialties.slice(0,3).join(', ')}</p>
+            )}
+          </div>
+          <div className="flex flex-col items-end gap-1 shrink-0">
+            {h.phone && <CallButton phone={h.phone} label="" size="xs" />}
+            <button
+              onClick={() => assign(h.hospitalId)}
+              disabled={!!assigning}
+              className={`btn btn-xs gap-1 ${done === h.hospitalId ? 'btn-success' : 'btn-primary'}`}
+            >
+              {assigning === h.hospitalId ? <Spinner size={10} /> : done === h.hospitalId ? <Check size={10} /> : <ChevronRight size={10} />}
+              {done === h.hospitalId ? 'Linked' : 'Link Hospital'}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Main NearbyAssignPanel ────────────────────────────────────────────────────
 export function NearbyAssignPanel({ booking, dispatch }) {
-  const bookingId      = booking._id;
-  const bookingType    = booking.bookingType;
-  const allowedTabs    = TYPE_ASSIGN_TABS[bookingType] ?? ['driver', 'tp', 'care', 'hospital'];
+  const nearbyDrivers = useSelector(selectNearbyDrivers);
+  const nearbyCA      = useSelector(selectNearbyCareAssistants);
+  const nearbyTPs     = useSelector(selectNearbyTPs);
+  const nearbyHosps   = useSelector(selectNearbyHospitals);
+  const nearbyLoading = useSelector(selectNearbyLoading);
+  const assignLoading = useSelector(selectAdminAssignLoading);
 
-  const [tab,    setTab]    = useState(allowedTabs[0] ?? 'driver');
-  const [reason, setReason] = useState('');
+  const allowedTabs  = TYPE_ASSIGN_TABS[booking.bookingType] ?? [];
+  const [tab, setTab] = useState(allowedTabs[0] ?? 'driver');
 
-  const nearbyDrivers   = useSelector(selectNearbyDrivers);
-  const nearbyCAs       = useSelector(selectNearbyCareAssistants);
-  const nearbyTPs       = useSelector(selectNearbyTPs);
-  const nearbyHospitals = useSelector(selectNearbyHospitals);
-  const nearbyLoading   = useSelector(selectNearbyLoading);
-  const assignLoading   = useSelector(selectAdminAssignLoading);
+  const driverState   = getDriverAssignmentState(booking);
+  const hasDriver     = driverState.state === 'assigned';
+  const hasCa         = !!booking.careAssistant;
+  const hasHosp       = !!booking.hospital;
 
-  const driverState = getDriverAssignmentState(booking);
-  const caAssigned  = !!booking?.careAssistant;
-  const tpAssigned  = !!booking?.transportPartner;
-  const hospAssigned = !!booking?.hospital;
+  const fetchNearby = useCallback(() => {
+    const id = booking._id;
+    if (tab === 'driver')   dispatch(fetchNearbySoloDrivers({ bookingId: id }));
+    if (tab === 'tp')       dispatch(fetchNearbyTransportPartners({ bookingId: id }));
+    if (tab === 'care')     dispatch(fetchNearbyCareAssistants({ bookingId: id }));
+    if (tab === 'hospital') dispatch(fetchNearbyHospitals({ bookingId: id }));
+  }, [tab, booking._id, dispatch]);
 
-  const load = useCallback((t) => {
-    setTab(t);
-    if (t === 'driver')   dispatch(fetchNearbySoloDrivers({ bookingId }));
-    if (t === 'care')     dispatch(fetchNearbyCareAssistants({ bookingId }));
-    if (t === 'tp')       dispatch(fetchNearbyTransportPartners({ bookingId }));
-    if (t === 'hospital') dispatch(fetchNearbyHospitals({ bookingId }));
-  }, [bookingId, dispatch]);
-
-  useEffect(() => {
-    if (allowedTabs.length) load(allowedTabs[0]);
-    return () => dispatch(clearNearbyResults());
-  }, [load, dispatch]); // eslint-disable-line
-
-  if (!allowedTabs.length) {
+  if (allowedTabs.length === 0) {
     return (
-      <EmptyState icon={MapPin} text="No partner assignment needed" sub={`${bookingType?.replace(/_/g,' ')} does not require partner assignment`} />
+      <div className="flex flex-col items-center gap-2 py-6 text-base-content/40">
+        <UserCheck size={24} strokeWidth={1} />
+        <p className="text-xs m-0">No partner assignment for this booking type</p>
+      </div>
     );
   }
 
-  const ALL_TABS = [
-    { id: 'driver',   label: 'Solo Drivers',  icon: Car,       note: 'Independent drivers onboarded on Likeson. Direct assignment, no agency.' },
-    { id: 'tp',       label: 'Transport',      icon: Truck,     note: 'Fleet agencies. After assigning, TP must pick their own driver.' },
-    { id: 'care',     label: 'Care Asst.',     icon: Heart,     note: 'Trained care assistants for patient accompaniment & care tasks.' },
-    { id: 'hospital', label: 'Hospitals',      icon: Building2, note: 'Link a hospital for the appointment. Hospital confirms the slot.' },
-  ].filter(t => allowedTabs.includes(t.id));
-
-  const actionInfo = (t) => {
-    if (t === 'driver') {
-      if (driverState.state === 'rejected') return { label: 'Reassign (Rejected)', mode: 'reassign', danger: true };
-      if (driverState.state === 'assigned') return { label: 'Reassign Driver',     mode: 'reassign', danger: false };
-      return { label: 'Assign Driver', mode: 'assign', danger: false };
-    }
-    if (t === 'care')     return caAssigned   ? { label: 'Reassign CA',       mode: 'reassign', danger: false } : { label: 'Assign CA', mode: 'assign', danger: false };
-    if (t === 'tp')       return tpAssigned   ? { label: 'Reassign Fleet',    mode: 'reassign', danger: false } : { label: 'Assign TP', mode: 'assign', danger: false };
-    if (t === 'hospital') return hospAssigned ? { label: 'Relink Hospital',   mode: 'reassign', danger: false } : { label: 'Link Hospital', mode: 'assign', danger: false };
-    return { label: 'Assign', mode: 'assign', danger: false };
-  };
-
-  const handleAction = (type, id, soloPartnerId) => {
-    const info = actionInfo(type);
-    if (info.mode === 'reassign') {
-      if (type === 'driver') dispatch(adminReassignDriver({ bookingId, newDriverId: id, reason: reason || 'Admin reassignment' }));
-      if (type === 'care')   dispatch(adminReassignCareAssistant({ bookingId, newCareAssistantId: id }));
-      if (type === 'tp')     dispatch(adminAssignTransportPartner({ bookingId, transportPartnerId: id }));
-      if (type === 'hospital') dispatch(adminAssignHospital({ bookingId, hospitalId: id }));
-    } else {
-      if (type === 'driver')   dispatch(adminAssignSoloDriver({ bookingId, soloDriverPartnerId: soloPartnerId ?? id }));
-      if (type === 'care')     dispatch(adminAssignCareAssistant({ bookingId, careAssistantId: id }));
-      if (type === 'tp')       dispatch(adminAssignTransportPartner({ bookingId, transportPartnerId: id }));
-      if (type === 'hospital') dispatch(adminAssignHospital({ bookingId, hospitalId: id }));
-    }
-  };
-
-  const currentInfo = actionInfo(tab);
-
-  /* ── Driver cards ── */
-  const DriverCard = ({ d, i }) => (
-    <div key={d.driverId ?? i} className="rounded-xl border border-base-300 bg-base-200/40 hover:border-primary/30 transition-colors p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-xs font-bold text-base-content m-0 truncate">{d.name ?? '—'}</p>
-            {d.phone && <CallButton phone={d.phone} label="" size="xs" />}
-            {(d.rating > 0) && (
-              <span className="flex items-center gap-0.5 text-[10px] text-warning font-bold">
-                <Star size={8} fill="currentColor" /> {d.rating?.toFixed(1)}
-              </span>
-            )}
-          </div>
-          {d.phone && <p className="text-[10px] text-base-content/50 m-0 mt-0.5">{d.phone}</p>}
-          {d.distanceKm != null && <p className="text-[10px] text-primary font-semibold m-0">{d.distanceKm} km away</p>}
-          {d.vehicle && (
-            <p className="text-[10px] text-base-content/35 mt-0.5 m-0">
-              {[d.vehicle.make, d.vehicle.model, d.vehicle.registrationNumber].filter(Boolean).join(' · ')}
-              {d.vehicle.isWheelchairAccessible && ' · ♿'}
-              {d.vehicle.hasStretcherSupport && ' · 🛏'}
-            </p>
-          )}
-          {d.matchedZone && <p className="text-[10px] text-base-content/30 m-0">Zone: {d.matchedZone.city}, {d.matchedZone.state}</p>}
-        </div>
-        <button
-          disabled={assignLoading}
-          onClick={() => handleAction('driver', d.driverId, d.soloPartnerId)}
-          className={`btn btn-xs gap-1 shrink-0 ${currentInfo.danger ? 'btn-error' : 'btn-primary'}`}
-        >
-          {assignLoading ? <Spinner size={9} /> : currentInfo.mode === 'reassign' ? <RotateCcw size={9} /> : <Plus size={9} />}
-          {currentInfo.label}
-        </button>
-      </div>
-    </div>
-  );
-
-  /* ── TP cards ── */
-  const TpCard = ({ tp, i }) => (
-    <div key={tp.tpId ?? i} className="rounded-xl border border-base-300 bg-base-200/40 hover:border-primary/30 transition-colors p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-xs font-bold text-base-content m-0 truncate">{tp.businessName ?? '—'}</p>
-            {tp.ownerPhone && <CallButton phone={tp.ownerPhone} label="" size="xs" />}
-            {(tp.averageRating > 0) && (
-              <span className="flex items-center gap-0.5 text-[10px] text-warning font-bold">
-                <Star size={8} fill="currentColor" /> {tp.averageRating?.toFixed(1)}
-              </span>
-            )}
-          </div>
-          {tp.ownerPhone && <p className="text-[10px] text-base-content/50 m-0 mt-0.5">Owner: {tp.ownerPhone}</p>}
-          <p className="text-[10px] text-base-content/35 m-0">
-            {tp.availableDriversNearby ?? tp.activeDrivers ?? 0} drivers avail · {tp.totalVehicles ?? 0} vehicles
-            {tp.isDispatchReady ? ' · ✅ Ready' : ' · ⚠️ Not ready'}
-          </p>
-          {tp.matchedZone && <p className="text-[10px] text-base-content/30 m-0">Zone: {tp.matchedZone.city}</p>}
-        </div>
-        <button
-          disabled={assignLoading || !tp.isDispatchReady}
-          onClick={() => handleAction('tp', tp.tpId)}
-          className="btn btn-xs gap-1 btn-primary shrink-0"
-        >
-          {assignLoading ? <Spinner size={9} /> : <Plus size={9} />}
-          {actionInfo('tp').label}
-        </button>
-      </div>
-    </div>
-  );
-
-  /* ── CA cards ── */
-  const CaCard = ({ ca, i }) => (
-    <div key={ca.careAssistantId ?? i} className="rounded-xl border border-base-300 bg-base-200/40 hover:border-primary/30 transition-colors p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-xs font-bold text-base-content m-0 truncate">{ca.name ?? '—'}</p>
-            {ca.phone && <CallButton phone={ca.phone} label="" size="xs" />}
-            {(ca.rating > 0) && (
-              <span className="flex items-center gap-0.5 text-[10px] text-warning font-bold">
-                <Star size={8} fill="currentColor" /> {ca.rating?.toFixed(1)}
-              </span>
-            )}
-          </div>
-          {ca.phone && <p className="text-[10px] text-base-content/50 m-0 mt-0.5">{ca.phone}</p>}
-          {ca.distanceKm != null && <p className="text-[10px] text-primary font-semibold m-0">{ca.distanceKm} km away</p>}
-          {ca.specializations?.length > 0 && (
-            <p className="text-[10px] text-base-content/35 mt-0.5 m-0">{ca.specializations.slice(0, 3).join(', ')}</p>
-          )}
-          {ca.workType && <p className="text-[10px] text-base-content/30 m-0">Type: {ca.workType}</p>}
-        </div>
-        <button
-          disabled={assignLoading}
-          onClick={() => handleAction('care', ca.careAssistantId)}
-          className="btn btn-xs gap-1 btn-primary shrink-0"
-        >
-          {assignLoading ? <Spinner size={9} /> : caAssigned ? <RotateCcw size={9} /> : <Plus size={9} />}
-          {actionInfo('care').label}
-        </button>
-      </div>
-    </div>
-  );
-
-  /* ── Hospital cards ── */
-  const HospCard = ({ h, i }) => (
-    <div key={h.hospitalId ?? i} className="rounded-xl border border-base-300 bg-base-200/40 hover:border-primary/30 transition-colors p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-xs font-bold text-base-content m-0 truncate">{h.name ?? '—'}</p>
-            {h.phone && <CallButton phone={h.phone} label="" size="xs" />}
-            {(h.averageRating > 0) && (
-              <span className="flex items-center gap-0.5 text-[10px] text-warning font-bold">
-                <Star size={8} fill="currentColor" /> {h.averageRating?.toFixed(1)}
-              </span>
-            )}
-          </div>
-          {h.phone && <p className="text-[10px] text-base-content/50 m-0 mt-0.5">{h.phone}</p>}
-          {h.address && <p className="text-[10px] text-base-content/35 m-0">{h.address}</p>}
-          <p className="text-[10px] text-base-content/35 m-0">
-            {h.distanceKm != null ? `${h.distanceKm} km` : ''}
-            {h.is24x7 ? ' · 24×7' : ''}
-            {h.isEmergencyReady ? ' · Emergency' : ''}
-            {h.linkedDoctors ? ` · ${h.linkedDoctors} doctors` : ''}
-          </p>
-          {h.specialties?.length > 0 && (
-            <p className="text-[10px] text-base-content/30 m-0">{h.specialties.slice(0, 3).join(', ')}</p>
-          )}
-        </div>
-        <button
-          disabled={assignLoading}
-          onClick={() => handleAction('hospital', h.hospitalId)}
-          className="btn btn-xs gap-1 btn-primary shrink-0"
-        >
-          {assignLoading ? <Spinner size={9} /> : hospAssigned ? <RotateCcw size={9} /> : <Plus size={9} />}
-          {actionInfo('hospital').label}
-        </button>
-      </div>
-    </div>
-  );
-
-  const lists = {
-    driver:   (nearbyDrivers   ?? []).map((d, i) => <DriverCard key={d.driverId ?? i} d={d} i={i} />),
-    tp:       (nearbyTPs       ?? []).map((tp, i) => <TpCard    key={tp.tpId ?? i}    tp={tp} i={i} />),
-    care:     (nearbyCAs       ?? []).map((ca, i) => <CaCard    key={ca.careAssistantId ?? i} ca={ca} i={i} />),
-    hospital: (nearbyHospitals ?? []).map((h, i)  => <HospCard  key={h.hospitalId ?? i}  h={h} i={i} />),
-  };
-
-  const currentTabMeta = ALL_TABS.find(t => t.id === tab);
-
   return (
     <div className="flex flex-col gap-3">
-      <PartnerStatusBanner booking={booking} />
-
-      {/* Reassign reason */}
-      <div>
-        <label className="label text-[10px] uppercase tracking-widest mb-1 block">Reassign Reason</label>
-        <FieldNote text="Required for reassignment audit. Optional for first-time assignments." />
-        <input
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="Reassign reason (optional for new assign)…"
-          className="input-field text-xs mt-1"
-        />
+      {/* Sub-tabs */}
+      <div className="flex gap-1 flex-wrap">
+        {allowedTabs.map(t => {
+          const meta = ASSIGN_TAB_META[t];
+          if (!meta) return null;
+          const Icon = meta.icon;
+          return (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`btn btn-xs gap-1.5 ${tab === t ? 'btn-primary' : 'bg-base-300 text-base-content'}`}
+            >
+              <Icon size={9} /> {meta.label}
+            </button>
+          );
+        })}
       </div>
 
-      {/* Tab switcher */}
-      <div className="flex gap-1.5 flex-wrap">
-        {ALL_TABS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => load(id)}
-            className={`btn btn-xs gap-1.5 ${tab === id ? 'btn-primary' : 'bg-base-300 text-base-content'}`}
-          >
-            <Icon size={9} /> {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab note */}
-      {currentTabMeta?.note && (
-        <div className="rounded-lg bg-base-300/40 px-3 py-2 text-[10px] text-base-content/50">
-          {currentTabMeta.note}
+      {/* Already assigned badge */}
+      {tab === 'driver'   && hasDriver && (
+        <div className="flex items-center gap-1.5 text-[11px] text-warning bg-warning/10 border border-warning/30 rounded-lg px-3 py-1.5">
+          <AlertTriangle size={10} /> Driver already assigned. Search to reassign.
+        </div>
+      )}
+      {tab === 'care'     && hasCa && (
+        <div className="flex items-center gap-1.5 text-[11px] text-info bg-info/10 border border-info/30 rounded-lg px-3 py-1.5">
+          <AlertTriangle size={10} /> Care assistant assigned. Reassign below.
+        </div>
+      )}
+      {tab === 'hospital' && hasHosp && (
+        <div className="flex items-center gap-1.5 text-[11px] text-success bg-success/10 border border-success/30 rounded-lg px-3 py-1.5">
+          Hospital already linked. Reassign below.
         </div>
       )}
 
+      {/* Search button */}
+      <button
+        onClick={fetchNearby}
+        disabled={nearbyLoading}
+        className="btn btn-sm btn-outline gap-1.5 self-start"
+      >
+        {nearbyLoading ? <Spinner size={12} /> : <RefreshCw size={11} />}
+        Search Nearby
+      </button>
+
       {/* Results */}
-      {nearbyLoading ? (
-        <div className="flex items-center justify-center gap-2 py-8 text-xs text-base-content/40">
-          <Spinner size={14} /> Searching nearby…
+      {tab === 'driver' && (
+        <SoloDriverResults
+          results={nearbyDrivers}
+          bookingId={booking._id}
+          dispatch={dispatch}
+          alreadyAssigned={hasDriver}
+        />
+      )}
+      {tab === 'tp' && (
+        <TpResults
+          results={nearbyTPs}
+          bookingId={booking._id}
+          dispatch={dispatch}
+        />
+      )}
+      {tab === 'care' && (
+        <CareResults
+          results={nearbyCA}
+          bookingId={booking._id}
+          dispatch={dispatch}
+          alreadyAssigned={hasCa}
+        />
+      )}
+      {tab === 'hospital' && (
+        <HospitalResults
+          results={nearbyHosps}
+          bookingId={booking._id}
+          dispatch={dispatch}
+        />
+      )}
+
+      {assignLoading && (
+        <div className="flex items-center gap-2 text-xs text-base-content/50 py-2">
+          <Spinner size={12} /> Assigning…
         </div>
-      ) : (lists[tab]?.length ?? 0) > 0 ? (
-        <div className="flex flex-col gap-2 max-h-72 overflow-y-auto scrollbar-thin pr-1">
-          {lists[tab]}
-        </div>
-      ) : (
-        <EmptyState icon={MapPin} text="No nearby results" sub="Check location data or partner availability" />
       )}
     </div>
   );

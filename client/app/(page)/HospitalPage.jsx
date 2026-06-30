@@ -91,7 +91,7 @@ HospitalCardSkeleton.displayName = "HospitalCardSkeleton";
 const FacilityPill = ({ icon: Icon, label, active, colorClass = "text-primary" }) => {
   if (!active) return null;
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[9px] font-bold uppercase tracking-wider bg-base-100 border-base-300 ${colorClass}`}>
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-bold uppercase tracking-wider bg-base-100 border-base-300 ${colorClass}`}>
       <Icon size={9} />
       {label}
     </span>
@@ -146,7 +146,7 @@ const HospitalCard = memo(({ hospital, index }) => {
               <ShieldCheck size={14} aria-hidden="true" />
             </div>
           )}
-          <span className="px-2.5 py-1 rounded-full bg-primary text-primary-content text-[8px] font-black tracking-[0.12em] uppercase shadow">
+          <span className="px-2.5 py-1 rounded-full bg-primary text-primary-content text-[10px] font-black tracking-[0.12em] uppercase shadow">
             {hospital.hospitalType || "Multi-Specialty"}
           </span>
         </div>
@@ -159,13 +159,13 @@ const HospitalCard = memo(({ hospital, index }) => {
               {hospital.rating?.averageRating?.toFixed(1) ?? "—"}
             </span>
             {hospital.rating?.totalReviews > 0 && (
-              <span className="text-[9px] text-base-content/40 font-poppins">
+              <span className="text-[11px] text-base-content/40 font-poppins">
                 ({hospital.rating.totalReviews})
               </span>
             )}
           </div>
           {distLabel && (
-            <div className="flex items-center gap-1 bg-base-100/80 backdrop-blur-sm border border-base-300 px-2 py-1 rounded-full shadow text-[9px] font-bold text-base-content/70 font-poppins">
+            <div className="flex items-center gap-1 bg-base-100/80 backdrop-blur-sm border border-base-300 px-2 py-1 rounded-full shadow text-[11px] font-bold text-base-content/70 font-poppins">
               <MapPin size={8} />
               {distLabel}
             </div>
@@ -182,7 +182,7 @@ const HospitalCard = memo(({ hospital, index }) => {
             {accreditations.map((a) => (
               <span
                 key={a}
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[8px] font-black uppercase tracking-widest ${ACCRED_COLOR[a] ?? ACCRED_COLOR.Other}`}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-black uppercase tracking-widest ${ACCRED_COLOR[a] ?? ACCRED_COLOR.Other}`}
               >
                 <Award size={8} />
                 {a}
@@ -195,18 +195,18 @@ const HospitalCard = memo(({ hospital, index }) => {
 
           {/* Status + 24/7 */}
           <div className="flex items-center gap-2 mb-3">
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-success/10 text-success text-[8px] font-black uppercase border border-success/20">
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-success/10 text-success text-[10px] font-black uppercase border border-success/20">
               <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" />
               Available Now
             </div>
             {hospital.is24x7 && (
-              <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-info/10 text-info text-[8px] font-black uppercase border border-info/30">
+              <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-info/10 text-info text-[10px] font-black uppercase border border-info/30">
                 <Clock size={8} />
                 24 × 7
               </div>
             )}
             {hospital.isEmergencyReady && (
-              <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-error/10 text-error text-[8px] font-black uppercase border border-error/30">
+              <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-error/10 text-error text-[10px] font-black uppercase border border-error/30">
                 <Zap size={8} />
                 ER
               </div>
@@ -250,13 +250,13 @@ const HospitalCard = memo(({ hospital, index }) => {
               {specialties.map((s) => (
                 <span
                   key={s}
-                  className="px-2 py-0.5 rounded-[var(--r-selector)] bg-base-200 border border-base-300 text-[8px] font-bold text-base-content/60 uppercase tracking-wider"
+                  className="px-2 py-0.5 rounded-[var(--r-selector)] bg-base-200 border border-base-300 text-[10px] font-bold text-base-content/60 uppercase tracking-wider"
                 >
                   {s}
                 </span>
               ))}
               {(hospital.specialties?.length ?? 0) > 3 && (
-                <span className="px-2 py-0.5 rounded-[var(--r-selector)] bg-primary/10 border border-primary/20 text-[8px] font-black text-primary uppercase tracking-wider">
+                <span className="px-2 py-0.5 rounded-[var(--r-selector)] bg-primary/10 border border-primary/20 text-[10px] font-black text-primary uppercase tracking-wider">
                   +{hospital.specialties.length - 3} more
                 </span>
               )}
@@ -273,7 +273,7 @@ const HospitalCard = memo(({ hospital, index }) => {
               <Phone size={10} />
               {hospital.contact.emergencyPhone || hospital.contact.phone}
               {hospital.contact.emergencyPhone && (
-                <span className="text-error text-[8px] font-black uppercase ml-1">Emergency</span>
+                <span className="text-error text-[10px] font-black uppercase ml-1">Emergency</span>
               )}
             </a>
           )}
@@ -282,14 +282,14 @@ const HospitalCard = memo(({ hospital, index }) => {
           <div className="grid grid-cols-2 gap-2">
             <Link
               href={`/book-appointment?type=doctor_consultation&hospital=${hospital._id}`}
-              className="h-11 rounded-[var(--r-field)] bg-primary text-primary-content font-black text-[9px] uppercase tracking-widest flex items-center justify-center gap-1.5 hover:brightness-110 transition-all duration-200 focus-visible:ring-2 focus-visible:ring-primary outline-none shadow"
+              className="h-11 rounded-[var(--r-field)] bg-primary text-primary-content font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-1.5 hover:brightness-110 transition-all duration-200 focus-visible:ring-2 focus-visible:ring-primary outline-none shadow"
               aria-label={`Book appointment at ${hospital.name}`}
             >
               Book Now <ArrowUpRight size={12} />
             </Link>
             <Link
               href={`/hospitals/${hospital?.slug}`}
-              className="h-11 rounded-[var(--r-field)] bg-base-200 border border-base-300 text-base-content font-black text-[9px] uppercase tracking-widest flex items-center justify-center gap-1.5 hover:bg-primary/10 hover:border-primary/30 hover:text-primary transition-all duration-200 focus-visible:ring-2 focus-visible:ring-primary outline-none"
+              className="h-11 rounded-[var(--r-field)] bg-base-200 border border-base-300 text-base-content font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-1.5 hover:bg-primary/10 hover:border-primary/30 hover:text-primary transition-all duration-200 focus-visible:ring-2 focus-visible:ring-primary outline-none"
               aria-label={`View details for ${hospital.name}`}
             >
               View Details
@@ -398,7 +398,7 @@ LocationBar.displayName = "LocationBar";
 const HeaderStat = memo(({ value, label }) => (
   <div className="flex flex-col items-center px-6 py-3 border border-base-300 rounded-[var(--r-box)] bg-base-100">
     <span className="text-2xl font-black text-primary font-montserrat leading-none">{value}</span>
-    <span className="text-[9px] font-bold text-base-content/40 uppercase tracking-widest mt-1 font-poppins">{label}</span>
+    <span className="text-[11px] font-bold text-base-content/40 uppercase tracking-widest mt-1 font-poppins">{label}</span>
   </div>
 ));
 HeaderStat.displayName = "HeaderStat";
@@ -625,7 +625,7 @@ const HomeHospitals = () => {
                 <span className="mt-4 text-[10px] font-black text-base-content/40 uppercase tracking-widest group-hover:text-primary transition-colors">
                   View All Facilities
                 </span>
-                <span className="mt-1 text-[9px] text-base-content/30 font-poppins">
+                <span className="mt-1 text-[11px] text-base-content/30 font-poppins">
                   Browse full directory
                 </span>
               </Link>

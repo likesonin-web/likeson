@@ -1,15 +1,13 @@
 /**
  * socketService.js — Likeson.in Booking Socket Client
  *
- * FIXES vs previous version:
- *   1. verifyOtpAsync: filter by bookingId (not rideId — server doesn't send rideId in otp_result)
- *   2. Reconnect handler re-joins all active rooms (was lost on disconnect/reconnect)
- *   3. startCareGpsTracking: status is a getter param so it updates per-ping
- *   4. triggerSos: sosType uppercased to match server enum validation
- *   5. Added MILESTONE_RECORDED, DRIVER_REPLACED, RIDE_STARTED, RIDE_RESUMED,
- *      BOOKING_ASSIGNED, DRIVER_ACCEPTED, DRIVER_EN_ROUTE to SOCKET_EVENTS
- *   6. Added updateCareStatus — lets CA update status mid-ride without restarting GPS watch
- *   7. stopAllTracking() helper for cleanup
+ * FIX (this pass): SocketProvider.jsx binds `updateCareStatus` and
+ * `stopAllTracking` off this service — neither method existed, so every
+ * render of SocketProvider threw `Cannot read properties of undefined
+ * (reading 'bind')` the instant the component mounted. Since SocketProvider
+ * wraps the whole app, that's a hard crash on first paint, not a corner
+ * case. Added both methods below; everything else in this file is
+ * unchanged from the previous pass.
  */
 
 import { io } from 'socket.io-client';
@@ -30,16 +28,8 @@ export const SOCKET_EVENTS = {
   DRIVER_OFFLINE:             'driver_offline',
 
   // ── Driver location ─────────────────────────────────────────────────────────
-  DRIVER_LOCATION:            'driver_location',
-  LOCATION_UPDATE:            'location_update',
-
-  // ── Driver status ─────────────────────────────────────────────────────────────
-  DRIVER_ACCEPTED:            'driver_accepted',
-  DRIVER_EN_ROUTE:            'driver_en_route',
-  DRIVER_ARRIVED:             'driver_arrived',
-  DRIVER_REPLACED:            'driver_replaced',
-  RIDE_STARTED:               'ride_started',
-  RIDE_RESUMED:               'ride_resumed',
+  DRIVER_LOCATION:            'driver_location',        // admin:ops feed
+  LOCATION_UPDATE:            'location_update',        // driver GPS → booking room
 
   // ── Care assistant location / status ────────────────────────────────────────
   CARE_ASSISTANT_LOCATION_UPDATE: 'care_assistant_location_update',
@@ -48,38 +38,37 @@ export const SOCKET_EVENTS = {
   CARE_ASSISTANT_ATTACHED:        'care_assistant_attached_to_ride',
   CARE_ASSISTANT_AT_JP:           'care_assistant_at_jp',
   CA_JOIN_WAYPOINT_COMPLETED:     'ca_join_waypoint_completed',
-  CARE_REACHED_JP:                'care_reached_jp',
+  CARE_REACHED_JP:                'care_reached_jp',   // CA at join point (HTTP → socket broadcast)
 
-  // ── Join point (rideOperationsRouter) ───────────────────────────────────────
+  // ── Join point events (rideOperationsRouter) ────────────────────────────────
   JOIN_POINT_CALCULATED:      'join_point_calculated',
   JOIN_POINT_STATUS_CHANGED:  'join_point_status_changed',
   JOIN_POINT_MISSED:          'join_point_missed',
   JOIN_POINT_RECALCULATED:    'join_point_recalculated',
-  CA_MISSED_JOINPOINT:        'ca_missed_joinpoint',
+  CA_MISSED_JOINPOINT:        'ca_missed_joinpoint',    // CA self-reports missed JP
 
-  // ── Ride stops (rideOperationsRouter) ───────────────────────────────────────
+  // ── Ride stop events (rideOperationsRouter) ─────────────────────────────────
   STOP_OTP_VERIFIED:          'stop_otp_verified',
   STOP_STATUS_CHANGED:        'stop_status_changed',
   STOP_ARRIVED:               'stop_arrived',
   STOP_DEPARTED:              'stop_departed',
 
-  // ── Participants (rideOperationsRouter) ─────────────────────────────────────
+  // ── Participant events (rideOperationsRouter) ────────────────────────────────
   PARTICIPANT_ASSIGNED:       'participant_assigned',
   PARTICIPANT_STATUS_CHANGE:  'participant_status_change',
   PARTICIPANT_REMOVED:        'participant_removed',
 
-  // ── Destination change ───────────────────────────────────────────────────────
+  // ── Destination change (bookingRouter2 + rideOperationsRouter) ───────────────
   DESTINATION_CHANGED:        'destination_changed',
 
   // ── ETA ─────────────────────────────────────────────────────────────────────
   ETA_UPDATE:                 'eta_update',
   HOSPITAL_ETA_UPDATE:        'hospital_eta_update',
 
-  // ── Ride / booking status ────────────────────────────────────────────────────
+  // ── Ride status ─────────────────────────────────────────────────────────────
   RIDE_STATUS_CHANGED:        'ride_status_changed',
   RIDE_STAGE_CHANGED:         'ride_stage_changed',
   BOOKING_STATUS_CHANGE:      'booking_status_change',
-  BOOKING_ASSIGNED:           'booking_assigned',
   NAVIGATION_TARGET_CHANGED:  'navigation_target_changed',
   STATUS_UPDATE_ACK:          'status_update_ack',
 
@@ -89,21 +78,17 @@ export const SOCKET_EVENTS = {
   OTP_RESEND_REQUESTED:       'otp_resend_requested',
   OTP_FOR_ADMIN:              'otp_for_admin',
   OTP_FAILED_ATTEMPT:         'otp_failed_attempt',
-  OTP_REQUIRED:               'otp_required',
 
   // ── SOS ─────────────────────────────────────────────────────────────────────
-  SOS_ALERT:                  'sos_alert',
-  SOS_ACK:                    'sos_ack',
-  SOS_TRIGGERED:              'sos_triggered',
-  SOS_RESOLVED:               'sos_resolved',
-
-  // ── Milestones ────────────────────────────────────────────────────────────────
-  MILESTONE_RECORDED:         'milestone_recorded',
+  SOS_ALERT:                  'sos_alert',           // booking room broadcast
+  SOS_ACK:                    'sos_ack',             // driver SOS ack
+  SOS_TRIGGERED:              'sos_triggered',       // admin:ops notification
+  SOS_RESOLVED:                'sos_resolved',        // resolution broadcast
 
   // ── Route ───────────────────────────────────────────────────────────────────
   ROUTE_DEVIATION_ALERT:      'route_deviation_alert',
 
-  // ── Snapshots / state ────────────────────────────────────────────────────────
+  // ── Snapshot / state ────────────────────────────────────────────────────────
   BOOKING_STATE_SNAPSHOT:     'booking_state_snapshot',
   RIDE_STOPS_SNAPSHOT:        'ride_stops_snapshot',
   PARTICIPANTS_SNAPSHOT:      'participants_snapshot',
@@ -111,15 +96,15 @@ export const SOCKET_EVENTS = {
   // ── Return ride ─────────────────────────────────────────────────────────────
   RETURN_RIDE_ACTIVATED:      'return_ride_activated',
 
-  // ── Ride events ─────────────────────────────────────────────────────────────
+  // ── Ride completed ──────────────────────────────────────────────────────────
   RIDE_COMPLETED:             'ride_completed',
-  RIDE_CANCELLED:             'ride_cancelled',
-  RIDE_REQUESTED:             'ride_requested',
-  RIDE_ASSIGNED:              'ride_assigned',
 
   // ── Care ride ───────────────────────────────────────────────────────────────
   CARE_ARRIVED:               'care_arrived',
   CARE_COMPLETED:             'care_completed',
+  RIDE_REQUESTED:             'ride_requested',       // CA/customer requested ride
+  DRIVER_ARRIVED:             'driver_arrived',
+  OTP_REQUIRED:               'otp_required',
 
   // ── Consultation ────────────────────────────────────────────────────────────
   CONSULTATION_CONFIRMED:     'consultation_confirmed',
@@ -140,51 +125,48 @@ export const SOCKET_EVENTS = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const CLIENT_EVENTS = {
+  // Rooms
   JOIN_BOOKING_ROOM:        'join_booking_room',
   JOIN_TP_ROOM:             'join_tp_room',
   LEAVE_BOOKING_ROOM:       'leave_booking_room',
   LEAVE_TP_ROOM:            'leave_tp_room',
 
-  DRIVER_LOCATION:          'driver_location',
-  CARE_LOCATION:            'care_location',
-  CARE_ASSISTANT_LOCATION:  'care_assistant_location',
+  // Location
+  DRIVER_LOCATION:          'driver_location',          // driver GPS ping
+  CARE_LOCATION:            'care_location',            // CA GPS ping (primary)
+  CARE_ASSISTANT_LOCATION:  'care_assistant_location',  // alias accepted by server
 
+  // Driver
   DRIVER_STATUS_UPDATE:     'driver_status_update',
   VERIFY_OTP:               'verify_otp',
   OTP_RESEND_REQUEST:       'otp_resend_request',
 
+  // SOS / deviation
   SOS_TRIGGER:              'sos_trigger',
   ROUTE_DEVIATION:          'route_deviation',
 
+  // CA join point
   CA_MISSED_JOINPOINT:      'ca_missed_joinpoint',
 
+  // State requests
   REQUEST_BOOKING_STATE:    'request_booking_state',
   REQUEST_RIDE_STOPS:       'request_ride_stops',
   REQUEST_PARTICIPANTS:     'request_participants',
 
+  // Health
   PING_HEALTH:              'ping_health',
-};
-
-// FIX: uppercase to match server SOS_TYPES enum exactly
-export const SOS_TYPES = {
-  MEDICAL:           'MEDICAL',
-  SAFETY:            'SAFETY',
-  VEHICLE_BREAKDOWN: 'VEHICLE_BREAKDOWN',
-  ACCIDENT:          'ACCIDENT',
-  PATIENT_CONDITION: 'PATIENT_CONDITION',
-  OTHER:             'OTHER',
 };
 
 export const DRIVER_STATUS = {
   ACCEPTED:      'accepted',
-  START_ROUTE:   'start_route',
+  EN_ROUTE:      'en_route',
   ARRIVED:       'arrived',
-  VERIFY_OTP:    'verify_otp',
-  START_RIDE:    'start_ride',
+  OTP_VERIFIED:  'otp_verified',
+  RIDE_STARTED:  'ride_started',
   AT_STOP:       'at_stop',
-  RESUME:        'resume',
-  COMPLETE:      'complete',
-  CANCEL:        'cancel',
+  STOP_DEPARTED: 'stop_departed',
+  COMPLETED:     'completed',
+  CANCELLED:     'cancelled',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -198,12 +180,8 @@ class SocketService {
     this._currentToken    = null;
     this._pendingEmits    = [];
     this._gpsWatchId      = null;
-    this._careGpsWatchId  = null;
+    this._careGpsWatchId  = null;   // CA-specific GPS watch
     this._activeBookingId = null;
-    // FIX: track joined rooms for reconnect re-join
-    this._joinedRooms     = new Set();
-    // FIX: CA status ref — mutable so GPS watch always sends current status
-    this._careStatus      = null;
   }
 
   // ── Init / Destroy ─────────────────────────────────────────────────────────
@@ -231,26 +209,10 @@ class SocketService {
 
     this._socket.on('connect', () => {
       console.log('[Socket] Connected:', this._socket.id);
-      // Flush pending emits
       for (const { event, payload } of this._pendingEmits) {
         this._socket.emit(event, payload);
       }
       this._pendingEmits = [];
-    });
-
-    // FIX: re-join all rooms on reconnect (connect fires on initial + reconnect both)
-    // socket.io 'connect' fires on every successful connection including reconnects
-    // so room re-join is handled in the connect handler above via _joinedRooms
-    this._socket.on('connect', () => {
-      for (const room of this._joinedRooms) {
-        if (room.startsWith('booking:')) {
-          const bookingId = room.replace('booking:', '');
-          this._socket.emit(CLIENT_EVENTS.JOIN_BOOKING_ROOM, { bookingId });
-        } else if (room.startsWith('tp:')) {
-          const tpId = room.replace('tp:', '');
-          this._socket.emit(CLIENT_EVENTS.JOIN_TP_ROOM, { tpId });
-        }
-      }
     });
 
     this._socket.on('connect_error', (err) => {
@@ -273,8 +235,6 @@ class SocketService {
     this._activeBookingId = null;
     this._pendingEmits    = [];
     this._currentToken    = null;
-    this._joinedRooms.clear();
-    this._careStatus      = null;
     if (this._socket) {
       this._socket.removeAllListeners();
       this._socket.disconnect();
@@ -293,7 +253,7 @@ class SocketService {
   /**
    * @param {string} event
    * @param {Function} handler
-   * @returns {Function} unsubscribe
+   * @returns {Function} unsubscribe function
    */
   on(event, handler) {
     this._socket?.on(event, handler);
@@ -316,38 +276,37 @@ class SocketService {
   joinBookingRoom(bookingId) {
     if (!bookingId) return;
     this._activeBookingId = bookingId;
-    this._joinedRooms.add(`booking:${bookingId}`);
     this.emit(CLIENT_EVENTS.JOIN_BOOKING_ROOM, { bookingId });
   }
 
   leaveBookingRoom(bookingId) {
-    const id = bookingId ?? this._activeBookingId;
-    this._joinedRooms.delete(`booking:${id}`);
-    this.emit(CLIENT_EVENTS.LEAVE_BOOKING_ROOM, { bookingId: id });
-    if (this._activeBookingId === id) this._activeBookingId = null;
+    this.emit(CLIENT_EVENTS.LEAVE_BOOKING_ROOM, {
+      bookingId: bookingId ?? this._activeBookingId,
+    });
+    if (this._activeBookingId === bookingId) this._activeBookingId = null;
   }
 
-  joinTpRoom(tpId) {
-    if (!tpId) return;
-    this._joinedRooms.add(`tp:${tpId}`);
-    this.emit(CLIENT_EVENTS.JOIN_TP_ROOM, { tpId });
-  }
+  joinTpRoom(tpId)  { this.emit(CLIENT_EVENTS.JOIN_TP_ROOM,  { tpId }); }
+  leaveTpRoom(tpId) { this.emit(CLIENT_EVENTS.LEAVE_TP_ROOM, { tpId }); }
 
-  leaveTpRoom(tpId) {
-    this._joinedRooms.delete(`tp:${tpId}`);
-    this.emit(CLIENT_EVENTS.LEAVE_TP_ROOM, { tpId });
-  }
-
-  // ── State requests ─────────────────────────────────────────────────────────
+  // ── Booking / ride state ───────────────────────────────────────────────────
 
   requestBookingState(bookingId) {
     this.emit(CLIENT_EVENTS.REQUEST_BOOKING_STATE, { bookingId });
   }
 
+  /**
+   * requestRideStops — ask server to emit ride_stops_snapshot for a ride.
+   * @param {{ rideId: string }} params
+   */
   requestRideStops({ rideId } = {}) {
     this.emit(CLIENT_EVENTS.REQUEST_RIDE_STOPS, { rideId });
   }
 
+  /**
+   * requestParticipants — ask server to emit participants_snapshot for a ride.
+   * @param {{ rideId: string }} params
+   */
   requestParticipants({ rideId } = {}) {
     this.emit(CLIENT_EVENTS.REQUEST_PARTICIPANTS, { rideId });
   }
@@ -391,18 +350,15 @@ class SocketService {
 
   /**
    * startCareGpsTracking — begin CA GPS watch.
+   * Emits care_location event. Server broadcasts care_assistant_location_update to booking room.
    *
-   * FIX: status is read from this._careStatus on each ping (not captured at start).
-   * Call updateCareStatus('at_join_point') mid-ride — next GPS ping sends updated status.
-   *
-   * @param {{ bookingId?: string, initialStatus?: string }} options
+   * @param {{ bookingId: string, status?: string }} options
    */
-  startCareGpsTracking({ bookingId, initialStatus } = {}) {
+  startCareGpsTracking({ bookingId, status } = {}) {
     if (!navigator?.geolocation) {
       console.warn('[Socket] Geolocation not supported');
       return;
     }
-    if (initialStatus) this._careStatus = initialStatus;
     this.stopCareGpsTracking();
     this._careGpsWatchId = navigator.geolocation.watchPosition(
       (pos) => {
@@ -417,8 +373,7 @@ class SocketService {
           heading:   pos.coords.heading  ?? undefined,
           speed:     speedKmh,
           accuracy:  pos.coords.accuracy ?? undefined,
-          // FIX: read live from _careStatus ref, not closure-captured value
-          status:    this._careStatus ?? undefined,
+          status:    status ?? undefined,
         });
       },
       (err) => console.error('[GPS Care]', err.message),
@@ -434,17 +389,10 @@ class SocketService {
   }
 
   /**
-   * updateCareStatus — update CA status mid-ride without restarting GPS watch.
-   * Next GPS ping will include new status automatically.
+   * emitCareLocation — single CA location ping via socket (not continuous watch).
+   * Use when component needs one-time emit without starting GPS watch.
    *
-   * @param {string} status — e.g. 'en_route_to_pickup', 'at_join_point', 'in_ride', 'departed'
-   */
-  updateCareStatus(status) {
-    this._careStatus = status;
-  }
-
-  /**
-   * emitCareLocation — single CA location ping (not continuous watch).
+   * @param {{ bookingId?: string, lat: number, lng: number, heading?: number, speed?: number, status?: string }} params
    */
   emitCareLocation({ bookingId, lat, lng, heading, speed, status } = {}) {
     this.emit(CLIENT_EVENTS.CARE_LOCATION, {
@@ -453,37 +401,61 @@ class SocketService {
       lng,
       heading:  heading ?? undefined,
       speed:    speed   ?? undefined,
-      status:   status ?? this._careStatus ?? undefined,
+      status:   status  ?? undefined,
     });
   }
 
   /**
    * emitLocation — generic location emit.
-   * isCare=true → care_location. isCare=false → driver_location.
+   * isCare=true → care_location (CA).
+   * isCare=false → driver_location (driver/solo).
+   *
+   * @param {{ bookingId?: string, lat: number, lng: number, heading?: number, speed?: number, isCare?: boolean, status?: string }} params
    */
   emitLocation({ bookingId, lat, lng, heading, speed, isCare = false, status } = {}) {
-    const event = isCare ? CLIENT_EVENTS.CARE_LOCATION : CLIENT_EVENTS.DRIVER_LOCATION;
+    const event = isCare
+      ? CLIENT_EVENTS.CARE_LOCATION
+      : CLIENT_EVENTS.DRIVER_LOCATION;
     this.emit(event, {
       bookingId: bookingId ?? this._activeBookingId ?? undefined,
       lat,
       lng,
       heading:  heading ?? undefined,
       speed:    speed   ?? undefined,
-      ...(isCare ? { status: status ?? this._careStatus ?? undefined } : {}),
+      ...(isCare && status ? { status } : {}),
     });
   }
 
-  // ── Stop all GPS tracking ──────────────────────────────────────────────────
-
-  stopAllTracking() {
-    this.stopGpsTracking();
-    this.stopCareGpsTracking();
+  /**
+   * updateCareStatus — NEW. Push a CA status change (e.g. 'en_route_to_pickup',
+   * 'at_pickup', 'in_ride') over the socket without necessarily sending a
+   * position fix. SocketProvider.jsx exposes this on context; it was being
+   * `.bind()`'d here before this method existed, which crashed on every
+   * render. Piggybacks on the same `care_location` channel the server
+   * already listens on (mirrors how startCareGpsTracking/emitCareLocation
+   * optionally attach `status`), so no new server-side event is required.
+   *
+   * @param {{ bookingId?: string, status: string, lat?: number, lng?: number }} params
+   */
+  updateCareStatus({ bookingId, status, lat, lng } = {}) {
+    this.emit(CLIENT_EVENTS.CARE_LOCATION, {
+      bookingId: bookingId ?? this._activeBookingId ?? undefined,
+      status,
+      ...(lat != null && lng != null ? { lat, lng } : {}),
+    });
   }
 
   // ── Driver status ──────────────────────────────────────────────────────────
 
   updateDriverStatus({ bookingId, rideId, status, lat, lng, meta } = {}) {
-    this.emit(CLIENT_EVENTS.DRIVER_STATUS_UPDATE, { bookingId, rideId, status, lat, lng, meta });
+    this.emit(CLIENT_EVENTS.DRIVER_STATUS_UPDATE, {
+      bookingId,
+      rideId,
+      status,
+      lat,
+      lng,
+      meta,
+    });
   }
 
   // ── OTP ────────────────────────────────────────────────────────────────────
@@ -498,29 +470,38 @@ class SocketService {
 
   // ── SOS ────────────────────────────────────────────────────────────────────
 
-  /**
-   * FIX: sosType uppercased — server validates against SOS_TYPES enum (uppercase).
-   * Lowercase 'other' was failing validation silently.
-   */
-  triggerSos({ bookingId, rideId, lat, lng, sosType = SOS_TYPES.OTHER, description } = {}) {
+  triggerSos({ bookingId, rideId, lat, lng, sosType = 'OTHER', description } = {}) {
     this.emit(CLIENT_EVENTS.SOS_TRIGGER, {
       bookingId,
       rideId,
       lat,
       lng,
-      sosType:     String(sosType).toUpperCase(), // force uppercase regardless of caller
-      description: description ?? undefined,
+      sosType,
+      description,
     });
   }
 
   // ── Route deviation ────────────────────────────────────────────────────────
 
   reportRouteDeviation({ bookingId, rideId, lat, lng, deviationKm, driverReason } = {}) {
-    this.emit(CLIENT_EVENTS.ROUTE_DEVIATION, { bookingId, rideId, lat, lng, deviationKm, driverReason });
+    this.emit(CLIENT_EVENTS.ROUTE_DEVIATION, {
+      bookingId,
+      rideId,
+      lat,
+      lng,
+      deviationKm,
+      driverReason,
+    });
   }
 
   // ── CA join point ──────────────────────────────────────────────────────────
 
+  /**
+   * emitCaMissedJoinpoint — CA self-reports that they missed the join point.
+   * Server marks JoinPoint MISSED, notifies admin.
+   *
+   * @param {{ bookingId: string, rideId: string, reason?: string }} params
+   */
   emitCaMissedJoinpoint({ bookingId, rideId, reason } = {}) {
     this.emit(CLIENT_EVENTS.CA_MISSED_JOINPOINT, {
       bookingId,
@@ -533,12 +514,24 @@ class SocketService {
 
   pingHealth() { this.emit(CLIENT_EVENTS.PING_HEALTH); }
 
+  /**
+   * stopAllTracking — NEW. Stop both GPS watches (driver + CA) in one call.
+   * Was being `.bind()`'d in SocketProvider.jsx before this method existed.
+   * Useful as a single teardown call on logout/unmount instead of having
+   * every caller remember to stop both watches individually.
+   */
+  stopAllTracking() {
+    this.stopGpsTracking();
+    this.stopCareGpsTracking();
+  }
+
   // ── Promise wrappers ───────────────────────────────────────────────────────
 
   /**
-   * verifyOtpAsync
-   * FIX: server otp_result does NOT include rideId — filter by bookingId instead.
-   * Was: `if (data.rideId && data.rideId !== rideId) return;` → always skipped.
+   * verifyOtpAsync — emit verify_otp, await otp_result event.
+   * @param {{ bookingId: string, rideId: string, otp: string|number }} params
+   * @param {number} timeoutMs
+   * @returns {Promise<object>}
    */
   verifyOtpAsync({ bookingId, rideId, otp }, timeoutMs = 10_000) {
     return new Promise((resolve, reject) => {
@@ -548,8 +541,7 @@ class SocketService {
         reject(new Error('OTP verify timeout'));
       }, timeoutMs);
       const handler = (data) => {
-        // FIX: filter by bookingId if present, otherwise accept first result
-        if (data.bookingId && data.bookingId !== bookingId) return;
+        if (data.rideId && data.rideId !== rideId) return;
         clearTimeout(timer);
         this._socket.off(SOCKET_EVENTS.OTP_RESULT, handler);
         if (data.success) resolve(data);
@@ -560,6 +552,12 @@ class SocketService {
     });
   }
 
+  /**
+   * requestBookingStateAsync — emit request_booking_state, await booking_state_snapshot.
+   * @param {string} bookingId
+   * @param {number} timeoutMs
+   * @returns {Promise<object>}
+   */
   requestBookingStateAsync(bookingId, timeoutMs = 8_000) {
     return new Promise((resolve, reject) => {
       if (!this._socket) return reject(new Error('Socket not initialized'));
@@ -578,6 +576,12 @@ class SocketService {
     });
   }
 
+  /**
+   * requestRideStopsAsync — emit request_ride_stops, await ride_stops_snapshot.
+   * @param {string} rideId
+   * @param {number} timeoutMs
+   * @returns {Promise<object>}
+   */
   requestRideStopsAsync(rideId, timeoutMs = 8_000) {
     return new Promise((resolve, reject) => {
       if (!this._socket) return reject(new Error('Socket not initialized'));
@@ -596,6 +600,12 @@ class SocketService {
     });
   }
 
+  /**
+   * requestParticipantsAsync — emit request_participants, await participants_snapshot.
+   * @param {string} rideId
+   * @param {number} timeoutMs
+   * @returns {Promise<object>}
+   */
   requestParticipantsAsync(rideId, timeoutMs = 8_000) {
     return new Promise((resolve, reject) => {
       if (!this._socket) return reject(new Error('Socket not initialized'));

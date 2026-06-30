@@ -11,10 +11,24 @@
  *     applyColors() again. Previously it was called twice causing double-paint.
  *   - clearRoute cancels map reference before nulling ref (prevents Google Maps
  *     internal error on fast unmount).
+ *
+ * FIX (this pass — restored, were dropped from this version):
+ *   - `setRouteFromPolyline` — CareAssistantLiveTracking.jsx renders the
+ *     driver's route, once the CA has boarded, straight from
+ *     RideTracking.expectedRoutePolyline (already computed server-side) —
+ *     no reason to burn a Directions API call just to redraw a route the
+ *     backend already solved. Without this export the page crashes with
+ *     "routes.setRouteFromPolyline is not a function" the moment phase
+ *     flips to 'in_vehicle'.
+ *   - `updateCaProgress` — trims the CA's own route line as the CA moves
+ *     toward the join point / patient, same idea as `updateProgress` but
+ *     scoped to `caRoutePointsRef`. Without it the CA tracking page crashes
+ *     on the very first GPS tick in the 'navigate_to_jp' / 'standalone'
+ *     phases.
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import { extractRoutePolyline, snapToPolyline } from '@/utils/navigationUtils';
+import { extractRoutePolyline, snapToPolyline, decodePolyline } from '@/utils/navigationUtils';
 
 const COLORS = {
   toPickup: {
@@ -160,22 +174,39 @@ export function useRouteRenderer(mapRef) {
     }
   }, [mapRef]);
 
+  // ── Shared point-list applier (driver lines) ──────────────────────────────
+  // Both setRoute (Directions API result) and setRouteFromPolyline (backend
+  // canonical polyline string) end up here so there's one code path for
+  // "draw the driver route," not two slightly-different copies.
+  const applyDriverRoutePoints = useCallback((points, routeType) => {
+    routePointsRef.current = points;
+    ensureLines(routeType);
+    const path = points.map(p => ({ lat: p.lat, lng: p.lng }));
+    borderLineRef.current?.setPath(path);
+    remainingLineRef.current?.setPath(path);
+    traversedLineRef.current?.setPath([]);
+  }, [ensureLines]);
+
   // ── Set driver route from DirectionsResult ────────────────────────────────
   // FIX: does NOT call applyColors() — ensureLines() already did it.
   const setRoute = useCallback((directionsResult, routeType = 'toPickup') => {
     const map = mapRef.current;
     if (!map || !directionsResult) return;
+    applyDriverRoutePoints(extractRoutePolyline(directionsResult), routeType);
+  }, [mapRef, applyDriverRoutePoints]);
 
-    const points = extractRoutePolyline(directionsResult);
-    routePointsRef.current = points;
-
-    ensureLines(routeType);   // creates if missing, recolors if type changed
-
-    const path = points.map(p => ({ lat: p.lat, lng: p.lng }));
-    borderLineRef.current?.setPath(path);
-    remainingLineRef.current?.setPath(path);
-    traversedLineRef.current?.setPath([]);
-  }, [mapRef, ensureLines]);
+  /**
+   * setRouteFromPolyline — render the driver route directly from the encoded
+   * polyline the backend already computed (RideTracking.expectedRoutePolyline),
+   * skipping a redundant google.maps.DirectionsService round trip.
+   */
+  const setRouteFromPolyline = useCallback((encodedPolyline, routeType = 'toPickup') => {
+    const map = mapRef.current;
+    if (!map || !encodedPolyline) return;
+    const points = decodePolyline(encodedPolyline);
+    if (!points.length) return;
+    applyDriverRoutePoints(points, routeType);
+  }, [mapRef, applyDriverRoutePoints]);
 
   // ── CA route from DirectionsResult ────────────────────────────────────────
   const setCaRoute = useCallback((directionsResult) => {
@@ -200,7 +231,7 @@ export function useRouteRenderer(mapRef) {
     caRouteLineRef.current?.setPath(path);
   }, [mapRef, ensureCaLines]);
 
-  // ── Update traversed / remaining split ────────────────────────────────────
+  // ── Update traversed / remaining split (driver) ───────────────────────────
   const updateProgress = useCallback((lat, lng) => {
     const points = routePointsRef.current;
     if (!points?.length || !remainingLineRef.current) return;
@@ -230,6 +261,33 @@ export function useRouteRenderer(mapRef) {
     borderLineRef.current?.setPath(remaining);
   }, []);
 
+  /**
+   * updateCaProgress — trims the CA's own route line as the CA moves toward
+   * the join point / patient. No traversed/remaining split for the CA
+   * line (it's already visually distinct as a dashed purple line) — just
+   * drop the portion already covered so the line keeps pointing from
+   * "where the CA is right now" to "where they're headed."
+   */
+  const updateCaProgress = useCallback((lat, lng) => {
+    const points = caRoutePointsRef.current;
+    if (!points?.length || !caRouteLineRef.current) return;
+
+    const snap = snapToPolyline(lat, lng, points);
+    const idx  = snap.segmentIndex;
+    const t    = snap.t;
+    const segA = points[idx];
+    const segB = points[idx + 1] || segA;
+
+    const splitPt = {
+      lat: segA.lat + t * (segB.lat - segA.lat),
+      lng: segA.lng + t * (segB.lng - segA.lng),
+    };
+
+    const remaining = [splitPt, ...points.slice(idx + 1).map(p => ({ lat: p.lat, lng: p.lng }))];
+    caRouteLineRef.current?.setPath(remaining);
+    caBorderLineRef.current?.setPath(remaining);
+  }, []);
+
   // ── Clear helpers ─────────────────────────────────────────────────────────
   const clearCaRoute = useCallback(() => {
     [caRouteLineRef, caBorderLineRef].forEach(ref => {
@@ -254,11 +312,13 @@ export function useRouteRenderer(mapRef) {
 
   return {
     setRoute,
+    setRouteFromPolyline,
     updateProgress,
     clearRoute,
     clearDriverRoute,
     setCaRoute,
     setCaRouteDirect,
+    updateCaProgress,
     clearCaRoute,
     routePointsRef,
     caRoutePointsRef,
